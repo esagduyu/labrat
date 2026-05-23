@@ -18,11 +18,19 @@ class LabRatApp(App[None]):
         yield Static(get_banner_renderable("splash"))
 
     def on_mount(self) -> None:
-        """Show onboarding if no profiles are configured."""
+        """Show main screen if profiles exist, else show onboarding."""
         from labrat.profile.manager import ProfileManager
 
-        if not ProfileManager().list_all():
+        profiles = ProfileManager().list_all()
+        if profiles:
+            self._launch_main(profile=profiles[0].name, dialect=profiles[0].dialect)
+        else:
             self._launch_onboarding()
+
+    def _launch_main(self, *, profile: str = "—", dialect: str = "—") -> None:
+        from labrat.screens.main import MainScreen
+
+        self.push_screen(MainScreen(profile=profile, dialect=dialect))
 
     def _launch_onboarding(self) -> None:
         from labrat.screens.onboarding import OnboardingScreen
@@ -30,6 +38,7 @@ class LabRatApp(App[None]):
         def _on_result(result: object) -> None:
             if result is not None:
                 self._save_onboarding_result(result)
+            self._launch_main()
 
         self.push_screen(OnboardingScreen(), _on_result)
 

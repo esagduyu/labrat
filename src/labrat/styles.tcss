@@ -1,0 +1,56 @@
+/* LabRat — Textual CSS layout */
+
+Screen {
+    background: #0e1116;
+}
+
+/* ── status bars ─────────────────────────────────────────────────────────── */
+
+#status-top,
+#status-bottom {
+    height: 1;
+}
+
+/* ── three-pane split ────────────────────────────────────────────────────── */
+
+#main-split {
+    height: 1fr;
+}
+
+#chat-pane {
+    width: 25%;
+    min-width: 20;
+    border: solid #30363d;
+}
+
+#center-pane {
+    width: 55%;
+    min-width: 40;
+}
+
+#editor-pane {
+    height: 55%;
+    border: solid #30363d;
+}
+
+#results-pane {
+    height: 1fr;
+    border: solid #30363d;
+}
+
+#schema-pane {
+    width: 20%;
+    min-width: 15;
+    border: solid #30363d;
+}
+
+/* ── narrow mode (<80 cols): hide side panes, full-width center ───────────── */
+
+MainScreen.narrow #chat-pane,
+MainScreen.narrow #schema-pane {
+    display: none;
+}
+
+MainScreen.narrow #center-pane {
+    width: 100%;
+}
