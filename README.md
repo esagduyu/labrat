@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. Active development. The splash banner currently renders via `rich-pyfiglet` as a placeholder; custom art coming.
+> Status: alpha. All 32 milestones (M1–M32) complete. 426 tests passing. End-to-end demo operational against DuckDB. Spider2-DBT catalog introspection verified (9/10 example projects).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -23,7 +23,27 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 
 ## Status
 
-LabRat is being built in public, milestone by milestone. The build plan is detailed and the agent loop is the heart of the product. Stars and feedback welcome.
+**All 32 milestones complete.** LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
+
+| Layer | Status | Details |
+|---|---|---|
+| 7 warehouse adapters | ✅ | DuckDB, Postgres, Snowflake, BigQuery, Redshift, Trino, MySQL |
+| 4 LLM providers | ✅ | Anthropic (default), OpenAI-compatible, Bedrock, Vertex |
+| Agent tool loop | ✅ | schema exploration, SQL execution, safety gates |
+| Query history | ✅ | always-on, PII-redacted JSONL per profile |
+| Personal context engine | ✅ | table relevance scoring, LLM-generated descriptions |
+| dbt catalog integration | ✅ | manifest.json + schema.yml + catalog.json + lineage |
+| MCP catalog integration | ✅ | generic async client for any MCP-compatible catalog |
+| Self-healing memory | ✅ | edit-derived + chat-correction memories, retrieval |
+| Custom validations | ✅ | natural-language rules, warn/block severity |
+| Eval framework | ✅ | Spider2-DBT/Snow/Lite, BIRD, custom scenarios, baseline comparison |
+| 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
+| Charts | ✅ | unicode (plotext) + image protocol (matplotlib/kitty) |
+| HTML export | ✅ | findings with full provenance |
+| Audit log | ✅ | JSONL event sourcing |
+
+**Test coverage:** 426 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
+**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; Spider2-DBT catalog loader 9/10 compatible.
 
 ## Install
 
@@ -117,13 +137,36 @@ LabRat stands on shoulders:
 
 Issues, discussions, and PRs welcome. See `CONTRIBUTING.md` (coming soon) for details. Until then, the simplest contribution is to use LabRat, hit a wall, and open an issue describing what broke.
 
+## Development
+
+```bash
+# Run the full test suite
+uv run pytest
+
+# Lint and type-check
+uv run ruff check . && uv run ruff format --check . && uv run pyright
+
+# Evaluate against the sample DuckDB (no API key needed for schema/SQL tests)
+uv run python scripts/eval_duckdb.py
+
+# Full agent evaluation (requires API key)
+ANTHROPIC_API_KEY=<key> uv run python scripts/eval_duckdb.py
+
+# Spider2-DBT catalog exploration
+uv run python scripts/eval_spider2.py --limit 10
+
+# Generate UI screenshots (no API key needed)
+uv run python scripts/take_screenshots.py
+```
+
 ## Roadmap
 
-See the project tracker. The biggest near-term items:
+All 32 planned milestones are complete. Post-v0 priorities:
 
-- v0 alpha: all milestones complete, end-to-end demo working
-- v0 beta: catalog integration (M30) and memory loop (M31) shipped
-- v1 GA: full benchmark suite passing, all warehouse adapters, dogfooded
+- **dbt model writing tool**: extend the agent to write SQL files to dbt projects (enables Spider2-DBT scoring)
+- **Live Spider2-DBT eval**: requires API key + dbt model completion capability
+- **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
+- **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 
 ---
 

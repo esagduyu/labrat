@@ -8,7 +8,6 @@
 PROJECT_PLAN.md
 BUILDER_PROMPT.md
 CONTEXT/
-decisions.md
 
 # ─── Python ──────────────────────────────────────────────────
 __pycache__/
@@ -161,3 +160,8 @@ tests/fixtures/sample_dbt_projects/**/logs/
 *.bak
 *.orig
 .cache/
+# ─── Screenshots + evaluation output ────────────────────────────────────────
+screenshots/
+eval_output/
+test_output/
+*.svg
