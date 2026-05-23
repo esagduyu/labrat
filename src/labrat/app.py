@@ -6,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.widgets import Static
 
-from labrat.branding import get_banner_renderable
+from labrat.branding import ASSETS_DIR
 
 
 class LabRatApp(App[None]):
@@ -15,7 +15,8 @@ class LabRatApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("q", "quit", "Quit")]
 
     def compose(self) -> ComposeResult:
-        yield Static(get_banner_renderable("splash"))
+        mascot = (ASSETS_DIR / "mascot_small.txt").read_text()
+        yield Static(mascot, markup=False)
 
     def on_mount(self) -> None:
         """Show main screen if profiles exist, else show onboarding."""

@@ -14,7 +14,7 @@ from textual.containers import Center, Middle, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Static
 
-from labrat.branding import get_banner_renderable
+from labrat.branding import ASSETS_DIR
 from labrat.profile.model import Dialect
 
 _DIALECTS: list[tuple[str, Dialect]] = [
@@ -125,10 +125,13 @@ class OnboardingScreen(Screen[OnboardingResult | None]):
             yield from self._compose_finish()
 
     def _compose_welcome(self) -> ComposeResult:
+        mascot = (ASSETS_DIR / "mascot_small.txt").read_text()
         yield Center(
             Middle(
-                Static(get_banner_renderable("splash"), id="banner"),
-                Label("Find the cheese in your maze.", id="tagline"),
+                Static(mascot, id="mascot", markup=False),
+                Label("[bold cyan]L  A  B  R  A  T[/bold cyan]", id="banner"),
+                Label(""),
+                Label("[dim]Find the cheese in your maze.[/dim]", id="tagline"),
                 Label(""),
                 Button("Press Enter to begin", id="btn-continue", variant="primary"),
                 Label("Press Esc to skip", id="skip-hint"),
