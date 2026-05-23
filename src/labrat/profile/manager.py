@@ -81,6 +81,62 @@ def make_connection(profile: Profile) -> Connection:
         dsn = _build_postgres_dsn(profile)
         return PostgresConnection(dsn)
 
+    if profile.dialect == "snowflake":
+        from labrat.db.snowflake import SnowflakeConnection
+
+        secret = storage.load_secret(profile.name) or ""
+        account = (profile.host or "").replace(".snowflakecomputing.com", "")
+        return SnowflakeConnection(
+            account=account,
+            user=profile.username or "",
+            password=secret,
+            database=profile.database,
+            warehouse=None,
+        )
+
+    if profile.dialect == "bigquery":
+        from labrat.db.bigquery import BigQueryConnection
+
+        return BigQueryConnection(
+            project=profile.database or "",
+            dataset=profile.default_schema,
+        )
+
+    if profile.dialect == "redshift":
+        from labrat.db.redshift import RedshiftConnection
+
+        secret = storage.load_secret(profile.name) or ""
+        return RedshiftConnection(
+            host=profile.host or "",
+            database=profile.database or "dev",
+            user=profile.username or "",
+            password=secret,
+            port=profile.port or 5439,
+        )
+
+    if profile.dialect == "trino":
+        from labrat.db.trino import TrinoConnection
+
+        return TrinoConnection(
+            host=profile.host or "localhost",
+            port=profile.port or 8080,
+            user=profile.username or "trino",
+            catalog=profile.database,
+            schema=profile.default_schema,
+        )
+
+    if profile.dialect == "mysql":
+        from labrat.db.mysql import MySQLConnection
+
+        secret = storage.load_secret(profile.name) or ""
+        return MySQLConnection(
+            host=profile.host or "localhost",
+            database=profile.database or "",
+            user=profile.username or "",
+            password=secret,
+            port=profile.port or 3306,
+        )
+
     raise NotImplementedError(f"Dialect '{profile.dialect}' not yet supported.")
 
 
