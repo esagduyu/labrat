@@ -141,6 +141,46 @@ async def test_loop_tool_result_in_history(registry: ToolRegistry, ctx: ToolCont
     assert tool_result_present
 
 
+# ── dialect prompt loading ────────────────────────────────────────────────────
+
+
+async def test_loop_uses_dialect_system_prompt(registry: ToolRegistry, ctx: ToolContext) -> None:
+    """AgentLoop builds its system prompt from the given dialect when no explicit system= given."""
+    captured_system: list[str] = []
+
+    class _InspectProvider(_MockProvider):
+        async def stream(
+            self,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+            system: str,
+        ) -> AsyncIterator[ContentBlock]:
+            captured_system.append(system)
+            return await super().stream(messages, tools, system)
+
+    provider = _InspectProvider([[TextBlock(text="ok")]])
+    loop = AgentLoop(provider=provider, registry=registry, ctx=ctx, dialect="postgres")
+    await loop.run("hi", on_text=lambda _: None)
+
+    assert len(captured_system) == 1
+    assert "PostgreSQL" in captured_system[0]
+
+
+async def test_loop_explicit_system_overrides_dialect(
+    registry: ToolRegistry, ctx: ToolContext
+) -> None:
+    """An explicit system= string takes precedence over dialect-generated prompt."""
+    provider = _MockProvider([[TextBlock(text="ok")]])
+    loop = AgentLoop(
+        provider=provider,
+        registry=registry,
+        ctx=ctx,
+        system="custom system",
+        dialect="postgres",
+    )
+    assert loop._system == "custom system"
+
+
 # ── unknown tool ──────────────────────────────────────────────────────────────
 
 

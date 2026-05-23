@@ -59,7 +59,9 @@ class AgentLoop:
         registry: ToolRegistry,
         ctx: ToolContext,
         system: str = "",
+        dialect: str = "duckdb",
     ) -> None:
+        from labrat.agent.prompts import build_system_prompt
         from labrat.agent.providers.base import ModelProvider  # deferred import
 
         if not isinstance(provider, ModelProvider):
@@ -68,7 +70,7 @@ class AgentLoop:
         self._provider = provider
         self._registry = registry
         self._ctx = ctx
-        self._system = system
+        self._system = system or build_system_prompt(dialect)
         self.history: list[dict[str, Any]] = []
 
     async def run(
