@@ -23,14 +23,60 @@ class LabRatApp(App[None]):
 
         profiles = ProfileManager().list_all()
         if profiles:
-            self._launch_main(profile=profiles[0].name, dialect=profiles[0].dialect)
+            self._connect_and_launch(profiles[0])
         else:
             self._launch_onboarding()
 
-    def _launch_main(self, *, profile: str = "—", dialect: str = "—") -> None:
+    def _connect_and_launch(self, profile: object) -> None:
+        from labrat.db.catalog import Catalog
+        from labrat.db.catalog_cache import load_cached_catalog, save_catalog
+        from labrat.profile.manager import make_connection
+        from labrat.profile.model import Profile
+
+        if not isinstance(profile, Profile):
+            self._launch_main()
+            return
+
+        conn = make_connection(profile)
+        catalog: Catalog | None = None
+        connected = False
+        try:
+            conn.connect()
+            connected = True
+            catalog = load_cached_catalog(profile.name)
+            if catalog is None:
+                catalog = conn.introspect_catalog()
+                save_catalog(profile.name, catalog)
+        except Exception:
+            pass
+
+        self._launch_main(
+            profile=profile.name,
+            dialect=profile.dialect,
+            catalog=catalog,
+            connection=conn if connected else None,
+        )
+
+    def _launch_main(
+        self,
+        *,
+        profile: str = "—",
+        dialect: str = "—",
+        catalog: object = None,
+        connection: object = None,
+    ) -> None:
+        from labrat.db.base import Connection
+        from labrat.db.catalog import Catalog
         from labrat.screens.main import MainScreen
 
-        self.push_screen(MainScreen(profile=profile, dialect=dialect))
+        self.push_screen(
+            MainScreen(
+                profile=profile,
+                dialect=dialect,
+                catalog=catalog if isinstance(catalog, Catalog) else None,
+                connection=connection if isinstance(connection, Connection) else None,
+            )
+        )
 
     def _launch_onboarding(self) -> None:
         from labrat.screens.onboarding import OnboardingScreen

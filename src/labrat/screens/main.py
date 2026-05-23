@@ -1,6 +1,8 @@
 """Main three-pane layout screen for LabRat."""
 
-from typing import ClassVar
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, ClassVar
 
 from textual import events
 from textual.app import ComposeResult
@@ -8,6 +10,10 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widget import Widget
+
+if TYPE_CHECKING:
+    from labrat.db.base import Connection
+    from labrat.db.catalog import Catalog
 
 
 class _StatusBar(Widget):
@@ -109,17 +115,23 @@ class MainScreen(Screen[None]):
         profile: str = "—",
         dialect: str = "—",
         thread: str = "untitled",
+        catalog: Catalog | None = None,
+        connection: Connection | None = None,
     ) -> None:
         super().__init__()
         self._profile = profile
         self._dialect = dialect
         self._thread = thread
+        self._catalog = catalog
+        self._connection = connection
 
     def compose(self) -> ComposeResult:
+        connected = self._connection is not None
         yield _StatusBar(
             profile=self._profile,
             dialect=self._dialect,
             thread=self._thread,
+            connected=connected,
             id="status-top",
         )
         with Horizontal(id="main-split"):
@@ -139,11 +151,19 @@ class MainScreen(Screen[None]):
                 yield _PaneHeader("schema")
                 from labrat.widgets.schema_tree import SchemaBrowser
 
-                yield SchemaBrowser(id="schema-content")
+                browser = SchemaBrowser(
+                    catalog=self._catalog,
+                    profile_name=self._profile,
+                    id="schema-content",
+                )
+                if self._connection is not None:
+                    browser.set_connection(self._connection)
+                yield browser
         yield _StatusBar(
             profile=self._profile,
             dialect=self._dialect,
             thread=self._thread,
+            connected=connected,
             id="status-bottom",
         )
 
