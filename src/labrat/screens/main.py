@@ -129,7 +129,9 @@ class MainScreen(Screen[None]):
             with Vertical(id="center-pane"):
                 with Vertical(id="editor-pane"):
                     yield _PaneHeader("editor")
-                    yield _PanePlaceholder("[ SQL Editor ]", id="editor-content")
+                    from labrat.widgets.query_editor import QueryEditor
+
+                    yield QueryEditor(id="editor-content")
                 with Vertical(id="results-pane"):
                     yield _PaneHeader("results")
                     yield _PanePlaceholder("[ Results ]", id="results-content")
@@ -158,7 +160,9 @@ class MainScreen(Screen[None]):
         self.query_one("#chat-content").focus()
 
     def action_focus_editor(self) -> None:
-        self.query_one("#editor-content").focus()
+        from labrat.widgets.query_editor import QueryEditor
+
+        self.query_one("#editor-content", QueryEditor).focus()
 
     def action_focus_results(self) -> None:
         self.query_one("#results-content").focus()
