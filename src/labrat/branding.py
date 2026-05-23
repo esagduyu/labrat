@@ -33,7 +33,9 @@ def get_banner_renderable(
     resolved_dir = assets_dir if assets_dir is not None else ASSETS_DIR
     override_path = resolved_dir / f"banner_{variant}.txt"
     if override_path.exists():
-        return Text(override_path.read_text())
+        _, colors = _FIGLET_CONFIG.get(variant, ("", ["cyan"]))
+        style = " ".join(colors) + " bold"
+        return Text(override_path.read_text(), style=style, no_wrap=True)
     return _make_figlet_renderable(variant)
 
 
