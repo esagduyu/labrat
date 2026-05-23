@@ -161,13 +161,26 @@ def test_gold_sql_correctness() -> list[dict[str, object]]:
     return results
 
 
-# ── Full agent eval (requires ANTHROPIC_API_KEY) ───────────────────────────────
+# ── Full agent eval (API key or claude CLI) ────────────────────────────────────
+
+
+def _make_provider() -> object:
+    """Return the best available provider: API key > claude CLI."""
+    import shutil
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        from labrat.agent.providers.anthropic_direct import AnthropicProvider
+
+        return AnthropicProvider(model="claude-haiku-4-5-20251001")
+    if shutil.which("claude"):
+        from labrat.agent.providers.claude_code import ClaudeCodeProvider
+
+        return ClaudeCodeProvider()
+    raise RuntimeError("No provider available: set ANTHROPIC_API_KEY or install the claude CLI")
 
 
 async def test_agent_nl_to_sql() -> list[dict[str, object]]:
     """Run each question through LabRat's agent and compare to gold SQL."""
-
-    from labrat.agent.providers.anthropic_provider import AnthropicProvider
 
     from labrat.agent.loop import AgentLoop
     from labrat.agent.tools.describe_table import DescribeTableTool
@@ -180,7 +193,7 @@ async def test_agent_nl_to_sql() -> list[dict[str, object]]:
     conn.connect()
     catalog = conn.introspect_catalog()
 
-    provider = AnthropicProvider(model="claude-haiku-4-5-20251001")
+    provider = _make_provider()
     tools = [
         ListTablesTool(),
         DescribeTableTool(),
@@ -318,8 +331,8 @@ def write_report(
             "",
             "## 4. Agent NL→SQL Evaluation",
             "",
-            "> ⚠️ Skipped — `ANTHROPIC_API_KEY` not set.",
-            "> Set the environment variable and re-run to evaluate the full agent pipeline.",
+            "> ⚠️ Skipped — no provider available.",
+            "> Set `ANTHROPIC_API_KEY` or install the claude CLI.",
         ]
 
     path = OUTPUT_DIR / "duckdb_eval.md"
@@ -345,14 +358,18 @@ async def main() -> None:
     passed = sum(1 for r in gold_results if r.get("status") == "pass")
     print(f"  {passed}/{len(gold_results)} cases passed")
 
+    import shutil
+
     agent_results = None
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        print("\n[4/4] Agent NL→SQL evaluation (has API key)...")
+    has_provider = bool(os.environ.get("ANTHROPIC_API_KEY")) or bool(shutil.which("claude"))
+    if has_provider:
+        provider_name = "API key" if os.environ.get("ANTHROPIC_API_KEY") else "claude CLI"
+        print(f"\n[4/4] Agent NL→SQL evaluation (via {provider_name})...")
         agent_results = await test_agent_nl_to_sql()
         correct = sum(1 for r in agent_results if r.get("status") == "correct")
         print(f"  Agent accuracy: {correct}/{len(agent_results)}")
     else:
-        print("\n[4/4] Agent eval: SKIPPED (no ANTHROPIC_API_KEY)")
+        print("\n[4/4] Agent eval: SKIPPED (no ANTHROPIC_API_KEY or claude CLI)")
 
     path = write_report(schema_result, exec_result, gold_results, agent_results)
     print(f"\nReport written → {path}")
