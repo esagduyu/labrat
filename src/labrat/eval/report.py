@@ -113,6 +113,10 @@ class EvalReport:
     @classmethod
     def load(cls, path: Path) -> EvalReport:
         data: dict[str, Any] = json.loads(path.read_text())
+        return cls.load_dict(data)
+
+    @classmethod
+    def load_dict(cls, data: dict[str, Any]) -> EvalReport:
         results = [EvalResult.model_validate(r) for r in data["results"]]
         return cls(
             suite_name=data["suite_name"],
