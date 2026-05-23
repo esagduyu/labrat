@@ -135,7 +135,9 @@ class MainScreen(Screen[None]):
                     yield _PanePlaceholder("[ Results ]", id="results-content")
             with Vertical(id="schema-pane"):
                 yield _PaneHeader("schema")
-                yield _PanePlaceholder("[ Schema Browser ]", id="schema-content")
+                from labrat.widgets.schema_tree import SchemaBrowser
+
+                yield SchemaBrowser(id="schema-content")
         yield _StatusBar(
             profile=self._profile,
             dialect=self._dialect,
@@ -162,7 +164,7 @@ class MainScreen(Screen[None]):
         self.query_one("#results-content").focus()
 
     def action_focus_schema(self) -> None:
-        self.query_one("#schema-content").focus()
+        self.query_one("#schema-content").query_one("#schema-tree").focus()
 
     def action_toggle_schema(self) -> None:
         schema = self.query_one("#schema-pane")
