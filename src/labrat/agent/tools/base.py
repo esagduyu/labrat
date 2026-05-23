@@ -15,6 +15,7 @@ class ToolContext:
 
     connection: object  # labrat.db.base.Connection — generic to avoid circular import
     catalog: object  # labrat.db.catalog.Catalog
+    profile_name: str = "default"
 
 
 @dataclass
