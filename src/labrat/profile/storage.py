@@ -27,7 +27,12 @@ def load_all(profiles_path: Path | None = None) -> dict[str, Profile]:
     path = profiles_path or _profiles_path()
     if not path.exists():
         return {}
-    raw: list[dict[str, object]] = json.loads(path.read_text())
+    parsed = json.loads(path.read_text())
+    # Support both the current list format and the legacy {profiles: [...]} format.
+    if isinstance(parsed, dict):
+        raw: list[dict[str, object]] = parsed.get("profiles", [])  # type: ignore[assignment]
+    else:
+        raw = parsed
     return {p["name"]: Profile.model_validate(p) for p in raw}  # type: ignore[index]
 
 
