@@ -1,2 +1,3 @@
-def main() -> None:
-    print("Hello from labrat!")
+"""LabRat — terminal-native data agent."""
+
+__version__ = "0.1.0"
