@@ -179,10 +179,26 @@ def _make_provider() -> object:
     raise RuntimeError("No provider available: set ANTHROPIC_API_KEY or install the claude CLI")
 
 
+def _extract_sql(text: str) -> str | None:
+    """Pull the first SELECT statement out of the agent's text response."""
+    import re
+
+    # Prefer fenced code blocks
+    fenced = re.search(r"```(?:sql)?\s*(SELECT[\s\S]+?)```", text, re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    # Fall back to bare SELECT
+    bare = re.search(r"(SELECT[\s\S]+?)(;|$)", text, re.IGNORECASE)
+    if bare:
+        return bare.group(1).strip()
+    return None
+
+
 async def test_agent_nl_to_sql() -> list[dict[str, object]]:
     """Run each question through LabRat's agent and compare to gold SQL."""
 
     from labrat.agent.loop import AgentLoop
+    from labrat.agent.tools.base import ToolContext, ToolRegistry
     from labrat.agent.tools.describe_table import DescribeTableTool
     from labrat.agent.tools.list_tables import ListTablesTool
     from labrat.agent.tools.run_sql import RunSqlTool
@@ -194,31 +210,51 @@ async def test_agent_nl_to_sql() -> list[dict[str, object]]:
     catalog = conn.introspect_catalog()
 
     provider = _make_provider()
-    tools = [
-        ListTablesTool(),
-        DescribeTableTool(),
-        SampleRowsTool(),
-        RunSqlTool(),
-    ]
+
+    registry = ToolRegistry()
+    for tool in [ListTablesTool(), DescribeTableTool(), SampleRowsTool(), RunSqlTool()]:
+        registry.register(tool)
+    ctx = ToolContext(connection=conn, catalog=catalog)
 
     results = []
     for case in EVAL_CASES:
         t0 = time.monotonic()
         try:
+            text_parts: list[str] = []
             loop = AgentLoop(
                 provider=provider,
-                tools=tools,
-                connection=conn,
-                catalog=catalog,
+                registry=registry,
+                ctx=ctx,
+                dialect="duckdb",
             )
-            generated_sql = await loop.run(case["question"])
+            await loop.run(case["question"], on_text=text_parts.append)
             latency = time.monotonic() - t0
 
-            # Compare generated SQL to gold
+            # Extract SQL from the agent's run_sql tool calls in history.
+            # The agent answers in prose after running the query, so scraping
+            # text is unreliable — pull the actual SQL it executed instead.
+            generated_sql: str | None = None
+            for msg in loop.history:
+                if msg["role"] == "assistant" and isinstance(msg["content"], list):
+                    for block in msg["content"]:
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_use"
+                            and block.get("name") == "run_sql"
+                        ):
+                            sql_candidate = block.get("input", {}).get("query", "")
+                            if sql_candidate:
+                                generated_sql = sql_candidate  # keep last run_sql
+
+            # Fall back to parsing prose if no tool call was captured
+            if not generated_sql:
+                generated_sql = _extract_sql("".join(text_parts))
+
+            # Compare generated SQL to gold by row count
             df_gold = conn.execute(case["gold_sql"])
             try:
-                df_gen = conn.execute(generated_sql)
-                rows_match = len(df_gen) == len(df_gold)
+                df_gen = conn.execute(generated_sql) if generated_sql else None
+                rows_match = df_gen is not None and len(df_gen) == len(df_gold)
             except Exception:
                 df_gen = None
                 rows_match = False
@@ -227,7 +263,7 @@ async def test_agent_nl_to_sql() -> list[dict[str, object]]:
                 {
                     "id": case["id"],
                     "question": case["question"],
-                    "generated_sql": generated_sql,
+                    "generated_sql": generated_sql or "".join(text_parts)[:200],
                     "gold_sql": case["gold_sql"],
                     "status": "correct" if rows_match else "wrong",
                     "latency_s": round(latency, 2),
@@ -351,7 +387,7 @@ async def main() -> None:
     print("\n[2/3] SQL execution test...")
     exec_result = test_sql_execution()
     top = exec_result["top_region"]
-    print(f"  {exec_result['status'].upper()}: {exec_result['rows']} rows, top region = {top}")
+    print(f"  {str(exec_result['status']).upper()}: {exec_result['rows']} rows, top region = {top}")
 
     print("\n[3/3] Gold SQL correctness...")
     gold_results = test_gold_sql_correctness()
@@ -368,6 +404,9 @@ async def main() -> None:
         agent_results = await test_agent_nl_to_sql()
         correct = sum(1 for r in agent_results if r.get("status") == "correct")
         print(f"  Agent accuracy: {correct}/{len(agent_results)}")
+        for r in agent_results:
+            icon = {"correct": "✓", "wrong": "✗", "error": "!"}.get(str(r.get("status")), "?")
+            print(f"    [{icon}] {r['id']}: {r.get('status')} — {r.get('error', r.get('generated_sql', ''))[:80]}")
     else:
         print("\n[4/4] Agent eval: SKIPPED (no ANTHROPIC_API_KEY or claude CLI)")
 

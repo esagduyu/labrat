@@ -134,6 +134,8 @@ async def _run_claude_p(prompt: str, timeout: int) -> str:
         "json",
         "--max-turns",
         "1",
+        "--tools",
+        "",  # "" = disable all built-in tools; we manage tool dispatch in AgentLoop
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -150,7 +152,8 @@ async def _run_claude_p(prompt: str, timeout: int) -> str:
 
     if proc.returncode != 0:
         err = stderr.decode(errors="replace").strip()
-        raise RuntimeError(f"claude CLI exited {proc.returncode}: {err}")
+        out = stdout.decode(errors="replace").strip()[:600]
+        raise RuntimeError(f"claude CLI exited {proc.returncode}: {err or out}")
 
     raw = stdout.decode(errors="replace").strip()
 
