@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 from typing import cast
 
 import sqlglot
@@ -12,9 +13,11 @@ from sqlglot.errors import ParseError
 
 from labrat.agent.tools.base import Tool, ToolContext
 from labrat.db.base import Connection
-from labrat.history.log import log_query
+from labrat.history.events import QueryEvent
+from labrat.history.log import QueryHistoryLog
 
 _SAFE_STATEMENT_TYPES = (exp.Select, exp.Union, exp.Intersect, exp.Except)
+_history_log = QueryHistoryLog()
 
 
 def _unwrap_with(node: object) -> object:
@@ -47,6 +50,32 @@ def _has_limit(sql: str) -> bool:
 def _apply_limit(sql: str, limit: int) -> str:
     stripped = sql.rstrip().rstrip(";").rstrip()
     return f"{stripped}\nLIMIT {limit}"
+
+
+def _log(
+    profile: str,
+    thread_id: str,
+    version_id: str,
+    sql: str,
+    executed: bool,
+    success: bool | None = None,
+    execution_time_ms: float | None = None,
+    row_count: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    event = QueryEvent(
+        timestamp=datetime.now(tz=UTC),
+        profile=profile,
+        thread_id=thread_id,
+        version_id=version_id,
+        sql_final=sql,
+        executed=executed,
+        success=success,
+        execution_time_ms=int(execution_time_ms) if execution_time_ms is not None else None,
+        row_count=row_count,
+        error_message=error_message,
+    )
+    _history_log.append(event)
 
 
 class _Input(BaseModel):
@@ -92,10 +121,15 @@ class RunSqlTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
+        thread_id = getattr(ctx, "thread_id", "unknown")
+        version_id = getattr(ctx, "version_id", "unknown")
+
         if _is_mutation(args.query) and not args.force:
-            log_query(
+            _log(
                 profile=ctx.profile_name,
-                sql_final=args.query,
+                thread_id=thread_id,
+                version_id=version_id,
+                sql=args.query,
                 executed=False,
                 success=False,
                 error_message="mutation refused",
@@ -119,9 +153,11 @@ class RunSqlTool(Tool[_Input]):
             elapsed_ms = (time.monotonic() - t0) * 1000
         except Exception as exc:
             elapsed_ms = (time.monotonic() - t0) * 1000
-            log_query(
+            _log(
                 profile=ctx.profile_name,
-                sql_final=sql,
+                thread_id=thread_id,
+                version_id=version_id,
+                sql=sql,
                 executed=True,
                 success=False,
                 execution_time_ms=elapsed_ms,
@@ -130,9 +166,11 @@ class RunSqlTool(Tool[_Input]):
             return _Output(ok=False, query=args.query, error=str(exc))
 
         rows = [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
-        log_query(
+        _log(
             profile=ctx.profile_name,
-            sql_final=sql,
+            thread_id=thread_id,
+            version_id=version_id,
+            sql=sql,
             executed=True,
             success=True,
             execution_time_ms=elapsed_ms,

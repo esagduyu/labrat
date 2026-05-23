@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-import labrat.history.log as hist_log
 from labrat.agent.tools.base import ToolContext, ToolRegistry
 from labrat.agent.tools.explain_sql import ExplainSqlTool
 from labrat.agent.tools.run_sql import RunSqlTool
@@ -130,7 +129,10 @@ async def test_run_sql_logs_successful_query(
     ctx: ToolContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """run_sql appends a parseable JSONL entry on successful execution."""
-    monkeypatch.setattr(hist_log, "_LOG_DIR", tmp_path)
+    import labrat.agent.tools.run_sql as run_sql_mod
+    from labrat.history.log import QueryHistoryLog
+
+    monkeypatch.setattr(run_sql_mod, "_history_log", QueryHistoryLog(history_dir=tmp_path))
     tool = RunSqlTool()
     await tool.execute(ctx, tool.input_model(query="SELECT 1 AS val"))
     log_file = tmp_path / f"{ctx.profile_name}.jsonl"
@@ -145,7 +147,10 @@ async def test_run_sql_logs_refused_query(
     ctx: ToolContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """run_sql logs refused mutations with executed=False."""
-    monkeypatch.setattr(hist_log, "_LOG_DIR", tmp_path)
+    import labrat.agent.tools.run_sql as run_sql_mod
+    from labrat.history.log import QueryHistoryLog
+
+    monkeypatch.setattr(run_sql_mod, "_history_log", QueryHistoryLog(history_dir=tmp_path))
     tool = RunSqlTool()
     await tool.execute(ctx, tool.input_model(query="DROP TABLE orders"))
     log_file = tmp_path / f"{ctx.profile_name}.jsonl"
