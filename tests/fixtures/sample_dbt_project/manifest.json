@@ -1,0 +1,145 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v11/manifest.json",
+    "dbt_version": "1.8.0",
+    "generated_at": "2024-01-01T00:00:00.000000Z",
+    "invocation_id": "test-invocation-id",
+    "env": {}
+  },
+  "nodes": {
+    "model.jaffle_shop.orders": {
+      "unique_id": "model.jaffle_shop.orders",
+      "resource_type": "model",
+      "name": "orders",
+      "description": "Contains transactional order data.",
+      "schema": "public",
+      "database": "dev",
+      "fqn": ["jaffle_shop", "orders"],
+      "original_file_path": "models/orders.sql",
+      "columns": {
+        "order_id": {
+          "name": "order_id",
+          "description": "Primary key - unique order identifier",
+          "data_type": "integer",
+          "meta": {}
+        },
+        "user_id": {
+          "name": "user_id",
+          "description": "FK to users table",
+          "data_type": "integer",
+          "meta": {}
+        },
+        "status": {
+          "name": "status",
+          "description": "Current order status",
+          "data_type": "varchar",
+          "meta": {}
+        },
+        "total_amount": {
+          "name": "total_amount",
+          "description": "Total order amount in dollars",
+          "data_type": "numeric",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "model.jaffle_shop.stg_orders",
+          "model.jaffle_shop.stg_customers"
+        ]
+      },
+      "tags": []
+    },
+    "model.jaffle_shop.stg_orders": {
+      "unique_id": "model.jaffle_shop.stg_orders",
+      "resource_type": "model",
+      "name": "stg_orders",
+      "description": "Staged orders from raw source.",
+      "schema": "public",
+      "database": "dev",
+      "fqn": ["jaffle_shop", "staging", "stg_orders"],
+      "original_file_path": "models/staging/stg_orders.sql",
+      "columns": {
+        "order_id": {
+          "name": "order_id",
+          "description": "Order ID from source",
+          "data_type": "integer",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": ["source.jaffle_shop.raw.orders"]
+      },
+      "tags": []
+    },
+    "model.jaffle_shop.stg_customers": {
+      "unique_id": "model.jaffle_shop.stg_customers",
+      "resource_type": "model",
+      "name": "stg_customers",
+      "description": "Staged customers with PII columns.",
+      "schema": "public",
+      "database": "dev",
+      "fqn": ["jaffle_shop", "staging", "stg_customers"],
+      "original_file_path": "models/staging/stg_customers.sql",
+      "columns": {
+        "customer_id": {
+          "name": "customer_id",
+          "description": "Customer surrogate key",
+          "data_type": "integer",
+          "meta": {}
+        },
+        "email": {
+          "name": "email",
+          "description": "Customer email address",
+          "data_type": "varchar",
+          "meta": {"pii": true}
+        },
+        "phone": {
+          "name": "phone",
+          "description": "Customer phone number",
+          "data_type": "varchar",
+          "meta": {"pii": true}
+        }
+      },
+      "depends_on": {
+        "nodes": ["source.jaffle_shop.raw.customers"]
+      },
+      "tags": ["pii"]
+    },
+    "test.jaffle_shop.not_null_orders_order_id": {
+      "unique_id": "test.jaffle_shop.not_null_orders_order_id",
+      "resource_type": "test",
+      "name": "not_null_orders_order_id",
+      "description": "",
+      "schema": "public",
+      "database": "dev",
+      "fqn": ["jaffle_shop", "not_null_orders_order_id"],
+      "original_file_path": "models/orders.yml",
+      "columns": {},
+      "depends_on": {"nodes": ["model.jaffle_shop.orders"]},
+      "tags": []
+    }
+  },
+  "sources": {
+    "source.jaffle_shop.raw.orders": {
+      "unique_id": "source.jaffle_shop.raw.orders",
+      "resource_type": "source",
+      "name": "orders",
+      "source_name": "raw",
+      "description": "Raw orders from the production database.",
+      "schema": "raw",
+      "database": "dev",
+      "columns": {}
+    },
+    "source.jaffle_shop.raw.customers": {
+      "unique_id": "source.jaffle_shop.raw.customers",
+      "resource_type": "source",
+      "name": "customers",
+      "source_name": "raw",
+      "description": "Raw customers from production.",
+      "schema": "raw",
+      "database": "dev",
+      "columns": {}
+    }
+  }
+}

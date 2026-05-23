@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: payments
+    description: "Payment records for each order."
+    columns:
+      - name: payment_id
+        description: "Primary key for payments"
+        meta:
+          data_type: integer
+      - name: order_id
+        description: "FK to orders table"
+        meta:
+          data_type: integer
+      - name: card_number
+        description: "Masked card number (last 4 digits)"
+        meta:
+          data_type: varchar
+          pii: true

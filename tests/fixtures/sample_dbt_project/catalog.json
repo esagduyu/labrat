@@ -1,0 +1,68 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/catalog/v1/catalog.json",
+    "dbt_version": "1.8.0",
+    "generated_at": "2024-01-01T00:00:00.000000Z"
+  },
+  "nodes": {
+    "model.jaffle_shop.orders": {
+      "unique_id": "model.jaffle_shop.orders",
+      "metadata": {
+        "type": "BASE TABLE",
+        "schema": "public",
+        "name": "orders",
+        "database": "dev",
+        "comment": null,
+        "owner": "postgres"
+      },
+      "columns": {
+        "order_id": {
+          "type": "integer",
+          "index": 1,
+          "name": "order_id",
+          "comment": null
+        }
+      },
+      "stats": {
+        "has_stats": {
+          "id": "has_stats",
+          "label": "Has Stats?",
+          "value": true,
+          "include": false,
+          "description": "Indicates whether statistics exist for this table"
+        },
+        "row_count": {
+          "id": "row_count",
+          "label": "Row Count",
+          "value": 99,
+          "include": true,
+          "description": "An approximate count of rows in this table"
+        }
+      }
+    },
+    "model.jaffle_shop.stg_orders": {
+      "unique_id": "model.jaffle_shop.stg_orders",
+      "metadata": {
+        "type": "BASE TABLE",
+        "schema": "public",
+        "name": "stg_orders",
+        "database": "dev",
+        "comment": null,
+        "owner": "postgres"
+      },
+      "columns": {
+        "order_id": {
+          "type": "integer",
+          "index": 1,
+          "name": "order_id",
+          "comment": null
+        }
+      },
+      "stats": {
+        "has_stats": {"id": "has_stats", "label": "Has Stats?", "value": true, "include": false, "description": ""},
+        "row_count": {"id": "row_count", "label": "Row Count", "value": 250, "include": true, "description": ""}
+      }
+    }
+  },
+  "sources": {}
+}
