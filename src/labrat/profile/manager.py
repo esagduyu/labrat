@@ -75,7 +75,31 @@ def make_connection(profile: Profile) -> Connection:
         path = profile.path or ":memory:"
         return DuckDBConnection(path=path, read_only=profile.is_read_only)
 
+    if profile.dialect == "postgres":
+        from labrat.db.postgres import PostgresConnection
+
+        dsn = _build_postgres_dsn(profile)
+        return PostgresConnection(dsn)
+
     raise NotImplementedError(f"Dialect '{profile.dialect}' not yet supported.")
+
+
+def _build_postgres_dsn(profile: Profile) -> str:
+    """Build a psycopg DSN from profile fields."""
+    import urllib.parse
+
+    secret = storage.load_secret(profile.name)
+    host = profile.host or "localhost"
+    port = profile.port or 5432
+    database = profile.database or profile.name
+    user = profile.username or ""
+    password = urllib.parse.quote(secret, safe="") if secret else ""
+
+    if user and password:
+        return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    if user:
+        return f"postgresql://{user}@{host}:{port}/{database}"
+    return f"postgresql://{host}:{port}/{database}"
 
 
 def make_profile(
