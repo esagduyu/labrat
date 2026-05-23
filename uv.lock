@@ -598,6 +598,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "duckdb" },
+    { name = "jinja2" },
     { name = "keyring" },
     { name = "openai" },
     { name = "plotext" },
@@ -630,6 +631,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
     { name = "duckdb", specifier = ">=1.1" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "keyring", specifier = ">=25" },
     { name = "openai", specifier = ">=1.50" },
     { name = "plotext", specifier = ">=5.3" },
