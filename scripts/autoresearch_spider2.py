@@ -285,7 +285,7 @@ def load_dev_set(n: int, gold_eval: dict) -> list:
                 instruction=task["instruction"],
                 project_files=project_files,
                 target_file=target_file,
-            ).with_inputs("instruction", "project_files", "target_file")
+            ).with_inputs("instance_id", "instruction", "project_files", "target_file")
         )
 
     if skipped:
@@ -341,6 +341,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--examine-failures", action="store_true",
         help="Write generated SQL for failing tasks to autoresearch_output/<tag>/failures_iterN.md",
+    )
+    p.add_argument(
+        "--use-agent", action="store_true",
+        help="Use Spider2AgentModule (multi-turn ReAct) instead of DSPy single-shot module",
+    )
+    p.add_argument(
+        "--agent-max-turns", type=int, default=40,
+        help="Max turns for Spider2AgentModule (default: 40)",
     )
     return p.parse_args()
 
@@ -423,7 +431,29 @@ def main() -> None:
     print(f"  Shuffle order: {passing_ids}")
 
     executor = DBTExecutor(SPIDER2_DBT_DIR, AUTORESEARCH_OUTPUT / run_tag)
-    metric = make_metric(executor, SPIDER2_DBT_DIR, gold_eval)
+
+    if args.use_agent:
+        from labrat.dspy_opt.spider2_agent import Spider2AgentModule
+        from labrat.dspy_opt.metric import make_agent_metric
+        module = Spider2AgentModule(
+            spider2_dbt_dir=SPIDER2_DBT_DIR,
+            output_base=AUTORESEARCH_OUTPUT / run_tag,
+            gold_eval=gold_eval,
+            max_turns=args.agent_max_turns,
+        )
+        metric = make_agent_metric(SPIDER2_DBT_DIR, gold_eval)
+        print(f"  Mode: Spider2AgentModule (max_turns={args.agent_max_turns})")
+    else:
+        metric = make_metric(executor, SPIDER2_DBT_DIR, gold_eval)
+        module = DBTModelCompletion()
+        if OPTIMIZED_MODULE_PATH.exists():
+            try:
+                module.load(str(OPTIMIZED_MODULE_PATH))
+                print(f"  Loaded optimised module from {OPTIMIZED_MODULE_PATH.name}")
+            except Exception as e:
+                print(f"  Could not load saved module ({e}), starting fresh")
+        print("  Mode: DBTModelCompletion (DSPy single-shot)")
+
     evaluator = dspy.Evaluate(
         devset=shuffled_dev,
         metric=metric,
@@ -431,15 +461,6 @@ def main() -> None:
         display_progress=True,
         display_table=False,
     )
-
-    # Load or init module
-    module = DBTModelCompletion()
-    if OPTIMIZED_MODULE_PATH.exists():
-        try:
-            module.load(str(OPTIMIZED_MODULE_PATH))
-            print(f"  Loaded optimised module from {OPTIMIZED_MODULE_PATH.name}")
-        except Exception as e:
-            print(f"  Could not load saved module ({e}), starting fresh")
 
     # Findings log
     init_findings(run_tag)

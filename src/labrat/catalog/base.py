@@ -31,6 +31,7 @@ class CatalogEntry(BaseModel):
     upstream: list[str] = []
     downstream: list[str] = []
     row_count: int | None = None
+    compiled_sql: str = ""  # Jinja-rendered SQL from manifest.json compiled_code
 
 
 class CatalogAdapter(ABC):

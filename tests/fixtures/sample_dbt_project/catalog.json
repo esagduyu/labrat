@@ -21,6 +21,12 @@
           "index": 1,
           "name": "order_id",
           "comment": null
+        },
+        "shipped_at": {
+          "type": "TIMESTAMP",
+          "index": 5,
+          "name": "shipped_at",
+          "comment": null
         }
       },
       "stats": {

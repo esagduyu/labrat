@@ -147,3 +147,49 @@ def make_metric(
         return float(score)
 
     return metric
+
+
+def make_agent_metric(
+    spider2_dbt_dir: Path,
+    gold_eval: dict[str, dict[str, Any]],
+) -> Any:
+    """Metric for Spider2AgentModule: reads DB path from prediction rather than running dbt.
+
+    The agent runs dbt internally, so we just compare the already-built
+    output DuckDB against the gold database.
+    """
+    gold_dir = spider2_dbt_dir / "evaluation_suite" / "gold"
+
+    def metric(example: Any, prediction: Any, trace: Any = None) -> float:
+        instance_id: str = example.instance_id
+        gold_entry = gold_eval.get(instance_id)
+        if not gold_entry:
+            return 0.0
+
+        db_path_str: str | None = getattr(prediction, "db_path", None)
+        if not db_path_str:
+            return 0.0
+        output_db = Path(db_path_str)
+        if not output_db.exists():
+            return 0.0
+
+        eval_cfg: dict[str, Any] = gold_entry["evaluation"]
+        params = eval_cfg["parameters"]
+        gold_db = gold_dir / instance_id / params["gold"]
+        if not gold_db.exists():
+            return 0.0
+
+        try:
+            score = duckdb_match(
+                pred_path=str(output_db),
+                gold_path=str(gold_db),
+                condition_tabs=params.get("condition_tabs", []),
+                condition_cols=params.get("condition_cols", []),
+                ignore_orders=params.get("ignore_orders", []),
+            )
+        except Exception:
+            score = 0
+
+        return float(score)
+
+    return metric

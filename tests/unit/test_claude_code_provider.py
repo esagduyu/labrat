@@ -218,7 +218,7 @@ async def test_claude_code_provider_nonzero_exit_raises() -> None:
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             provider = ClaudeCodeProvider()
-            with pytest.raises(RuntimeError, match=r"claude.*exited 1"):
+            with pytest.raises(RuntimeError, match=r"claude CLI error"):
                 await provider.stream(
                     messages=[{"role": "user", "content": "hi"}],
                     tools=[],

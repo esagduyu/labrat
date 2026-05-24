@@ -95,6 +95,159 @@ completely uninformative for MIPROv2.
 - The wrong-model failures need a deeper fix: possibly examine what `identify_target_file()` resolves
   to for each failing task — `target_file` may itself be pointing at a helper model in some projects.
 
+## Spider2 Phases 1–4 (2026-05-24)
+
+### Phase 1: Spider2 ReAct agent loop
+
+**Architecture decision — parallel tool classes, not extending AgentLoop**
+
+The existing `AgentLoop` requires a `ToolContext` (DB connection, catalog, screen bindings). Spider2
+tasks have none of that — they have a project directory, a DuckDB path, and a `dbt run` command.
+Rather than adding a nullable `db` and `catalog` to `ToolContext`, we created parallel:
+- `Spider2Context` (mutable dataclass with project_dir, db_path, pre_existing_files, dbt_dirty)
+- `Spider2Tool` ABC (same interface pattern as `Tool[InputT]` but uses `Spider2Context`)
+- `Spider2ToolRegistry` (same dispatch pattern)
+- `Spider2Agent` (async loop similar to `AgentLoop` but without the TUI dependencies)
+
+**Tradeoff**: two similar loop implementations. Accepted because Spider2 is benchmark code
+(dspy_opt package), not product code. If Spider2 tooling ever needs to be productized, it can
+then extend the shared loop at that point.
+
+**`identify_target_file` four-level resolution**
+
+The original fallback (first alphabetically sorted SQL file) was consistently wrong because:
+- Projects often have helper files alphabetically first (e.g., `calendar.sql` before `fct_sales.sql`)
+- The benchmark eval expects the model that produces the eval table, not the first file
+
+New resolution order:
+1. Exact stem match against `condition_tabs[0]`
+2. Manifest.json model name match
+3. Stub files (empty or "select 1") — most likely targets
+4. Alphabetical with `warnings.warn()` — last resort, always suspicious
+
+**`dbt_dirty` skip optimization**
+
+`dbt run` takes 30–180s. Skipping it when no files changed saves significant time during
+multi-turn debugging. The flag resets to `True` on every file write/edit, `False` on returncode=0.
+
+### Phase 2: M-Schema + loader enhancements
+
+**M-Schema format chosen over raw DDL**
+
+Research (BIRD benchmark, DAIL-SQL paper by Thinkquel) shows M-Schema achieves +2.03% EX on
+average over raw DDL. The format collapses PK/FK, type, description, and sample values into
+one compact line per column — exactly the information an agent needs for SQL joins.
+
+**`compiled_code` over raw source SQL**
+
+`manifest.json` nodes contain `compiled_code` (Jinja-rendered). This is more useful to the agent:
+- `{{ ref('stg_orders') }}` → actual table name used by DuckDB
+- `{{ source('raw', 'orders') }}` → resolved to `raw.orders`
+Stored in `CatalogEntry.compiled_sql`. The agent can read it with `read_file` but the M-Schema
+serializer can also reference it to show the model's actual SQL shape.
+
+**Catalog column type enrichment is non-destructive**
+
+`_enrich_from_catalog` only updates `ColumnEntry.data_type` when the manifest had an empty type.
+If the manifest already has a type (from schema.yml `meta.data_type`), it is preserved.
+Rationale: schema.yml types may be logically enriched (e.g., "BIGINT" preferred over "INT4").
+
+**Sample value collection is opt-in**
+
+`collect_sample_values()` in `mschema.py` requires a live DB connection. The serializer takes
+it as an optional dict. DbtLoader itself is connection-free — it reads JSON artifacts only.
+This keeps the loader fast and testable without a running database.
+
+### Phase 3: Reference snapshot + deterministic verifier
+
+**Why deterministic verification instead of a second LLM call**
+
+A second "verifier" LLM call (as done by SignalPilot) is:
+- Non-deterministic (can hallucinate "looks good")
+- Expensive (doubles token cost)
+- Slow (adds another 10–30s per turn)
+
+Pure Python checks for column presence, type compatibility, row count, and sample value
+matching catch the most common failure modes:
+- Wrong column aliasing (agent writes `sales_total`, eval expects `total_sales`)
+- JOIN fanout (3× rows instead of 1×)
+- Empty result (model built but produced zero rows)
+- Type mismatch (INTEGER vs VARCHAR)
+
+**Type compatibility is loose by design**
+
+`_types_compatible()` maps type variants to families (INT, FLOAT, TEXT, etc.). INTEGER and
+BIGINT are compatible; DATE and TIMESTAMP are not. This avoids false positives from dialect
+variance (DuckDB uses INTEGER internally but catalogs may say INT4).
+
+**Snapshot captures source tables, verifier checks output tables**
+
+The snapshot is taken at agent startup (before any files are written or `dbt run` is called).
+It captures whatever tables exist in DuckDB — typically source/seed data loaded by task setup.
+After `dbt run` returns 0, the verifier checks the eval tables against:
+1. The snapshot (for row count and value spot-checks on source tables that appear in output)
+2. Zero-row guard (eval table must have > 0 rows, period)
+
+The verifier result is appended to the `run_dbt` tool response so the agent sees it immediately
+and can fix issues before calling `submit`.
+
+**Verifier is only injected when `eval_tables` is known**
+
+`Spider2AgentModule.forward()` reads `condition_tabs` from the gold eval config and passes them
+to `Spider2Agent`. For CLI use without gold eval config, `eval_tables=[]` disables the verifier
+entirely — the agent can still submit without deterministic verification.
+
+### Phase 4: Planning span before SQL generation
+
+**Regex-based plan parsing, not strict YAML**
+
+The plan block uses `---plan ... ---` markers. Strict YAML parsing fails when models include
+indentation variations or omit optional fields. The parser uses targeted regex:
+- `_TARGET_RE`: extracts `target_model:` value
+- `_SOURCE_RE`: finds list items under `source_tables_and_why:`
+- `_JOIN_RE`: finds list items under `key_joins:`
+- `_GRAIN_RE`: extracts `grain:` value
+
+This is lenient enough to handle minor formatting variations while catching the critical
+`target_model` field.
+
+**Plan validation only checks `target_model` — other fields are advisory**
+
+The only hard validation is that `target_model` matches the task's required target file
+(after normalizing path separators and leading `./`). Source tables, joins, and grain are
+extracted for debugging but not validated — the agent may plan different sources than what
+it ends up using.
+
+**Plan error halts tool dispatch for that turn**
+
+When `_parse_plan()` returns an error string, the agent's tool calls are discarded for that
+turn and the error is injected as a user message. The agent must revise its plan before
+proceeding. This prevents the agent from writing SQL to the wrong file even when it has
+already emitted a tool call alongside a bad plan.
+
+### UX recommendations (TUI product impact)
+
+**M-Schema in the context engine (recommended for M30/M29 integration)**
+
+Currently `ContextBundle.dbt_models` is None. When a dbt catalog is loaded, serialize as
+M-Schema and inject it into the bundle. This gives the chat agent the same compact, high-signal
+schema view that the Spider2 agent gets. Priority: medium (doesn't block current tasks).
+
+**Compiled SQL in schema explorer (recommended)**
+
+The schema tree currently shows column names and types from the catalog. Adding a "View SQL"
+action (key: `s`) that opens a `ModalScreen` with the model's `compiled_sql` would let users
+inspect what dbt actually generated. This is especially useful for debugging stale models.
+Priority: low (nice-to-have after core features are stable).
+
+**Snapshot/verifier as TUI validation mode (future consideration)**
+
+The deterministic verifier could be exposed as a "Validate last query" action in the TUI:
+compare the result of a user's SQL against snapshot data to detect row count or value regressions.
+This is a stretch goal — the current validations framework (M32) covers most of this use case
+via LLM-based checks. Deterministic checks would complement it for numeric/structural assertions.
+Priority: low, deferred to after Phase 5+.
+
 ## Open questions
 
 - Can Haiku with an optimized prompt approach Sonnet's baseline? Haiku scored 0.0% at baseline —

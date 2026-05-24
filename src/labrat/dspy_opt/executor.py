@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
-from pathlib import Path
-
-import shutil
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -111,13 +110,58 @@ def load_project_files(project_dir: Path) -> str:
 
 
 def identify_target_file(project_dir: Path, condition_tabs: list[str]) -> str:
-    """Return the model file path (relative to project_dir) for the first condition table."""
+    """Return the model file path (relative to project_dir) for the first condition table.
+
+    Resolution order:
+    1. Exact stem match against condition_tabs.
+    2. Match against manifest.json model names (handles capitalisation differences).
+    3. First stub SQL file (empty content or 'select 1').
+    4. First SQL file alphabetically (last-resort fallback, logged).
+    """
     models_dir = project_dir / "models"
+    if not models_dir.exists():
+        return "models/model.sql"
+
+    sql_files = sorted(models_dir.glob("**/*.sql"))
+
+    # 1. Exact stem match
     for tab in condition_tabs:
-        for sql_file in models_dir.glob("**/*.sql"):
+        for sql_file in sql_files:
             if sql_file.stem == tab:
                 return str(sql_file.relative_to(project_dir))
-    # Fallback: first SQL model file
-    for sql_file in sorted(models_dir.glob("**/*.sql")):
-        return str(sql_file.relative_to(project_dir))
+
+    # 2. Manifest.json model name match
+    manifest = project_dir / "manifest.json"
+    if manifest.exists():
+        try:
+            raw = json.loads(manifest.read_text())
+            manifest_names = {
+                uid.split(".")[-1]
+                for uid, node in raw.get("nodes", {}).items()
+                if node.get("resource_type") == "model"
+            }
+            for tab in condition_tabs:
+                if tab in manifest_names:
+                    for sql_file in sql_files:
+                        if sql_file.stem == tab:
+                            return str(sql_file.relative_to(project_dir))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 3. Stub files (empty or "select 1") — these are the intended targets
+    for sql_file in sql_files:
+        content = sql_file.read_text(errors="replace").strip().lower().rstrip(";").strip()
+        if not content or content == "select 1":
+            return str(sql_file.relative_to(project_dir))
+
+    # 4. Last-resort: first file alphabetically
+    if sql_files:
+        import warnings
+        warnings.warn(
+            f"identify_target_file: no match for {condition_tabs} in {project_dir}; "
+            f"falling back to {sql_files[0].name}",
+            stacklevel=2,
+        )
+        return str(sql_files[0].relative_to(project_dir))
+
     return "models/model.sql"
