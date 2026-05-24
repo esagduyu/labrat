@@ -464,6 +464,7 @@ def main() -> None:
         num_threads=args.threads,
         display_progress=True,
         display_table=False,
+        max_errors=len(shuffled_dev),  # never cancel early; forward() handles its own exceptions
     )
 
     # Findings log

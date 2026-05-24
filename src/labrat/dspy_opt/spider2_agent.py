@@ -298,10 +298,27 @@ class Spider2AgentModule:
     def forward(self, instance_id: str, instruction: str, target_file: str, **_: Any) -> Any:
         import asyncio
         import shutil
+        import traceback as _tb
 
         import dspy
         import yaml
 
+        try:
+            return self._run_task(instance_id, instruction, target_file, asyncio, shutil, yaml, dspy)
+        except Exception:
+            _tb.print_exc()
+            return dspy.Prediction(db_path=None, submitted=False, turns_used=0, submit_description="")
+
+    def _run_task(
+        self,
+        instance_id: str,
+        instruction: str,
+        target_file: str,
+        asyncio: Any,
+        shutil: Any,
+        yaml: Any,
+        dspy: Any,
+    ) -> Any:
         src = self._spider2_dbt_dir / "examples" / instance_id
         work_dir = self._output_base / instance_id
 
