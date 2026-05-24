@@ -26,12 +26,14 @@ from labrat.agent.loop import ContentBlock, TextBlock, ToolUseBlock
 from labrat.agent.providers.base import ModelProvider
 
 _DEFAULT_TIMEOUT = 120
+_DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
 class ClaudeCodeProvider(ModelProvider):
     """ModelProvider that shells out to the claude CLI."""
 
-    def __init__(self, timeout: int = _DEFAULT_TIMEOUT) -> None:
+    def __init__(self, model: str = _DEFAULT_MODEL, timeout: int = _DEFAULT_TIMEOUT) -> None:
+        self._model = model
         self._timeout = timeout
 
     async def stream(
@@ -46,7 +48,7 @@ class ClaudeCodeProvider(ModelProvider):
             )
 
         prompt = _build_prompt(messages, tools, system)
-        raw = await _run_claude_p(prompt, self._timeout)
+        raw = await _run_claude_p(prompt, self._model, self._timeout)
 
         async def _emit() -> AsyncIterator[ContentBlock]:
             for block in _parse_response(raw):
@@ -125,7 +127,7 @@ def _build_prompt(
 # ── subprocess ────────────────────────────────────────────────────────────────
 
 
-async def _run_claude_p(prompt: str, timeout: int) -> str:
+async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
     """Pipe prompt to `claude --print --output-format json` and return its output."""
     proc = await asyncio.create_subprocess_exec(
         "claude",
@@ -134,6 +136,8 @@ async def _run_claude_p(prompt: str, timeout: int) -> str:
         "json",
         "--max-turns",
         "1",
+        "--model",
+        model,
         "--tools",
         "",  # "" = disable all built-in tools; we manage tool dispatch in AgentLoop
         stdin=asyncio.subprocess.PIPE,

@@ -54,16 +54,19 @@ class RunValidationsTool(Tool[_Input]):
             return _Output(ok=True, passed=0, warned=0, blocked=0, details=[])
 
         async def _llm(prompt: str) -> str:
-            from labrat.agent.providers.anthropic_direct import AnthropicProvider
+            from labrat.agent.loop import TextBlock
+            from labrat.agent.providers.claude_code import ClaudeCodeProvider
 
-            provider = AnthropicProvider()
+            provider = ClaudeCodeProvider()
             chunks: list[str] = []
-            async for chunk in provider.stream(
+            stream = await provider.stream(
                 messages=[{"role": "user", "content": prompt}],
                 system="You are a data validation agent. Reply with exactly one line.",
                 tools=[],
-            ):
-                chunks.append(chunk)
+            )
+            async for block in stream:
+                if isinstance(block, TextBlock):
+                    chunks.append(block.text)
             return "".join(chunks).strip()
 
         checker = ValidationChecker(llm_fn=_llm)

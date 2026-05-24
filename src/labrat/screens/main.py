@@ -251,7 +251,7 @@ class MainScreen(Screen[None]):
         from rich.text import Text
 
         from labrat.agent.loop import AgentLoop
-        from labrat.agent.providers.anthropic_direct import AnthropicProvider
+        from labrat.agent.providers.claude_code import ClaudeCodeProvider
         from labrat.agent.tools.base import ToolContext, ToolRegistry
         from labrat.agent.tools.column_stats import ColumnStatsTool
         from labrat.agent.tools.create_chart import CreateChartTool
@@ -305,7 +305,7 @@ class MainScreen(Screen[None]):
         registry.register(RecallMemoriesTool())
         registry.register(RunValidationsTool())
 
-        provider = AnthropicProvider()
+        provider = ClaudeCodeProvider()
         loop = AgentLoop(
             provider=provider,
             registry=registry,
