@@ -84,6 +84,9 @@ class ChatPanel(Widget):
         self._agent_loop: Any = None  # AgentLoop; typed as Any to avoid circular import
         self._transcript_lines: list[str] = []
         self._stream_buf: list[str] = []
+        # (rich_markup, is_trace) — retained for toggle reflow
+        self._history_rich: list[tuple[str, bool]] = []
+        self._show_traces: bool = True
 
     def set_agent_loop(self, loop: Any) -> None:
         """Wire an AgentLoop into this panel."""
@@ -143,7 +146,7 @@ class ChatPanel(Widget):
                 self.post_message(ChatPanel.AgentToolCall(name=name, args=args))
                 args_str = json.dumps(args, separators=(",", ":"))
                 tool_line = f"[dim]▸[/dim] [bold]{name}[/bold]({args_str})"
-                self._append_history(tool_line, f"▸ {name}({args_str})")
+                self._append_history(tool_line, f"▸ {name}({args_str})", is_trace=True)
                 return await orig_dispatch(name, args, ctx)
 
             self._agent_loop._registry.dispatch = _traced_dispatch
@@ -173,17 +176,41 @@ class ChatPanel(Widget):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _append_history(self, rich_line: str, plain_line: str) -> None:
+    def _append_history(self, rich_line: str, plain_line: str, *, is_trace: bool = False) -> None:
         """Write a line to the history RichLog and the plain transcript."""
-        self.query_one("#history", RichLog).write(rich_line)
+        self._history_rich.append((rich_line, is_trace))
+        if not is_trace or self._show_traces:
+            self.query_one("#history", RichLog).write(rich_line)
         if plain_line:
             self._transcript_lines.append(plain_line)
+
+    def _rerender_history(self) -> None:
+        """Clear and rewrite history — used for trace toggle and resize reflow."""
+        history = self.query_one("#history", RichLog)
+        history.clear()
+        for markup, is_trace in self._history_rich:
+            if not is_trace or self._show_traces:
+                history.write(markup)
+
+    def toggle_traces(self) -> None:
+        """Show or hide agent tool-call trace lines."""
+        self._show_traces = not self._show_traces
+        self._rerender_history()
+        state = "shown" if self._show_traces else "hidden"
+        self.notify(f"Tool traces {state}", timeout=2)
 
     def _append_streaming(self, rich_line: str, plain_line: str) -> None:
         streaming = self.query_one("#streaming", RichLog)
         streaming.write(rich_line)
         if plain_line:
             self._stream_buf.append(plain_line)
+
+    # ── resize reflow ─────────────────────────────────────────────────────────
+
+    def on_resize(self) -> None:
+        """Reflow history text when the pane width changes."""
+        if self._history_rich:
+            self._rerender_history()
 
     # ── stop action ───────────────────────────────────────────────────────────
 

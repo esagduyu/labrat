@@ -38,6 +38,7 @@ _SECTIONS = [
     ("Chat", [
         ("Enter", "Send message"),
         ("Escape", "Stop agent"),
+        ("Ctrl+\\", "Toggle tool-call traces"),
     ]),
     ("App", [
         ("?  /  F1", "This help screen"),

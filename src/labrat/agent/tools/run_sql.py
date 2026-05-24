@@ -106,8 +106,13 @@ class RunSqlTool(Tool[_Input]):
     3. Every execution (success or failure) is written to the query history log.
     """
 
-    def __init__(self, on_result: Callable[[pl.DataFrame, float], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_result: Callable[[pl.DataFrame, float], None] | None = None,
+        on_draft: Callable[[str], None] | None = None,
+    ) -> None:
         self._on_result = on_result
+        self._on_draft = on_draft
 
     @property
     def name(self) -> str:
@@ -150,6 +155,8 @@ class RunSqlTool(Tool[_Input]):
             )
 
         sql = args.query if _has_limit(args.query) else _apply_limit(args.query, args.auto_limit)
+        if self._on_draft is not None:
+            self._on_draft(sql)
 
         conn = cast(Connection, ctx.connection)
         t0 = time.monotonic()

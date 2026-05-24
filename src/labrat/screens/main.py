@@ -150,6 +150,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+k", "view_findings", "Findings", show=True),
         Binding("ctrl+r", "view_history", "History", show=True),
         Binding("ctrl+g", "view_memories", "Memories", show=True),
+        Binding("ctrl+backslash", "toggle_traces", "Traces", show=False),
     ]
 
     def __init__(
@@ -292,7 +293,7 @@ class MainScreen(Screen[None]):
             profile_name=self._profile,
         )
         registry = ToolRegistry()
-        registry.register(RunSqlTool(on_result=on_result))
+        registry.register(RunSqlTool(on_result=on_result, on_draft=on_draft))
         registry.register(DraftSqlTool(on_draft=on_draft))
         registry.register(CreateChartTool(on_chart=on_chart))
         registry.register(ListTablesTool())
@@ -451,6 +452,11 @@ class MainScreen(Screen[None]):
         from labrat.screens.memories_viewer import MemoriesViewerScreen
 
         self.app.push_screen(MemoriesViewerScreen(profile_name=self._profile))
+
+    def action_toggle_traces(self) -> None:
+        from labrat.widgets.chat_panel import ChatPanel
+
+        self.query_one("#chat-content", ChatPanel).toggle_traces()
 
     def action_show_help(self) -> None:
         from labrat.screens.help import HelpScreen
