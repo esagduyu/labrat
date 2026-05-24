@@ -18,6 +18,7 @@ _SECTIONS = [
         ("Ctrl+4", "Focus schema browser"),
         ("Ctrl+H", "Toggle schema pane"),
         ("Ctrl+L", "Toggle chat panel"),
+        ("E", "Expand / collapse all schema nodes"),
     ]),
     ("Editor", [
         ("Ctrl+Enter", "Run SQL (or selected text)"),

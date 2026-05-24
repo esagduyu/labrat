@@ -34,6 +34,10 @@ class SchemaTree(Tree[_ColNodeData]):
     Column leaves carry _ColNodeData; branch nodes carry None.
     """
 
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("e", "toggle_expand_all", "Expand/Collapse All"),
+    ]
+
     class ColumnSelected(Message):
         """Posted when a column leaf is activated."""
 
@@ -54,6 +58,7 @@ class SchemaTree(Tree[_ColNodeData]):
         super().__init__(label, id="schema-tree")
         self._catalog = catalog
         self._filter = ""
+        self._all_expanded = True
         if catalog:
             self._fill(catalog)
 
@@ -94,7 +99,19 @@ class SchemaTree(Tree[_ColNodeData]):
                     nullable = "NULL" if col.nullable else "NOT NULL"
                     data = _ColNodeData(catalog.database_name, schema.name, table.name, col)
                     table_node.add_leaf(f"{col.name}  {col.data_type} {nullable}", data=data)
-        self.root.expand()
+        if self._all_expanded:
+            self.root.expand_all()
+        else:
+            self.root.expand()
+
+    def action_toggle_expand_all(self) -> None:
+        """Toggle all tree nodes open or closed."""
+        self._all_expanded = not self._all_expanded
+        if self._all_expanded:
+            self.root.expand_all()
+        else:
+            self.root.collapse_all()
+            self.root.expand()  # keep root itself visible
 
     @staticmethod
     def _table_matches(table_name: str, col_names: list[str], flt: str) -> bool:
