@@ -19,11 +19,64 @@
 
 ## Gotchas encountered
 
-(none yet)
+### Spider2-DBT autoresearch (2026-05-23)
+
+- **DSPy 3.x API change**: `dspy.LM("anthropic/...")` requires real Anthropic API credits. With a Max
+  subscription (no API credits), you must use a custom `dspy.BaseLM` subclass that shells out to the
+  `claude --print` CLI. See `src/labrat/dspy_opt/claude_code_lm.py`.
+
+- **`EvaluationResult` not a float**: DSPy 3.x `dspy.Evaluate()(module)` returns an `EvaluationResult`
+  object, not a float. `.score` is 0–100. Use `.score / 100.0`.
+
+- **`optuna` not bundled**: `dspy.MIPROv2` requires `optuna` separately — `pip install dspy[optuna]`
+  or `uv pip install optuna`. Not pulled in by `dspy-ai` alone.
+
+- **`dbt` binary in venv**: `shutil.which("dbt")` fails when dbt is in `.venv/bin/` but not on PATH.
+  Fix: check `Path(sys.executable).parent / "dbt"` first.
+
+- **Train/val split bias**: the Spider2-DBT JSONL is ordered; `playbook001` (the only passing task at
+  baseline) was always first, so the static 2/3–1/3 split always put it in training, never in val.
+  MIPROv2 saw zero positive signal on every trial. Fixed with shuffle (seed=42) + k-fold rotation.
+
+- **Usage limit kills MIPROv2 trials silently**: when Claude CLI hits usage cap mid-eval, each
+  `claude --print` call returns the string "You're out of extra usage · resets 7:50pm …" instead of
+  SQL. DSPy's parallelizer catches the resulting parse error and marks the example as failed — every
+  trial scores 0.0. Fix: bump usage limit before running; monitor task timing (normal ~45s/task vs
+  <2s when exhausted).
+
+- **`--max-iters 0` means run forever**: zero is the "unlimited" sentinel, not "zero iterations".
+
+- **Findings file ordering**: `init_findings()` always appends a new run header on restart. Iteration
+  numbers reflect the in-process counter, not a global counter — after a crash and restart, numbering
+  resets to 1.
+
+### Failure analysis: what Sonnet gets wrong on Spider2-DBT (2026-05-23)
+
+Diagnosed by reading generated SQL from `autoresearch_output/examine/failures_iter0.md`:
+
+1. **Wrong model completed** (f1001, shopify001, xero_new001): Sonnet generates SQL for a *different*
+   model in the project (e.g., `circuits` when asked to rank drivers). Root cause: without an explicit
+   "only complete `target_file`" instruction, the model pattern-matches to whichever model context it
+   finds most salient in `project_files`.
+
+2. **DuckDB dialect errors** (netflix001, asset001, analytics_engineering001):
+   - `try_strptime()` — not a DuckDB function (use `strptime()` + `TRY_CAST`)
+   - `get_current_timestamp()` — not DuckDB (use `current_timestamp`)
+   - `regexp_replace(col, pat, repl, 'g')` — 'g' flag not supported
+   - `x::type` cast shorthand — prefer explicit `CAST(x AS type)`
+
+3. **Unavailable package macros** (workday002, shopify001): uses `{{ fivetran_utils.string_agg() }}`,
+   `{{ shopify.shopify_partition_by_cols() }}` — package macros not installed in the eval project.
+   Fix added to prompt: "only use macros you see defined in `project_files`."
+
+4. **Near-miss column/join mismatch** (chinook001, flicks001, provider001): SQL structure is right but
+   join keys or selected columns diverge from the gold schema. Harder to fix with prompt alone.
 
 ## Open questions
 
-(none yet)
+- Can Haiku with an optimized prompt approach Sonnet's baseline? Haiku scored 0.0% at baseline vs
+  Sonnet's 8.3% — MIPROv2 optimization run not yet completed.
+- How much does the improved prompt (v2) move the baseline? Run `autoresearch/may23v2` to find out.
 
 ## Proposed plan/context updates
 

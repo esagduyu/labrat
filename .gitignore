@@ -154,6 +154,12 @@ tests/fixtures/sample_dbt_projects/**/logs/
 *.prof
 *.lprof
 
+# ─── AutoResearch ────────────────────────────────────────────
+# results.tsv is untracked (à la Karpathy's autoresearch)
+results.tsv
+# dbt execution work dirs (can be large)
+autoresearch_output/
+
 # ─── Misc ────────────────────────────────────────────────────
 *.log
 *.tmp

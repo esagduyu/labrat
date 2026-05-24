@@ -9,7 +9,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.40",
+    "dbt-duckdb>=1.8",
+    "dspy-ai[optuna]>=2.5",
     "duckdb>=1.1",
+    "pandas>=2.0",
     "google-cloud-bigquery>=3.41.0",
     "jinja2>=3.1.6",
     "keyring>=25",
