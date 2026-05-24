@@ -8,3 +8,109 @@
 
 ## Run `may23v2` — 2026-05-23 21:18
 
+
+### Iteration 0 — Baseline
+
+**Score:** 8.3% (1/12)  
+**Status:** baseline  
+**Notes:** 260s eval time
+
+| Task | Result | Change |
+|------|--------|--------|
+| `xero_new001` | ❌ | — |
+| `flicks001` | ❌ | — |
+| `asana001` | ❌ | — |
+| `chinook001` | ❌ | — |
+| `f1001` | ❌ | — |
+| `analytics_engineering001` | ❌ | — |
+| `workday002` | ❌ | — |
+| `shopify001` | ❌ | — |
+| `asset001` | ❌ | — |
+| `playbook001` | ✅ | — |
+| `provider001` | ❌ | — |
+| `netflix001` | ❌ | — |
+
+
+**Instruction (baseline):**
+```
+Complete ONLY the model named in `target_file`. Do not write SQL for any other model.
+
+Study `project_files` to understand the schema, existing models, and CTE patterns,
+then produce complete, valid DuckDB-dialect SQL for that one target model.
+
+Rules — table references:
+- Use {{ source('schema', 'table') }} for raw source tables.
+- Use {{ ref('model_name') }} for references to other dbt models.
+- Only use macros that are explicitly defined or called in project_files.
+  Never invent macros from dbt packages (no fivetran_utils, dbt_utils, etc.)
+  unless you see them already used in the project files.
+
+Rules — DuckDB dialect:
+- Date/time: use current_timestamp (not get_current_timestamp()), strptime() (not
+  try_strptime()), TRY_CAST(strptime(x, fmt) AS DATE) for safe date parsing.
+- String aggregation: LIST_AGG(col, ', ') or STRING_AGG(col, ', '), not fivetran_utils.string_agg.
+- Regex: regexp_replace(col, pattern, replacement) — no flags argument.
+- Casting: CAST(x AS type) — avoid x::type shorthand.
+
+Rules — output:
+- Output complete, runnable SQL — no pseudocode, no code fences, no explanations.
+- Preserve the CTE style already used in the project.
+- If the instruction describes multiple tables/views, only complete the one
+  file identified by target_file.
+- If multiple attribution or aggregation methods are possible, pick the one that
+  best matches the instruction's intent and any examples in project_files.
+```
+
+### Iteration 1 — MIPROv2
+
+**Score:** 8.3% (1/12) | **Δ** +0.0%  
+**Status:** ❌ discard  
+**Notes:** eval 293s
+
+| Task | Result | Change |
+|------|--------|--------|
+| `xero_new001` | ❌ | — |
+| `flicks001` | ❌ | — |
+| `asana001` | ❌ | — |
+| `chinook001` | ❌ | — |
+| `f1001` | ❌ | — |
+| `analytics_engineering001` | ❌ | — |
+| `workday002` | ❌ | — |
+| `shopify001` | ❌ | — |
+| `asset001` | ❌ | — |
+| `playbook001` | ✅ | — |
+| `provider001` | ❌ | — |
+| `netflix001` | ❌ | — |
+
+**Still failing (11):** `analytics_engineering001`, `asana001`, `asset001`, `chinook001`, `f1001`, `flicks001`, `netflix001`, `provider001`, `shopify001`, `workday002`, `xero_new001`
+
+
+**Updated instruction (MIPROv2 → new):**
+```
+Complete ONLY the model named in `target_file`. Do not write SQL for any other model.
+
+Study `project_files` to understand the schema, existing models, and CTE patterns,
+then produce complete, valid DuckDB-dialect SQL for that one target model.
+
+Rules — table references:
+- Use {{ source('schema', 'table') }} for raw source tables.
+- Use {{ ref('model_name') }} for references to other dbt models.
+- Only use macros that are explicitly defined or called in project_files.
+  Never invent macros from dbt packages (no fivetran_utils, dbt_utils, etc.)
+  unless you see them already used in the project files.
+
+Rules — DuckDB dialect:
+- Date/time: use current_timestamp (not get_current_timestamp()), strptime() (not
+  try_strptime()), TRY_CAST(strptime(x, fmt) AS DATE) for safe date parsing.
+- String aggregation: LIST_AGG(col, ', ') or STRING_AGG(col, ', '), not fivetran_utils.string_agg.
+- Regex: regexp_replace(col, pattern, replacement) — no flags argument.
+- Casting: CAST(x AS type) — avoid x::type shorthand.
+
+Rules — output:
+- Output complete, runnable SQL — no pseudocode, no code fences, no explanations.
+- Preserve the CTE style already used in the project.
+- If the instruction describes multiple tables/views, only complete the one
+  file identified by target_file.
+- If multiple attribution or aggregation methods are possible, pick the one that
+  best matches the instruction's intent and any examples in project_files.
+```
