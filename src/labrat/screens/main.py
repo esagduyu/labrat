@@ -201,7 +201,7 @@ class MainScreen(Screen[None]):
 
                     yield LoadingIndicator(id="sql-loading")
                     yield ResultsTable(id="results-content")
-                    yield RichLog(id="chart-content", highlight=False, wrap=False)
+                    yield RichLog(id="chart-content", highlight=False, wrap=False, markup=True)
             yield _PaneDivider("schema-pane", sign=-1, min_pane_width=15)
             with Vertical(id="schema-pane"):
                 yield _PaneHeader("schema")
@@ -370,6 +370,8 @@ class MainScreen(Screen[None]):
         chart_log = self.query_one("#chart-content", RichLog)
         loading.display = True
         table.display = False
+        chart_log.display = False
+        chart_log.clear()
         try:
             assert self._connection is not None
             t0 = time.monotonic()
@@ -379,7 +381,6 @@ class MainScreen(Screen[None]):
             table.load(df, execution_time=elapsed_ms)
             table.display = True
         except Exception as exc:
-            chart_log.clear()
             chart_log.write(f"[bold red]SQL error:[/bold red] {exc}")
             chart_log.display = True
             table.display = False
