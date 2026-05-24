@@ -38,12 +38,14 @@ class ChatPanel(Widget):
     ChatPanel #history {
         height: 1fr;
         border: solid $surface;
+        overflow-x: hidden;
     }
     ChatPanel #streaming {
         height: auto;
         max-height: 10;
         border: solid $accent;
         display: none;
+        overflow-x: hidden;
     }
     ChatPanel #streaming.visible {
         display: block;

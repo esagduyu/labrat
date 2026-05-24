@@ -80,11 +80,18 @@ class LabRatApp(App[None]):
         )
 
     def _launch_onboarding(self) -> None:
-        from labrat.screens.onboarding import OnboardingScreen
+        from labrat.screens.onboarding import OnboardingScreen, OnboardingResult
 
         def _on_result(result: object) -> None:
-            if result is not None:
+            if isinstance(result, OnboardingResult):
                 self._save_onboarding_result(result)
+                from labrat.profile.manager import ProfileManager, ProfileError
+                try:
+                    profile = ProfileManager().get(result.profile_name)
+                    self._connect_and_launch(profile)
+                    return
+                except ProfileError:
+                    pass
             self._launch_main()
 
         self.push_screen(OnboardingScreen(), _on_result)
