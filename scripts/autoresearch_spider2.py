@@ -350,6 +350,10 @@ def parse_args() -> argparse.Namespace:
         "--agent-max-turns", type=int, default=40,
         help="Max turns for Spider2AgentModule (default: 40)",
     )
+    p.add_argument(
+        "--baseline-only", action="store_true",
+        help="Run baseline eval and print score, then exit (no MIPROv2 optimization)",
+    )
     return p.parse_args()
 
 
@@ -485,6 +489,10 @@ def main() -> None:
 
     best_score = baseline_score
     best_module = module
+
+    if args.baseline_only:
+        print(f"\nBaseline-only mode — done. Score: {baseline_score:.1%}")
+        return
 
     # ── optimisation loop ──────────────────────────────────────────────────────
 

@@ -292,7 +292,10 @@ class Spider2AgentModule:
         self._max_turns = max_turns
         output_base.mkdir(parents=True, exist_ok=True)
 
-    def forward(self, instance_id: str, instruction: str, target_file: str) -> Any:
+    def __call__(self, **kwargs: Any) -> Any:
+        return self.forward(**kwargs)
+
+    def forward(self, instance_id: str, instruction: str, target_file: str, **_: Any) -> Any:
         import asyncio
         import shutil
 
