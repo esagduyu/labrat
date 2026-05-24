@@ -168,8 +168,7 @@ autoresearch_output/
 *.bak
 *.orig
 .cache/
-# ─── Screenshots + evaluation output ────────────────────────────────────────
-screenshots/
+# ─── Eval output ─────────────────────────────────────────────────────────────
 eval_output/
 test_output/
-*.svg
+# screenshots/ is tracked — milestone SVGs live in screenshots/
