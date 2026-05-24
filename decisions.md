@@ -52,31 +52,56 @@
 
 ### Failure analysis: what Sonnet gets wrong on Spider2-DBT (2026-05-23)
 
-Diagnosed by reading generated SQL from `autoresearch_output/examine/failures_iter0.md`:
+Diagnosed by reading generated SQL from `autoresearch_output/examine/failures_iter0.md` (v1 baseline)
+and `autoresearch_output/may23v2/failures_iter0.md` + `failures_iter1.md` (v2 prompt, after MIPROv2 iter 1):
 
-1. **Wrong model completed** (f1001, shopify001, xero_new001): Sonnet generates SQL for a *different*
-   model in the project (e.g., `circuits` when asked to rank drivers). Root cause: without an explicit
-   "only complete `target_file`" instruction, the model pattern-matches to whichever model context it
-   finds most salient in `project_files`.
+**v2 prompt fixed (DuckDB dialect now correct):**
+- workday002: uses `STRING_AGG` correctly, proper join chain — held across iter 1 ✅
+- provider001: `strptime()` + `cast(... as date)` — clean ✅
+- netflix001: `TRY_CAST(strptime(...))`, `regexp_replace` without flags — stable ✅
+- analytics_engineering001: `current_timestamp`, complex multi-join — looks correct ✅
 
-2. **DuckDB dialect errors** (netflix001, asset001, analytics_engineering001):
-   - `try_strptime()` — not a DuckDB function (use `strptime()` + `TRY_CAST`)
-   - `get_current_timestamp()` — not DuckDB (use `current_timestamp`)
-   - `regexp_replace(col, pat, repl, 'g')` — 'g' flag not supported
-   - `x::type` cast shorthand — prefer explicit `CAST(x AS type)`
+**Persistent failures (prompt alone insufficient):**
 
-3. **Unavailable package macros** (workday002, shopify001): uses `{{ fivetran_utils.string_agg() }}`,
-   `{{ shopify.shopify_partition_by_cols() }}` — package macros not installed in the eval project.
-   Fix added to prompt: "only use macros you see defined in `project_files`."
+1. **Wrong model completed — date-spine pattern** (xero_new001, flicks001): Model generates a
+   `dbt_utils.date_spine` helper instead of the target mart. Prompt says "Complete ONLY target_file"
+   but the model ignores it when a date-spine helper is the most salient pattern in project_files.
+   This is a few-shot / context contamination problem — MIPROv2's bootstrapped traces from date-spine
+   tasks poison unrelated tasks.
 
-4. **Near-miss column/join mismatch** (chinook001, flicks001, provider001): SQL structure is right but
-   join keys or selected columns diverge from the gold schema. Harder to fix with prompt alone.
+2. **Wrong model completed — other** (f1001 → `circuits`, shopify001 → customer rollup,
+   chinook001 → `dim_date` calendar, asset001 → executions/positions): Each project's `project_files`
+   context contains a model that pattern-matches to the instruction more strongly than the actual
+   target. The "only complete target_file" instruction is not sufficient to override this.
+
+3. **Unavailable package macros** (shopify001, asana001): `shopify.shopify_partition_by_cols`,
+   `dbt_utils.date_spine`, `dbt.datediff` — these packages not installed in the eval project.
+   Rule added to prompt but model still uses them when it sees them in project_files as templates.
+
+4. **Near-miss** (chinook001, provider001, flicks001): Structure right but column/join details diverge.
+
+### MIPROv2 signal problem (2026-05-23)
+
+MIPROv2 scored 0.0% on all 10 trials in iteration 1 despite k-fold + shuffle fix. Root cause:
+fold 1 = (xero_new001, flicks001, asana001) — none of these tasks pass, so every trial is blind.
+The only reliably-passing task (playbook001) lands in val on fold 4 (iteration 4 onward).
+With 12 tasks and 4 folds of 3, only 1 fold has any positive signal — making 3 out of 4 iterations
+completely uninformative for MIPROv2.
+
+**What's needed to make MIPROv2 work:**
+- More passing tasks in the dev set (expand from 12 to 30–40 tasks, with easier ones included)
+- OR hand-labeled few-shot examples to give MIPROv2 positive signal regardless of fold
+- OR reduce to 2 folds so playbook001 appears every other iteration (more signal, less diversity)
+- The wrong-model failures need a deeper fix: possibly examine what `identify_target_file()` resolves
+  to for each failing task — `target_file` may itself be pointing at a helper model in some projects.
 
 ## Open questions
 
-- Can Haiku with an optimized prompt approach Sonnet's baseline? Haiku scored 0.0% at baseline vs
-  Sonnet's 8.3% — MIPROv2 optimization run not yet completed.
-- How much does the improved prompt (v2) move the baseline? Run `autoresearch/may23v2` to find out.
+- Can Haiku with an optimized prompt approach Sonnet's baseline? Haiku scored 0.0% at baseline —
+  MIPROv2 run not started (waiting for v2 prompt to be validated first).
+- For tasks where the model generates a date-spine helper: is `target_file` pointing at the right
+  model, or is `identify_target_file()` itself resolving to a helper/staging model?
+- Would hand-labeled few-shot examples for 3–4 tasks unlock MIPROv2 signal across all folds?
 
 ## Proposed plan/context updates
 
