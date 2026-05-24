@@ -196,8 +196,9 @@ class MainScreen(Screen[None]):
                     yield QueryEditor(id="editor-content")
                 with Vertical(id="results-pane"):
                     yield _PaneHeader("results", id="results-header")
-                    from labrat.widgets.results_table import ResultsTable
                     from textual.widgets import LoadingIndicator, RichLog
+
+                    from labrat.widgets.results_table import ResultsTable
 
                     yield LoadingIndicator(id="sql-loading")
                     yield ResultsTable(id="results-content")
@@ -224,10 +225,11 @@ class MainScreen(Screen[None]):
         )
 
     def on_mount(self) -> None:
-        from labrat.thread.manager import ThreadManager
-        from labrat.thread.findings import FindingsManager
-        from labrat.widgets.results_table import ResultsTable
         from textual.widgets import LoadingIndicator, RichLog
+
+        from labrat.thread.findings import FindingsManager
+        from labrat.thread.manager import ThreadManager
+        from labrat.widgets.results_table import ResultsTable
 
         # Chart log and loading indicator hidden initially.
         self.query_one("#chart-content", RichLog).display = False
@@ -236,7 +238,9 @@ class MainScreen(Screen[None]):
         # Thread + findings managers (always available, regardless of connection).
         self._thread_manager = ThreadManager()
         self._findings_manager = FindingsManager()
-        threads = [t for t in self._thread_manager.list_threads() if t.profile_name == self._profile]
+        threads = [
+            t for t in self._thread_manager.list_threads() if t.profile_name == self._profile
+        ]
         if threads:
             t = threads[-1]
         else:
@@ -363,8 +367,9 @@ class MainScreen(Screen[None]):
         import asyncio
         import time
 
-        from labrat.widgets.results_table import ResultsTable
         from textual.widgets import LoadingIndicator, RichLog
+
+        from labrat.widgets.results_table import ResultsTable
 
         loading = self.query_one("#sql-loading", LoadingIndicator)
         table = self.query_one("#results-content", ResultsTable)

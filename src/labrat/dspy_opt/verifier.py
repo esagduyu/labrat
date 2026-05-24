@@ -91,7 +91,8 @@ class VerifyResult:
             if vm.got is None:
                 lines.append(
                     f"- VALUE MISSING in {vm.table}: "
-                    f"expected row where {vm.pk_col}={vm.pk_val!r} to have {vm.col}={vm.expected!r}, "
+                    f"expected row where {vm.pk_col}={vm.pk_val!r} "
+                    f"to have {vm.col}={vm.expected!r}, "
                     "but the row was not found."
                 )
             else:
@@ -155,7 +156,7 @@ def _check_table(
 ) -> None:
     # Get current schema
     try:
-        desc = conn.execute(f"DESCRIBE {tname}").fetchall()  # noqa: S608
+        desc = conn.execute(f"DESCRIBE {tname}").fetchall()
     except Exception:
         result.missing_tables.append(MissingTable(table=tname))
         return
@@ -164,7 +165,7 @@ def _check_table(
 
     # Get current row count
     try:
-        row_count_res = conn.execute(f"SELECT COUNT(*) FROM {tname}").fetchone()  # noqa: S608
+        row_count_res = conn.execute(f"SELECT COUNT(*) FROM {tname}").fetchone()
         built_count = int(row_count_res[0]) if row_count_res else 0
     except Exception:
         built_count = 0
@@ -173,7 +174,7 @@ def _check_table(
 
     if snap_table:
         # Column type check: only flag if snap had types and built differs
-        for col, snap_type in zip(snap_table.column_names, snap_table.column_types):
+        for col, snap_type in zip(snap_table.column_names, snap_table.column_types, strict=False):
             col_lower = col.lower()
             built_type = built_cols.get(col_lower)
             if built_type is None:
@@ -208,7 +209,9 @@ def _check_table(
                 pk_val = sample_row[0]
                 if pk_val is None:
                     continue
-                _spot_check_row(conn, tname, pk_col, pk_val, snap_table.column_names, sample_row, result)
+                _spot_check_row(
+                    conn, tname, pk_col, pk_val, snap_table.column_names, sample_row, result
+                )
     else:
         # No snapshot for this table — just verify non-empty
         if built_count == 0:
@@ -233,7 +236,7 @@ def _spot_check_row(
 ) -> None:
     try:
         found = conn.execute(
-            f"SELECT * FROM {tname} WHERE {pk_col} = ? LIMIT 1",  # noqa: S608
+            f"SELECT * FROM {tname} WHERE {pk_col} = ? LIMIT 1",
             [pk_val],
         ).fetchone()
     except Exception:
@@ -253,7 +256,7 @@ def _spot_check_row(
         return
 
     # Compare each column with tolerance for numerics
-    for col, exp_val, got_val in zip(col_names, expected_row, found):
+    for col, exp_val, got_val in zip(col_names, expected_row, found, strict=False):
         if exp_val is None and got_val is None:
             continue
         if exp_val is None or got_val is None:

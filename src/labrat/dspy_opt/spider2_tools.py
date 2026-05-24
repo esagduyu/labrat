@@ -1,4 +1,6 @@
-"""Spider2-DBT agent tools: read_file, write_file_new, edit_file, run_dbt, run_sql, grep_project, submit.
+"""Spider2-DBT agent tools.
+
+Tools: read_file, write_file_new, edit_file, run_dbt, run_sql, grep_project, submit.
 
 Each tool follows the same interface as labrat.agent.tools.base.Tool but uses
 Spider2Context instead of ToolContext.  They are registered in Spider2ToolRegistry
@@ -8,7 +10,6 @@ and dispatched by Spider2AgentLoop.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import subprocess
 import sys
@@ -251,7 +252,11 @@ class RunDbtTool(Spider2Tool):
             return "Skipped (no files changed since last successful run). returncode=0."
 
         dbt = _find_dbt()
-        cmd = [dbt, "run", "--project-dir", str(ctx.project_dir), "--profiles-dir", str(ctx.project_dir)]
+        cmd = [
+            dbt, "run",
+            "--project-dir", str(ctx.project_dir),
+            "--profiles-dir", str(ctx.project_dir),
+        ]
         if args.select:
             cmd += ["--select", args.select]
 
@@ -347,7 +352,7 @@ def _exec_sql(db_path: str, sql: str, limit: int) -> str:
         columns = [d[0] for d in rel.description]
         types = [d[1] for d in rel.description]
         rows = rel.fetchmany(limit)
-        header = " | ".join(f"{c} ({t})" for c, t in zip(columns, types))
+        header = " | ".join(f"{c} ({t})" for c, t in zip(columns, types, strict=False))
         divider = "-" * len(header)
         lines = [header, divider]
         for row in rows:

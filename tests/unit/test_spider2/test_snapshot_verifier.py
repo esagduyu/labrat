@@ -19,7 +19,6 @@ from labrat.dspy_opt.verifier import (
     verify_build,
 )
 
-
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -31,7 +30,8 @@ def duck_db(tmp_path: Path) -> Path:
         "CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, status VARCHAR, amount DOUBLE)"
     )
     conn.execute(
-        "INSERT INTO orders VALUES (1, 10, 'shipped', 99.5), (2, 11, 'pending', 50.0), (3, 10, 'delivered', 200.0)"
+        "INSERT INTO orders VALUES "
+        "(1, 10, 'shipped', 99.5), (2, 11, 'pending', 50.0), (3, 10, 'delivered', 200.0)"
     )
     conn.close()
     return db_path

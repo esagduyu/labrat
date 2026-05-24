@@ -26,7 +26,6 @@ SCREENSHOTS = ROOT / "screenshots"
 SCREENSHOTS.mkdir(exist_ok=True)
 sys.path.insert(0, str(ROOT / "src"))
 
-import polars as pl
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -138,8 +137,8 @@ async def m02_database_layer() -> None:
 # ─── M3: Profile Management ───────────────────────────────────────────────────
 
 async def m03_profiles() -> None:
-    from labrat.profile.model import Profile
     from labrat.profile import storage as prof_storage
+    from labrat.profile.model import Profile
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "profiles.json"
@@ -169,7 +168,7 @@ async def m03_profiles() -> None:
         log.write("")
         log.write("[bold cyan]Profile stored at ~/.local/share/labrat/profiles.json[/bold cyan]")
         log.write(Panel(
-            Syntax(list(loaded.values())[0].model_dump_json(indent=2), "json", theme="monokai"),
+            Syntax(next(iter(loaded.values())).model_dump_json(indent=2), "json", theme="monokai"),
             title="local-duck  (secrets stored in OS keyring — never in JSON)",
             border_style="cyan",
         ))
@@ -369,14 +368,14 @@ async def m10_results_table() -> None:
 
 async def m11_tool_registry() -> None:
     from labrat.agent.tools.base import ToolRegistry
-    from labrat.agent.tools.list_tables import ListTablesTool
-    from labrat.agent.tools.describe_table import DescribeTableTool
-    from labrat.agent.tools.run_sql import RunSqlTool
-    from labrat.agent.tools.draft_sql import DraftSqlTool
-    from labrat.agent.tools.create_chart import CreateChartTool
-    from labrat.agent.tools.sample_rows import SampleRowsTool
     from labrat.agent.tools.column_stats import ColumnStatsTool
+    from labrat.agent.tools.create_chart import CreateChartTool
+    from labrat.agent.tools.describe_table import DescribeTableTool
+    from labrat.agent.tools.draft_sql import DraftSqlTool
     from labrat.agent.tools.explain_sql import ExplainSqlTool
+    from labrat.agent.tools.list_tables import ListTablesTool
+    from labrat.agent.tools.run_sql import RunSqlTool
+    from labrat.agent.tools.sample_rows import SampleRowsTool
     from labrat.agent.tools.search_columns import SearchColumnsTool
 
     registry = ToolRegistry()
@@ -411,9 +410,9 @@ async def m11_tool_registry() -> None:
 
 async def m12_schema_tools() -> None:
     from labrat.agent.tools.base import ToolContext, ToolRegistry
-    from labrat.agent.tools.list_tables import ListTablesTool
-    from labrat.agent.tools.describe_table import DescribeTableTool
     from labrat.agent.tools.column_stats import ColumnStatsTool
+    from labrat.agent.tools.describe_table import DescribeTableTool
+    from labrat.agent.tools.list_tables import ListTablesTool
 
     conn = _conn()
     catalog = conn.introspect_catalog()
@@ -456,8 +455,8 @@ async def m12_schema_tools() -> None:
 
 async def m13_safety() -> None:
     from labrat.agent.tools.base import ToolContext, ToolRegistry
-    from labrat.agent.tools.run_sql import RunSqlTool
     from labrat.agent.tools.explain_sql import ExplainSqlTool
+    from labrat.agent.tools.run_sql import RunSqlTool
 
     conn = _conn()
     catalog = conn.introspect_catalog()
@@ -615,8 +614,8 @@ async def m16_chat_panel() -> None:
     from labrat.agent.loop import AgentLoop, TextBlock, ToolUseBlock
     from labrat.agent.providers.base import ModelProvider
     from labrat.agent.tools.base import ToolContext, ToolRegistry
-    from labrat.agent.tools.run_sql import RunSqlTool
     from labrat.agent.tools.draft_sql import DraftSqlTool
+    from labrat.agent.tools.run_sql import RunSqlTool
     from labrat.screens.main import MainScreen
     from labrat.widgets.chat_panel import ChatPanel
     from labrat.widgets.query_editor import QueryEditor
@@ -746,8 +745,8 @@ async def m18_findings() -> None:
 # ─── M19: Audit Log ───────────────────────────────────────────────────────────
 
 async def m19_audit_log() -> None:
+    from labrat.audit.events import AgentMessage, SqlExecuted, ToolCall
     from labrat.audit.log import AuditLog
-    from labrat.audit.events import SqlExecuted, AgentMessage, ToolCall
 
     with tempfile.TemporaryDirectory() as tmp:
         alog = AuditLog(sessions_dir=Path(tmp), session_id="sess-001")
@@ -831,9 +830,10 @@ async def m20_export() -> None:
 # ─── M21: Chart Spec + Unicode Rendering ──────────────────────────────────────
 
 async def m21_chart_spec() -> None:
-    from labrat.chart.spec import ChartSpec, ChartType
-    from labrat.chart.render_unicode import render_unicode
     from textual.widgets import RichLog as TRichLog
+
+    from labrat.chart.render_unicode import render_unicode
+    from labrat.chart.spec import ChartSpec, ChartType
 
     conn = _conn()
     df = conn.execute(
@@ -866,8 +866,8 @@ async def m21_chart_spec() -> None:
 # ─── M22: Image Protocol Chart Rendering ──────────────────────────────────────
 
 async def m22_chart_image() -> None:
-    from labrat.chart.spec import ChartSpec, ChartType
     from labrat.chart.render_unicode import render_unicode
+    from labrat.chart.spec import ChartSpec, ChartType
 
     conn = _conn()
     df = conn.execute(
@@ -936,8 +936,6 @@ async def m23_postgres() -> None:
 # ─── M24: Multi-Connection ────────────────────────────────────────────────────
 
 async def m24_multi_connection() -> None:
-    from labrat.profile.manager import ProfileManager
-    from labrat.profile.model import Profile
 
     def populate(log: RichLog) -> None:
         log.write("[bold cyan]ProfileManager — multi-profile CRUD + active-connection tracking[/bold cyan]")
@@ -994,8 +992,8 @@ async def m25_warehouse_adapters() -> None:
 # ─── M26: Eval Framework ──────────────────────────────────────────────────────
 
 async def m26_eval_framework() -> None:
-    from labrat.eval.runner import EvalRunner
     from labrat.eval.models import EvalCase, EvalStatus
+    from labrat.eval.runner import EvalRunner
 
     class _Suite:
         suite_name = "labrat-fixture"
@@ -1037,10 +1035,10 @@ async def m26_eval_framework() -> None:
 
 async def m27_comparison() -> None:
     from labrat.eval.baselines.comparison import ComparisonReport
-    from labrat.eval.models import EvalCase, EvalStatus, EvalResult
+    from labrat.eval.models import EvalCase, EvalResult, EvalStatus
     from labrat.eval.report import EvalReport
 
-    cases = [EvalCase(id=f"q{i}", question=f"Q{i}") for i in range(1, 6)]
+    [EvalCase(id=f"q{i}", question=f"Q{i}") for i in range(1, 6)]
     labrat_results = [
         EvalResult(case_id="q1", status=EvalStatus.correct),
         EvalResult(case_id="q2", status=EvalStatus.correct),
@@ -1061,7 +1059,7 @@ async def m27_comparison() -> None:
         labrat=labrat_report,
         baselines=[("zero-shot-sonnet", baseline_report)],
     )
-    md = comparison.to_markdown()
+    comparison.to_markdown()
 
     def populate(log: RichLog) -> None:
         log.write("[bold cyan]ComparisonReport.to_markdown() — LabRat vs baselines[/bold cyan]")
@@ -1071,7 +1069,7 @@ async def m27_comparison() -> None:
         t.add_column("zero-shot-sonnet")
         t.add_column("labrat-agent")
         t.add_column("Δ")
-        for b, c in zip(baseline_results, labrat_results):
+        for b, c in zip(baseline_results, labrat_results, strict=False):
             bm = "[green]✓[/green]" if b.status == EvalStatus.correct else "[red]✗[/red]"
             cm = "[green]✓[/green]" if c.status == EvalStatus.correct else "[red]✗[/red]"
             delta = ("[green]+1[/green]" if c.status == EvalStatus.correct and b.status != EvalStatus.correct
@@ -1090,8 +1088,8 @@ async def m27_comparison() -> None:
 # ─── M28: Query History ───────────────────────────────────────────────────────
 
 async def m28_query_history() -> None:
-    from labrat.history.log import QueryHistoryLog
     from labrat.history.events import QueryEvent
+    from labrat.history.log import QueryHistoryLog
 
     with tempfile.TemporaryDirectory() as tmp:
         log = QueryHistoryLog(history_dir=Path(tmp))
@@ -1209,8 +1207,8 @@ async def m30_external_catalog() -> None:
 # ─── M31: Self-Healing Memory ─────────────────────────────────────────────────
 
 async def m31_memory() -> None:
+    from labrat.memory.model import Memory, MemoryKind, MemoryScope
     from labrat.memory.store import MemoryStore
-    from labrat.memory.model import Memory, MemoryScope, MemoryKind
 
     with tempfile.TemporaryDirectory() as tmp:
         store = MemoryStore(memory_dir=Path(tmp))
@@ -1278,10 +1276,6 @@ async def m32_validations() -> None:
         return "pass"
 
     checker = ValidationChecker(llm_fn=mock_llm)
-
-    def populate(log: RichLog) -> None:
-        log.write("[bold cyan]ValidationChecker.check(sql, result_summary, rules)[/bold cyan]")
-        log.write("")
 
     results_by_sql: list[Any] = []
     for sql, summary in sql_cases:

@@ -27,7 +27,7 @@ class Spider2Context:
     last_dbt_returncode: int | None = None
 
     # Phase 3: snapshot + verifier
-    snapshot: "ReferenceSnapshot | None" = None
+    snapshot: ReferenceSnapshot | None = None
     eval_tables: list[str] = field(default_factory=list)
 
 

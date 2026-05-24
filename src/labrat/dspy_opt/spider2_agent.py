@@ -10,7 +10,6 @@ multi-turn loop via ClaudeCodeProvider, and returns a Spider2AgentResult.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,7 +107,7 @@ class Spider2Agent:
         provider: ClaudeCodeProvider | None = None,
         max_turns: int = _MAX_TURNS,
     ) -> None:
-        self._provider = provider or ClaudeCodeProvider()
+        self._provider = provider or ClaudeCodeProvider(timeout=300)
         self._max_turns = max_turns
         self._registry = registry or default_registry()
 
@@ -127,7 +126,10 @@ class Spider2Agent:
         # Phase 3: capture reference snapshot before the agent touches anything
         if self._ctx.db_path and self._ctx.eval_tables:
             try:
-                from labrat.dspy_opt.snapshot import capture_reference_snapshot, format_snapshot_markdown
+                from labrat.dspy_opt.snapshot import (
+                    capture_reference_snapshot,
+                    format_snapshot_markdown,
+                )
                 self._ctx.snapshot = capture_reference_snapshot(
                     self._ctx.db_path, self._ctx.eval_tables
                 )
@@ -175,7 +177,13 @@ class Spider2Agent:
                     # Validation error — inject as system note
                     tool_uses = []  # don't process tool calls until plan is valid
                     messages.append({"role": "assistant", "content": full_text})
-                    messages.append({"role": "user", "content": f"Plan validation error: {plan_result}. Revise your plan before continuing."})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Plan validation error: {plan_result}. "
+                            "Revise your plan before continuing."
+                        ),
+                    })
                     continue
                 self._plan = plan_result
 
@@ -184,7 +192,9 @@ class Spider2Agent:
             if full_text:
                 content.append({"type": "text", "text": full_text})
             for tu in tool_uses:
-                content.append({"type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input})
+                content.append({
+                    "type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input,
+                })
             if content:
                 messages.append({"role": "assistant", "content": content})
 
@@ -304,10 +314,14 @@ class Spider2AgentModule:
         import yaml
 
         try:
-            return self._run_task(instance_id, instruction, target_file, asyncio, shutil, yaml, dspy)
+            return self._run_task(
+                instance_id, instruction, target_file, asyncio, shutil, yaml, dspy
+            )
         except Exception:
             _tb.print_exc()
-            return dspy.Prediction(db_path=None, submitted=False, turns_used=0, submit_description="")
+            return dspy.Prediction(
+                db_path=None, submitted=False, turns_used=0, submit_description=""
+            )
 
     def _run_task(
         self,
@@ -344,7 +358,9 @@ class Spider2AgentModule:
         eval_tables: list[str] = []
         gold_entry = self._gold_eval.get(instance_id)
         if gold_entry:
-            eval_tables = gold_entry.get("evaluation", {}).get("parameters", {}).get("condition_tabs", [])
+            eval_tables = (
+                gold_entry.get("evaluation", {}).get("parameters", {}).get("condition_tabs", [])
+            )
 
         agent = Spider2Agent(
             project_dir=work_dir,

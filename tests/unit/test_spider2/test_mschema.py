@@ -38,7 +38,9 @@ def test_serialize_column_line() -> None:
         "orders": CatalogEntry(
             name="orders",
             columns={
-                "status": ColumnEntry(name="status", data_type="VARCHAR", description="Order status")
+                "status": ColumnEntry(
+                    name="status", data_type="VARCHAR", description="Order status"
+                )
             },
         )
     }

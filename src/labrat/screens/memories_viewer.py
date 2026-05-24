@@ -71,7 +71,8 @@ class MemoriesViewerScreen(ModalScreen[None]):
             )
         count = len(memories)
         self.query_one("#status", Label).update(
-            f'{count} {"memory" if count == 1 else "memories"} stored for profile "{self._profile}".'
+            f'{count} {"memory" if count == 1 else "memories"} '
+            f'stored for profile "{self._profile}".'
         )
 
     def _selected_memory_id(self) -> str | None:

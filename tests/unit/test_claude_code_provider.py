@@ -167,12 +167,13 @@ async def test_claude_code_provider_text_response() -> None:
     """Provider yields TextBlock when claude outputs plain text."""
     fake_json = json.dumps({"type": "result", "subtype": "success", "result": "Hello!"})
 
-    mock_proc = MagicMock()
-    mock_proc.returncode = 0
-    mock_proc.communicate = AsyncMock(return_value=(fake_json.encode(), b""))
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = fake_json.encode()
+    mock_result.stderr = b""
 
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("subprocess.run", return_value=mock_result):
             provider = ClaudeCodeProvider()
             stream = await provider.stream(
                 messages=[{"role": "user", "content": "hi"}],
@@ -191,12 +192,13 @@ async def test_claude_code_provider_tool_use_response() -> None:
     tool_json = json.dumps({"type": "tool_use", "name": "list_tables", "input": {}})
     fake_json = json.dumps({"type": "result", "subtype": "success", "result": tool_json})
 
-    mock_proc = MagicMock()
-    mock_proc.returncode = 0
-    mock_proc.communicate = AsyncMock(return_value=(fake_json.encode(), b""))
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = fake_json.encode()
+    mock_result.stderr = b""
 
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("subprocess.run", return_value=mock_result):
             provider = ClaudeCodeProvider()
             stream = await provider.stream(
                 messages=[{"role": "user", "content": "what tables?"}],
@@ -211,12 +213,13 @@ async def test_claude_code_provider_tool_use_response() -> None:
 
 
 async def test_claude_code_provider_nonzero_exit_raises() -> None:
-    mock_proc = MagicMock()
-    mock_proc.returncode = 1
-    mock_proc.communicate = AsyncMock(return_value=(b"", b"auth error"))
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = b""
+    mock_result.stderr = b"auth error"
 
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("subprocess.run", return_value=mock_result):
             provider = ClaudeCodeProvider()
             with pytest.raises(RuntimeError, match=r"claude CLI error"):
                 await provider.stream(

@@ -162,6 +162,8 @@ class DbtLoader(CatalogAdapter):
                 if col_name in entry.columns:
                     existing = entry.columns[col_name]
                     if not existing.data_type:
-                        entry.columns[col_name] = existing.model_copy(update={"data_type": cat_type})
+                        entry.columns[col_name] = existing.model_copy(
+                            update={"data_type": cat_type}
+                        )
                 else:
                     entry.columns[col_name] = ColumnEntry(name=col_name, data_type=cat_type)

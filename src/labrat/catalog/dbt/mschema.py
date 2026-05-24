@@ -29,7 +29,7 @@ _MAX_MODELS = 50  # guard against context overflow for huge projects
 
 
 def serialize_m_schema(
-    entries: dict[str, "CatalogEntry"],
+    entries: dict[str, CatalogEntry],
     db_id: str = "project",
     selected: list[str] | None = None,
     sample_values: dict[str, dict[str, list[Any]]] | None = None,
@@ -74,7 +74,7 @@ def serialize_m_schema(
                 tags.append("PK")
             fk_target = fk_cols.get(col_name)
             if fk_target:
-                tags.append(f"FK")
+                tags.append("FK")
                 fk_lines.append(f"{model_name}.{col_name} → {fk_target}")
 
             samples = model_samples.get(col_name, [])
@@ -100,7 +100,7 @@ def serialize_m_schema(
 
 
 def collect_sample_values(
-    entries: dict[str, "CatalogEntry"],
+    entries: dict[str, CatalogEntry],
     connection: Any,
     varchar_only: bool = True,
     max_per_col: int = _MAX_SAMPLE_VALUES,
@@ -127,7 +127,7 @@ def collect_sample_values(
                 continue
             try:
                 df = connection.execute(
-                    f"SELECT DISTINCT {col_name} FROM {model_name} LIMIT {max_per_col}"  # noqa: S608
+                    f"SELECT DISTINCT {col_name} FROM {model_name} LIMIT {max_per_col}"
                 )
                 col_samples[col_name] = [row[0] for row in df.iter_rows()]
             except Exception:
@@ -140,7 +140,7 @@ def collect_sample_values(
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _infer_pk_cols(model_name: str, entry: "CatalogEntry") -> set[str]:
+def _infer_pk_cols(model_name: str, entry: CatalogEntry) -> set[str]:
     """Heuristic: columns whose name equals '<model_stem>_id' are likely PKs."""
     stem = model_name.removeprefix("stg_").removeprefix("fct_").removeprefix("dim_")
     candidates = {f"{stem}_id", "id"}
@@ -149,8 +149,8 @@ def _infer_pk_cols(model_name: str, entry: "CatalogEntry") -> set[str]:
 
 def _infer_fk_cols(
     model_name: str,
-    entry: "CatalogEntry",
-    all_entries: dict[str, "CatalogEntry"],
+    entry: CatalogEntry,
+    all_entries: dict[str, CatalogEntry],
 ) -> dict[str, str]:
     """Heuristic FK inference: col named '<other_model>_id' where other_model exists."""
     fks: dict[str, str] = {}

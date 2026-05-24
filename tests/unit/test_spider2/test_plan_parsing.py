@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from labrat.dspy_opt.spider2_agent import Plan, _parse_plan
 
-
 _VALID_PLAN_TEXT = """\
 Let me think through this.
 

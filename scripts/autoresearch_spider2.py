@@ -45,7 +45,6 @@ import json
 import os
 import subprocess
 import sys
-import textwrap
 import time
 from pathlib import Path
 
@@ -171,7 +170,7 @@ def append_finding(
         delta_str = f" | **Δ** {delta:+.1%}"
 
     if iteration == 0:
-        heading = f"### Iteration 0 — Baseline"
+        heading = "### Iteration 0 — Baseline"
     else:
         heading = f"### Iteration {iteration} — MIPROv2"
 
@@ -266,7 +265,7 @@ def load_dev_set(n: int, gold_eval: dict) -> list:
                 if cfg.get("type") == "duckdb":
                     # Source DuckDB should be in the project dir already
                     # (setup.py copies it there); if it's not, skip
-                    db_path = project_dir / cfg["path"]
+                    project_dir / cfg["path"]
                     # The source DB is the existing one before dbt run;
                     # dbt will overwrite/create it — we just need the seed data files
                     source_db_exists = True  # assume setup.py ran correctly
@@ -396,8 +395,9 @@ def main() -> None:
             print(f"Created branch {branch}")
 
     # DSPy LM — prefer claude CLI (Max subscription), fall back to API key
-    from labrat.dspy_opt.claude_code_lm import ClaudeCodeLM, _SUPPORTED_MODELS
     import shutil as _shutil
+
+    from labrat.dspy_opt.claude_code_lm import _SUPPORTED_MODELS, ClaudeCodeLM
     if _shutil.which("claude"):
         lm = ClaudeCodeLM(model=args.model, timeout=180, max_tokens=4096)
         resolved = _SUPPORTED_MODELS.get(args.model or "", args.model) or "claude-sonnet-4-6"
@@ -437,8 +437,8 @@ def main() -> None:
     executor = DBTExecutor(SPIDER2_DBT_DIR, AUTORESEARCH_OUTPUT / run_tag)
 
     if args.use_agent:
-        from labrat.dspy_opt.spider2_agent import Spider2AgentModule
         from labrat.dspy_opt.metric import make_agent_metric
+        from labrat.dspy_opt.spider2_agent import Spider2AgentModule
         module = Spider2AgentModule(
             spider2_dbt_dir=SPIDER2_DBT_DIR,
             output_base=AUTORESEARCH_OUTPUT / run_tag,
@@ -540,7 +540,7 @@ def main() -> None:
 
         new_instruction = _extract_instruction(optimized)
 
-        print(f"  Evaluating optimised module…")
+        print("  Evaluating optimised module…")
         t0 = time.monotonic()
         new_eval = evaluator(optimized)
         new_score: float = new_eval.score / 100.0

@@ -76,8 +76,10 @@ def capture_reference_snapshot(
     return snapshot
 
 
-def _snapshot_table(conn: duckdb.DuckDBPyConnection, table_name: str, sample_size: int) -> TableSnapshot | None:
-    desc = conn.execute(f"DESCRIBE {table_name}").fetchall()  # noqa: S608
+def _snapshot_table(
+    conn: duckdb.DuckDBPyConnection, table_name: str, sample_size: int
+) -> TableSnapshot | None:
+    desc = conn.execute(f"DESCRIBE {table_name}").fetchall()
     if not desc:
         return None
 
@@ -85,13 +87,13 @@ def _snapshot_table(conn: duckdb.DuckDBPyConnection, table_name: str, sample_siz
     col_types = [row[1] for row in desc]
 
     try:
-        row_count_res = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()  # noqa: S608
+        row_count_res = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
         row_count = int(row_count_res[0]) if row_count_res else None
     except Exception:
         row_count = None
 
     try:
-        sample_rel = conn.execute(f"SELECT * FROM {table_name} LIMIT {sample_size}")  # noqa: S608
+        sample_rel = conn.execute(f"SELECT * FROM {table_name} LIMIT {sample_size}")
         sample_rows = [tuple(r) for r in sample_rel.fetchall()]
     except Exception:
         sample_rows = []
@@ -116,7 +118,9 @@ def format_snapshot_markdown(snapshot: ReferenceSnapshot) -> str:
         lines.append(f"### {tname} (pre-existing: {pre})")
         if snap.row_count is not None:
             lines.append(f"Row count: {snap.row_count:,}")
-        col_desc = ", ".join(f"{c} {t}" for c, t in zip(snap.column_names, snap.column_types))
+        col_desc = ", ".join(
+            f"{c} {t}" for c, t in zip(snap.column_names, snap.column_types, strict=False)
+        )
         lines.append(f"Columns: {col_desc}")
         if snap.sample_rows:
             header = " | ".join(snap.column_names)
