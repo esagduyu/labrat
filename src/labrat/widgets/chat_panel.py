@@ -92,8 +92,8 @@ class ChatPanel(Widget):
     # ── layout ────────────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
-        yield RichLog(id="history", highlight=False, markup=True, wrap=True)
-        yield RichLog(id="streaming", highlight=False, markup=True, wrap=True)
+        yield RichLog(id="history", highlight=False, markup=True, wrap=True, min_width=1)
+        yield RichLog(id="streaming", highlight=False, markup=True, wrap=True, min_width=1)
         yield Input(id="user-input", placeholder="Ask a question…")
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -134,8 +134,8 @@ class ChatPanel(Widget):
             streaming.write("".join(self._stream_buf))
             self.post_message(ChatPanel.AgentText(text))
 
+        _agent_error: Exception | None = None
         try:
-            # We need to capture tool calls from the history to show them.
             # Monkey-patch: wrap registry dispatch to emit AgentToolCall messages.
             orig_dispatch = self._agent_loop._registry.dispatch
 
@@ -149,6 +149,8 @@ class ChatPanel(Widget):
             self._agent_loop._registry.dispatch = _traced_dispatch
             try:
                 await self._agent_loop.run(message, on_text=on_text)
+            except Exception as e:
+                _agent_error = e
             finally:
                 self._agent_loop._registry.dispatch = orig_dispatch
         finally:
@@ -159,6 +161,11 @@ class ChatPanel(Widget):
                 self._append_history(
                     f"[bold green]Agent:[/bold green] {full_response}",
                     f"Agent: {full_response}",
+                )
+            if _agent_error is not None:
+                self._append_history(
+                    f"[bold red]Error:[/bold red] {_agent_error}",
+                    f"Error: {_agent_error}",
                 )
             self._stream_buf.clear()
             self.is_agent_busy = False

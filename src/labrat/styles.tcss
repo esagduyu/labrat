@@ -24,7 +24,7 @@ Screen {
 }
 
 #center-pane {
-    width: 55%;
+    width: 1fr;
     min-width: 40;
 }
 
@@ -54,10 +54,15 @@ Screen {
     height: 1fr;
 }
 
+#sql-loading {
+    height: 3;
+}
+
 /* ── narrow mode (<80 cols): hide side panes, full-width center ───────────── */
 
 MainScreen.narrow #chat-pane,
-MainScreen.narrow #schema-pane {
+MainScreen.narrow #schema-pane,
+MainScreen.narrow _PaneDivider {
     display: none;
 }
 

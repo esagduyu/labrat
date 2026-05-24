@@ -5,6 +5,7 @@ from typing import ClassVar
 import polars as pl
 from textual.binding import Binding, BindingType
 from textual.coordinate import Coordinate
+from textual.message import Message
 from textual.widgets import DataTable
 
 
@@ -17,11 +18,16 @@ class ResultsTable(DataTable[str]):
     - set_filter(text) to filter rows by substring
     - s key to sort by cursor column, / to open filter
     - Ctrl+C to copy the focused cell to the clipboard
+    - p key to pin the current result set as a Finding
     """
+
+    class PinRequested(Message):
+        """Posted when the user presses p to pin the current result set."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("s", "sort_cursor_column", "Sort"),
         Binding("ctrl+c", "copy_cell", "Copy Cell"),
+        Binding("p", "pin_result", "Pin Finding"),
     ]
 
     def __init__(self, *, id: str | None = None, classes: str | None = None) -> None:
@@ -107,6 +113,10 @@ class ResultsTable(DataTable[str]):
             self.notify(f"Copied: {value}", timeout=2)
         except Exception:
             pass
+
+    def action_pin_result(self) -> None:
+        """Post PinRequested so the parent screen can collect context and save a Finding."""
+        self.post_message(ResultsTable.PinRequested())
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
         """Sort by clicking a column header."""
