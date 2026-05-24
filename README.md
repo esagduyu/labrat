@@ -1,11 +1,11 @@
-# LabRat
+# 🐀 LabRat
 
 > Find the cheese in your maze.
 
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. All 32 milestones (M1–M32) complete. 426 tests passing. End-to-end demo operational against DuckDB. Spider2-DBT catalog introspection verified (9/10 example projects).
+> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. Spider2-DBT multi-turn agent loop running (phases 1–4 complete: tool loop, M-Schema context, output verifier, mandatory planning).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -42,8 +42,8 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
-**Test coverage:** 426 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; Spider2-DBT catalog loader 9/10 compatible.
+**Test coverage:** 500 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
+**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; Spider2-DBT multi-turn agent in active evaluation.
 
 ## Install
 
@@ -163,8 +163,7 @@ uv run python scripts/take_screenshots.py
 
 All 32 planned milestones are complete. Post-v0 priorities:
 
-- **dbt model writing tool**: extend the agent to write SQL files to dbt projects (enables Spider2-DBT scoring)
-- **Live Spider2-DBT eval**: requires API key + dbt model completion capability
+- **Live Spider2-DBT eval**: multi-turn agent loop complete (phases 1–4); active benchmarking in progress
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 
