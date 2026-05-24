@@ -275,6 +275,7 @@ class MainScreen(Screen[None]):
 
         def on_draft(sql: str) -> None:
             editor.load_text(sql)
+            self._last_sql = sql
 
         def on_result(df: pl.DataFrame, elapsed_ms: float) -> None:
             table.load(df, execution_time=elapsed_ms)
