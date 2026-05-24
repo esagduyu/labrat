@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import cast
 
+import polars as pl
 import sqlglot
 from pydantic import BaseModel
 from sqlglot import exp
@@ -104,6 +106,9 @@ class RunSqlTool(Tool[_Input]):
     3. Every execution (success or failure) is written to the query history log.
     """
 
+    def __init__(self, on_result: Callable[[pl.DataFrame, float], None] | None = None) -> None:
+        self._on_result = on_result
+
     @property
     def name(self) -> str:
         return "run_sql"
@@ -176,6 +181,8 @@ class RunSqlTool(Tool[_Input]):
             execution_time_ms=elapsed_ms,
             row_count=len(df),
         )
+        if self._on_result is not None:
+            self._on_result(df, elapsed_ms)
         return _Output(
             ok=True,
             query=args.query,

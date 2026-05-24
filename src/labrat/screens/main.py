@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+import polars as pl
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -74,26 +75,6 @@ class _PaneHeader(Widget):
         return f"─ {self._title} ─"
 
 
-class _PanePlaceholder(Widget):
-    """Focusable placeholder content for a pane."""
-
-    can_focus = True
-
-    DEFAULT_CSS = """
-    _PanePlaceholder {
-        height: 1fr;
-        color: $text-muted;
-        padding: 1;
-    }
-    """
-
-    def __init__(self, text: str, *, id: str | None = None) -> None:
-        super().__init__(id=id)
-        self._text = text
-
-    def render(self) -> str:
-        return self._text
-
 
 class MainScreen(Screen[None]):
     """Three-pane layout: chat | editor + results | schema browser."""
@@ -137,7 +118,9 @@ class MainScreen(Screen[None]):
         with Horizontal(id="main-split"):
             with Vertical(id="chat-pane"):
                 yield _PaneHeader("chat")
-                yield _PanePlaceholder("[ Chat Panel ]", id="chat-content")
+                from labrat.widgets.chat_panel import ChatPanel
+
+                yield ChatPanel(id="chat-content")
             with Vertical(id="center-pane"):
                 with Vertical(id="editor-pane"):
                     yield _PaneHeader("editor")
@@ -146,7 +129,11 @@ class MainScreen(Screen[None]):
                     yield QueryEditor(id="editor-content")
                 with Vertical(id="results-pane"):
                     yield _PaneHeader("results")
-                    yield _PanePlaceholder("[ Results ]", id="results-content")
+                    from labrat.widgets.results_table import ResultsTable
+                    from textual.widgets import RichLog
+
+                    yield ResultsTable(id="results-content")
+                    yield RichLog(id="chart-content", highlight=False, wrap=False)
             with Vertical(id="schema-pane"):
                 yield _PaneHeader("schema")
                 from labrat.widgets.schema_tree import SchemaBrowser
@@ -167,6 +154,80 @@ class MainScreen(Screen[None]):
             id="status-bottom",
         )
 
+    def on_mount(self) -> None:
+        from labrat.widgets.results_table import ResultsTable
+        from textual.widgets import RichLog
+
+        # Chart log hidden until the agent renders one.
+        self.query_one("#chart-content", RichLog).display = False
+
+        if self._connection is None:
+            return
+
+        from rich.text import Text
+
+        from labrat.agent.loop import AgentLoop
+        from labrat.agent.providers.anthropic_direct import AnthropicProvider
+        from labrat.agent.tools.base import ToolContext, ToolRegistry
+        from labrat.agent.tools.column_stats import ColumnStatsTool
+        from labrat.agent.tools.create_chart import CreateChartTool
+        from labrat.agent.tools.describe_table import DescribeTableTool
+        from labrat.agent.tools.draft_sql import DraftSqlTool
+        from labrat.agent.tools.explain_sql import ExplainSqlTool
+        from labrat.agent.tools.list_tables import ListTablesTool
+        from labrat.agent.tools.recall_memories import RecallMemoriesTool
+        from labrat.agent.tools.run_sql import RunSqlTool
+        from labrat.agent.tools.sample_rows import SampleRowsTool
+        from labrat.agent.tools.search_columns import SearchColumnsTool
+        from labrat.agent.tools.search_query_history import SearchQueryHistoryTool
+        from labrat.widgets.chat_panel import ChatPanel
+        from labrat.widgets.query_editor import QueryEditor
+
+        editor = self.query_one("#editor-content", QueryEditor)
+        table = self.query_one("#results-content", ResultsTable)
+        chart_log = self.query_one("#chart-content", RichLog)
+
+        def on_draft(sql: str) -> None:
+            editor.load_text(sql)
+
+        def on_result(df: pl.DataFrame, elapsed_ms: float) -> None:
+            table.load(df, execution_time=elapsed_ms)
+            table.display = True
+            chart_log.display = False
+
+        def on_chart(chart_str: str) -> None:
+            chart_log.clear()
+            chart_log.write(Text.from_ansi(chart_str))
+            chart_log.display = True
+            table.display = False
+
+        ctx = ToolContext(
+            connection=self._connection,
+            catalog=self._catalog,
+            profile_name=self._profile,
+        )
+        registry = ToolRegistry()
+        registry.register(RunSqlTool(on_result=on_result))
+        registry.register(DraftSqlTool(on_draft=on_draft))
+        registry.register(CreateChartTool(on_chart=on_chart))
+        registry.register(ListTablesTool())
+        registry.register(DescribeTableTool())
+        registry.register(SampleRowsTool())
+        registry.register(SearchColumnsTool())
+        registry.register(ColumnStatsTool())
+        registry.register(ExplainSqlTool())
+        registry.register(SearchQueryHistoryTool())
+        registry.register(RecallMemoriesTool())
+
+        provider = AnthropicProvider()
+        loop = AgentLoop(
+            provider=provider,
+            registry=registry,
+            ctx=ctx,
+            dialect=self._dialect,
+        )
+        self.query_one("#chat-content", ChatPanel).set_agent_loop(loop)
+
     def on_resize(self, event: events.Resize) -> None:
         """Enter narrow mode below 80 columns."""
         if event.size.width < 80:
@@ -177,7 +238,9 @@ class MainScreen(Screen[None]):
     # ── actions ──────────────────────────────────────────────────────────────
 
     def action_focus_chat(self) -> None:
-        self.query_one("#chat-content").focus()
+        from labrat.widgets.chat_panel import ChatPanel
+
+        self.query_one("#chat-content", ChatPanel).query_one("#user-input").focus()
 
     def action_focus_editor(self) -> None:
         from labrat.widgets.query_editor import QueryEditor
@@ -185,7 +248,9 @@ class MainScreen(Screen[None]):
         self.query_one("#editor-content", QueryEditor).focus()
 
     def action_focus_results(self) -> None:
-        self.query_one("#results-content").focus()
+        from labrat.widgets.results_table import ResultsTable
+
+        self.query_one("#results-content", ResultsTable).focus()
 
     def action_focus_schema(self) -> None:
         self.query_one("#schema-content").query_one("#schema-tree").focus()

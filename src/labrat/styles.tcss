@@ -44,6 +44,16 @@ Screen {
     border: solid #30363d;
 }
 
+/* ── results pane contents ───────────────────────────────────────────────── */
+
+#results-content {
+    height: 1fr;
+}
+
+#chart-content {
+    height: 1fr;
+}
+
 /* ── narrow mode (<80 cols): hide side panes, full-width center ───────────── */
 
 MainScreen.narrow #chat-pane,
