@@ -129,6 +129,12 @@ def _build_prompt(
 
 async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
     """Pipe prompt to `claude --print --output-format json` and return its output."""
+    import os
+
+    # Strip ANTHROPIC_API_KEY so the CLI uses stored OAuth credentials (Max
+    # subscription) rather than falling back to API-key billing.
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+
     proc = await asyncio.create_subprocess_exec(
         "claude",
         "--print",
@@ -143,6 +149,7 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
 
     try:
@@ -156,8 +163,15 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
 
     if proc.returncode != 0:
         err = stderr.decode(errors="replace").strip()
-        out = stdout.decode(errors="replace").strip()[:600]
-        raise RuntimeError(f"claude CLI exited {proc.returncode}: {err or out}")
+        out = stdout.decode(errors="replace").strip()
+        # Extract human-readable message from JSON if present
+        try:
+            data = json.loads(out)
+            if isinstance(data, dict) and "result" in data:
+                out = str(data["result"])
+        except json.JSONDecodeError:
+            pass
+        raise RuntimeError(f"claude CLI error: {err or out[:300]}")
 
     raw = stdout.decode(errors="replace").strip()
 
