@@ -6,7 +6,6 @@ import pytest
 
 from labrat.eval.baselines.comparison import ComparisonReport
 from labrat.eval.baselines.naive import NaiveShotBaseline
-from labrat.eval.baselines.spider_agent import SpiderAgentBaseline
 from labrat.eval.baselines.vanna import VannaBaseline
 from labrat.eval.models import EvalCase, EvalResult, EvalStatus
 from labrat.eval.report import EvalReport
@@ -62,24 +61,6 @@ async def test_vanna_baseline_returns_report_without_vanna_installed() -> None:
     report = await baseline.run([case])
     assert report.total == 1
     assert report.results[0].status == EvalStatus.skipped
-
-
-# ── SpiderAgentBaseline ───────────────────────────────────────────────────────
-
-
-def test_spider_agent_baseline_has_name() -> None:
-    baseline = SpiderAgentBaseline()
-    assert baseline.name == "spider-agent"
-
-
-@pytest.mark.asyncio
-async def test_spider_agent_baseline_returns_report() -> None:
-    """SpiderAgentBaseline returns a structurally valid report."""
-    baseline = SpiderAgentBaseline()
-    case = EvalCase(id="x", question="foo")
-    report = await baseline.run([case])
-    assert isinstance(report, EvalReport)
-    assert report.total == 1
 
 
 # ── ComparisonReport ──────────────────────────────────────────────────────────

@@ -1,1 +1,1 @@
-"""DSPy-based prompt optimisation for Spider2-DBT."""
+"""DSPy-based prompt optimisation utilities."""
