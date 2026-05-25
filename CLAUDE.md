@@ -73,6 +73,27 @@ cd ~/repos/ade-bench && uv run ade run <task_ids> --db duckdb --project-type dbt
 
 Baseline (2026-05-25, claude-sonnet-4-6): **67% overall** (40/60 tasks) — 93% easy, 73% medium, 53% hard.
 
+## Gotchas
+
+**HTML tour files** — `docs/index.html` and `labrat_tour.html` are 2.2MB and exceed the Read tool's token limit. Use `grep`/`sed` for inspection; spawn a subagent for edits. The two files are always byte-identical — every edit must be applied to both.
+
+**ADE-bench task.yaml** — difficulty field is `difficulty` (not `tier`); variant db field is `db_type` (not `db`). Enumerate tasks with:
+```bash
+cd ~/repos/ade-bench && uv run python -c "
+import yaml; from pathlib import Path
+for d in sorted(Path('tasks').iterdir()):
+    f = d / 'task.yaml'
+    if not f.exists(): continue
+    data = yaml.safe_load(f.read_text())
+    if data.get('difficulty')=='easy' and data.get('status')=='ready' and any(v.get('db_type')=='duckdb' and v.get('project_type')=='dbt' for v in data.get('variants',[])):
+        print(d.name)
+"
+```
+
+**ADE-bench known failures** — `helixops_saas009` persistently fails (dbt run scope too narrow, 3 test models never built — genuine bug). `helixops_saas010` is flaky (passes ~50% of runs).
+
+**decisions.md** is the living design log — add a dated entry for every significant architectural decision made in this repo.
+
 ## Key conventions
 
 - Pyright strict applies to all of `src/labrat/` except `dspy_opt/` and `screens/`.
