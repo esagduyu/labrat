@@ -130,41 +130,40 @@ def _build_prompt(
 async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
     """Pipe prompt to `claude --print --output-format json` and return its output."""
     import os
+    import subprocess
 
     # Strip ANTHROPIC_API_KEY so the CLI uses stored OAuth credentials (Max
     # subscription) rather than falling back to API-key billing.
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
-    proc = await asyncio.create_subprocess_exec(
-        "claude",
-        "--print",
-        "--output-format",
-        "json",
-        "--max-turns",
-        "1",
-        "--model",
-        model,
-        "--tools",
-        "",  # "" = disable all built-in tools; we manage tool dispatch in AgentLoop
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
+    cmd = [
+        "claude", "--print",
+        "--output-format", "json",
+        "--max-turns", "1",
+        "--model", model,
+        "--tools", "",
+    ]
 
+    # Use asyncio.to_thread + subprocess.run instead of create_subprocess_exec.
+    # create_subprocess_exec uses Python's asyncio child-watcher which is a
+    # process-level singleton on macOS/Linux — calling it from multiple event
+    # loops in different threads (e.g. DSPy's ThreadPoolExecutor) causes
+    # "event loop is closed" errors and lost SIGCHLD signals.
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode()),
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            input=prompt.encode(),
+            capture_output=True,
             timeout=timeout,
+            env=env,
         )
-    except TimeoutError:
-        proc.kill()
+    except subprocess.TimeoutExpired:
         raise TimeoutError(f"claude --print timed out after {timeout}s") from None
 
-    if proc.returncode != 0:
-        err = stderr.decode(errors="replace").strip()
-        out = stdout.decode(errors="replace").strip()
-        # Extract human-readable message from JSON if present
+    if result.returncode != 0:
+        err = result.stderr.decode(errors="replace").strip()
+        out = result.stdout.decode(errors="replace").strip()
         try:
             data = json.loads(out)
             if isinstance(data, dict) and "result" in data:
@@ -173,7 +172,7 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
             pass
         raise RuntimeError(f"claude CLI error: {err or out[:300]}")
 
-    raw = stdout.decode(errors="replace").strip()
+    raw = result.stdout.decode(errors="replace").strip()
 
     # claude --output-format json wraps the response: {"type":"result","result":"..."}
     try:

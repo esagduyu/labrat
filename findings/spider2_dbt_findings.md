@@ -114,3 +114,47 @@ Rules — output:
 - If multiple attribution or aggregation methods are possible, pick the one that
   best matches the instruction's intent and any examples in project_files.
 ```
+
+---
+
+## Run `may24-agent` — 2026-05-24 (multi-turn ReAct agent, phases 1–4)
+
+**Agent score:** 8.3% (1/12) — same as single-shot baseline on DSPy metric  
+**dbt success rate:** 3/8 tasks reached a clean `dbt run` (37.5%), up from 1/12 (8.3%)  
+**Status:** baseline agent run, paused pending new benchmark  
+**Notes:** ~94 min wall time, --threads 2, --agent-max-turns 20, timeout 300s
+
+> The gap between dbt success rate (37.5%) and the DSPy metric (8.3%) reflects two issues:
+> (1) some tasks succeeded at dbt but the agent didn't reach `submit` within 20 turns,
+> (2) the Spider2 dataset has quality problems that make several tasks unsolvable regardless
+> of prompt quality. Building a cleaner benchmark is the next step.
+
+| Task | dbt result | DSPy metric | Root cause of failure |
+|------|-----------|-------------|----------------------|
+| `playbook001` | ✅ 1/1 | ✅ pass | — |
+| `shopify001` | ✅ 82/82 | ❌ no submit | Agent hit turn limit before calling submit |
+| `xero_new001` | ✅ 1/1 | ❌ no submit | Agent hit turn limit before calling submit |
+| `asana001` | ❌ 0/2 | ❌ | Fivetran `_tmp` pattern — source tables missing in DuckDB; project-level blocker |
+| `chinook001` | ❌ 0/1 | ❌ | `DATE_TRUNC(...) + 6` — TIMESTAMP + INTEGER unsupported; needs `INTERVAL '6' DAY` |
+| `analytics_engineering001` | ❌ 0/1 | ❌ | Agent used `get_current_timestamp()` + referenced non-existent `fact_inventory` table |
+| `asset001` | ❌ 0/1 | ❌ | Agent referenced `stg_executions` which doesn't exist in DuckDB |
+| `f1001` | — (no dbt run) | ❌ | Agent exhausted turns before writing SQL |
+| `flicks001` | — (not reached) | ❌ | DSPy sampler didn't include in this run |
+| `netflix001` | — (not reached) | ❌ | DSPy sampler didn't include in this run |
+| `provider001` | — (not reached) | ❌ | DSPy sampler didn't include in this run |
+| `workday002` | — (not reached) | ❌ | DSPy sampler didn't include in this run |
+
+**Dataset quality issues identified:**
+- `asana001`: depends on Fivetran `_tmp` ephemeral models that require specific raw source table names not present in the DuckDB seed file — unsolvable at the prompt level
+- Several tasks have source tables named differently than what dbt package macros expect
+- Spider2 examples vary wildly in complexity (shopify: 82 models; playbook: 1 model)
+
+**Key fixes shipped in this run (phases 1–4):**
+- Multi-turn ReAct agent loop with 7 guarded tools replacing single-shot DSPy module
+- M-Schema context injection for richer schema understanding
+- Output verifier comparing built tables against pre-run snapshot
+- Mandatory `---plan ... ---` block before any SQL write
+- `ClaudeCodeProvider` timeout 120s → 300s (was causing 0.0% on all tasks)
+- `asyncio.to_thread(subprocess.run)` replacing `create_subprocess_exec` (macOS child-watcher conflict in multi-threaded DSPy eval)
+
+**System prompt gap:** needs `DATE_TRUNC(...) + N → INTERVAL N DAY` rule added for DuckDB date arithmetic.

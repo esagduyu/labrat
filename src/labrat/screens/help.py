@@ -81,6 +81,8 @@ class HelpScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         header = "[bold]LabRat — Keyboard Shortcuts[/bold]\n"
-        footer = "\n[dim]Press [bold]?[/bold], [bold]F1[/bold], or [bold]Escape[/bold] to close[/dim]"
+        footer = (
+            "\n[dim]Press [bold]?[/bold], [bold]F1[/bold], or [bold]Escape[/bold] to close[/dim]"
+        )
         with Vertical():
             yield Static(header + "\n" + _build_help_text() + footer, markup=True)

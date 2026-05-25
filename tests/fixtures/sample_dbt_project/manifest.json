@@ -16,6 +16,7 @@
       "database": "dev",
       "fqn": ["jaffle_shop", "orders"],
       "original_file_path": "models/orders.sql",
+      "compiled_code": "SELECT order_id, user_id, status, total_amount, shipped_at FROM stg_orders JOIN stg_customers USING (user_id)",
       "columns": {
         "order_id": {
           "name": "order_id",
@@ -39,6 +40,12 @@
           "name": "total_amount",
           "description": "Total order amount in dollars",
           "data_type": "numeric",
+          "meta": {}
+        },
+        "shipped_at": {
+          "name": "shipped_at",
+          "description": "When the order was shipped",
+          "data_type": "",
           "meta": {}
         }
       },

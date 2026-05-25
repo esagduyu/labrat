@@ -21,7 +21,8 @@ class DBTCompletion(dspy.Signature):
     Rules — DuckDB dialect:
     - Date/time: use current_timestamp (not get_current_timestamp()), strptime() (not
       try_strptime()), TRY_CAST(strptime(x, fmt) AS DATE) for safe date parsing.
-    - String aggregation: LIST_AGG(col, ', ') or STRING_AGG(col, ', '), not fivetran_utils.string_agg.
+    - String aggregation: LIST_AGG(col, ', ') or STRING_AGG(col, ', '),
+      not fivetran_utils.string_agg.
     - Regex: regexp_replace(col, pattern, replacement) — no flags argument.
     - Casting: CAST(x AS type) — avoid x::type shorthand.
 

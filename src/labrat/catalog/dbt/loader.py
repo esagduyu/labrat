@@ -98,6 +98,7 @@ class DbtLoader(CatalogAdapter):
                 tags=node.get("tags", []),
                 upstream=upstream,
                 downstream=[],
+                compiled_sql=node.get("compiled_code", ""),
             )
 
         # Build downstream edges from upstream data
@@ -149,3 +150,20 @@ class DbtLoader(CatalogAdapter):
                 val = row_count_stat.get("value")
                 if isinstance(val, (int, float)):
                     entries[name].row_count = int(val)
+
+            # Enrich column types from catalog.json (warehouse-reported types)
+            cat_cols: dict[str, Any] = node_data.get("columns", {})
+            for col_key, col_data in cat_cols.items():
+                col_name = col_key.lower()
+                cat_type: str = col_data.get("type", "")
+                if not cat_type:
+                    continue
+                entry = entries[name]
+                if col_name in entry.columns:
+                    existing = entry.columns[col_name]
+                    if not existing.data_type:
+                        entry.columns[col_name] = existing.model_copy(
+                            update={"data_type": cat_type}
+                        )
+                else:
+                    entry.columns[col_name] = ColumnEntry(name=col_name, data_type=cat_type)
