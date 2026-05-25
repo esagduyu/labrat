@@ -22,7 +22,7 @@ SLIDES = [
         "tag": "Agent in Action",
         "title": "Ask. Get SQL. Get Answers.",
         "subtitle": "Type a question in plain English — the agent writes and runs the SQL for you",
-        "body": "Here the agent answers \"How many orders are in the database? What is the total amount?\" It introspects the schema, writes dialect-correct SQL, executes it, and returns the answer — live, in your terminal.",
+        "body": 'Here the agent answers "How many orders are in the database? What is the total amount?" It introspects the schema, writes dialect-correct SQL, executes it, and returns the answer — live, in your terminal.',
         "features": [
             "Reads your schema before writing any SQL",
             "Streams SQL character-by-character as it thinks",
@@ -396,7 +396,7 @@ def build_slide_html(s: dict, idx: int) -> str:
 def build() -> None:
     slides_html = "\n".join(build_slide_html(s, i) for i, s in enumerate(SLIDES))
     dots_html = "\n".join(
-        f'<button class="dot" aria-label="Slide {i+1}"></button>' for i in range(len(SLIDES))
+        f'<button class="dot" aria-label="Slide {i + 1}"></button>' for i in range(len(SLIDES))
     )
 
     html = f"""<!DOCTYPE html>
@@ -416,11 +416,11 @@ def build() -> None:
   </div>
   <div class="header-nav">
     <button class="nav-btn" onclick="window.open('https://github.com/esagduyu/labrat','_blank')">★ GitHub</button>
-    <button class="nav-btn primary">pip install labrat</button>
+    <button class="nav-btn" style="cursor:default;opacity:.55">coming soon</button>
   </div>
 </header>
 
-<div class="progress-bar" id="progress" style="width:{100/len(SLIDES):.1f}%"></div>
+<div class="progress-bar" id="progress" style="width:{100 / len(SLIDES):.1f}%"></div>
 
 <div class="slideshow" id="slideshow">
 {slides_html}

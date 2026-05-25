@@ -26,8 +26,8 @@ SIZE = (220, 50)  # wide terminal for the 3-pane layout
 
 
 async def main() -> None:
-    from labrat.db.duckdb_engine import DuckDBConnection
     from labrat.db.catalog_cache import load_cached_catalog, save_catalog
+    from labrat.db.duckdb_engine import DuckDBConnection
     from labrat.screens.main import MainScreen
 
     conn = DuckDBConnection(FIXTURE_DB, read_only=True)
