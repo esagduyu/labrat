@@ -101,7 +101,7 @@ class QueryEditor(TextArea):
         top = completions[0].label
         prefix = _word_at_cursor(text, offset)
         if prefix and top.lower().startswith(prefix.lower()):
-            self.suggestion = top[len(prefix):]
+            self.suggestion = top[len(prefix) :]
         else:
             self.suggestion = ""
 

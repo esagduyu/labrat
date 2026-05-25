@@ -157,6 +157,7 @@ def identify_target_file(project_dir: Path, condition_tabs: list[str]) -> str:
     # 4. Last-resort: first file alphabetically
     if sql_files:
         import warnings
+
         warnings.warn(
             f"identify_target_file: no match for {condition_tabs} in {project_dir}; "
             f"falling back to {sql_files[0].name}",

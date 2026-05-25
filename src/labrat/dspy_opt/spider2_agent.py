@@ -130,6 +130,7 @@ class Spider2Agent:
                     capture_reference_snapshot,
                     format_snapshot_markdown,
                 )
+
                 self._ctx.snapshot = capture_reference_snapshot(
                     self._ctx.db_path, self._ctx.eval_tables
                 )
@@ -177,13 +178,15 @@ class Spider2Agent:
                     # Validation error — inject as system note
                     tool_uses = []  # don't process tool calls until plan is valid
                     messages.append({"role": "assistant", "content": full_text})
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"Plan validation error: {plan_result}. "
-                            "Revise your plan before continuing."
-                        ),
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Plan validation error: {plan_result}. "
+                                "Revise your plan before continuing."
+                            ),
+                        }
+                    )
                     continue
                 self._plan = plan_result
 
@@ -192,9 +195,14 @@ class Spider2Agent:
             if full_text:
                 content.append({"type": "text", "text": full_text})
             for tu in tool_uses:
-                content.append({
-                    "type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input,
-                })
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tu.id,
+                        "name": tu.name,
+                        "input": tu.input,
+                    }
+                )
             if content:
                 messages.append({"role": "assistant", "content": content})
 
@@ -205,11 +213,13 @@ class Spider2Agent:
             tool_results: list[dict[str, Any]] = []
             for tu in tool_uses:
                 result_text = await self._registry.dispatch(tu.name, tu.input, self._ctx)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu.id,
-                    "content": result_text,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tu.id,
+                        "content": result_text,
+                    }
+                )
             messages.append({"role": "user", "content": tool_results})
 
             if self._ctx.submitted:

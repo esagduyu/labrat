@@ -86,6 +86,7 @@ class LabRatApp(App[None]):
             if isinstance(result, OnboardingResult):
                 self._save_onboarding_result(result)
                 from labrat.profile.manager import ProfileError, ProfileManager
+
                 try:
                     profile = ProfileManager().get(result.profile_name)
                     self._connect_and_launch(profile)

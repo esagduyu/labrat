@@ -253,9 +253,12 @@ class RunDbtTool(Spider2Tool):
 
         dbt = _find_dbt()
         cmd = [
-            dbt, "run",
-            "--project-dir", str(ctx.project_dir),
-            "--profiles-dir", str(ctx.project_dir),
+            dbt,
+            "run",
+            "--project-dir",
+            str(ctx.project_dir),
+            "--profiles-dir",
+            str(ctx.project_dir),
         ]
         if args.select:
             cmd += ["--select", args.select]
@@ -284,6 +287,7 @@ class RunDbtTool(Spider2Tool):
         if result.returncode == 0 and ctx.eval_tables and ctx.db_path:
             try:
                 from labrat.dspy_opt.verifier import verify_build
+
                 verify_result = verify_build(ctx.db_path, ctx.eval_tables, ctx.snapshot)
                 output += f"\n\n--- Verifier Report ---\n{verify_result.format_report()}"
             except Exception as exc:
@@ -297,6 +301,7 @@ def _find_dbt() -> str:
     if venv_dbt.exists():
         return str(venv_dbt)
     import shutil
+
     found = shutil.which("dbt")
     if found:
         return found
@@ -456,12 +461,14 @@ class SubmitTool(Spider2Tool):
 
 
 def default_registry() -> Spider2ToolRegistry:
-    return Spider2ToolRegistry([
-        ReadFileTool(),
-        WriteFileNewTool(),
-        EditFileTool(),
-        RunDbtTool(),
-        RunSqlTool(),
-        GrepProjectTool(),
-        SubmitTool(),
-    ])
+    return Spider2ToolRegistry(
+        [
+            ReadFileTool(),
+            WriteFileNewTool(),
+            EditFileTool(),
+            RunDbtTool(),
+            RunSqlTool(),
+            GrepProjectTool(),
+            SubmitTool(),
+        ]
+    )

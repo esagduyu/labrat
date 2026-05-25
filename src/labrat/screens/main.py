@@ -85,7 +85,6 @@ class _PaneHeader(Widget):
         return t
 
 
-
 class _PaneDivider(Widget):
     """Draggable 1-column handle between adjacent horizontal panes."""
 

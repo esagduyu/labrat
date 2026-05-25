@@ -36,7 +36,4 @@ def build_pre_existing(project_dir: Path) -> frozenset[str]:
     models_dir = project_dir / "models"
     if not models_dir.exists():
         return frozenset()
-    return frozenset(
-        str(f.relative_to(project_dir))
-        for f in models_dir.rglob("*.sql")
-    )
+    return frozenset(str(f.relative_to(project_dir)) for f in models_dir.rglob("*.sql"))

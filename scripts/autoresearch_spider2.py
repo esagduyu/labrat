@@ -51,9 +51,7 @@ from pathlib import Path
 # ── repo paths ────────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).parent.parent
-SPIDER2_DATA_DIR = Path(
-    os.environ.get("SPIDER2_DATA_DIR", Path.home() / "repos" / "Spider2")
-)
+SPIDER2_DATA_DIR = Path(os.environ.get("SPIDER2_DATA_DIR", Path.home() / "repos" / "Spider2"))
 SPIDER2_DBT_DIR = SPIDER2_DATA_DIR / "spider2-dbt"
 AUTORESEARCH_OUTPUT = REPO_ROOT / "autoresearch_output"
 FINDINGS_DIR = REPO_ROOT / "findings"
@@ -115,10 +113,7 @@ def init_findings(run_tag: str) -> None:
             "> Each `##` block is one run; each `###` block is one DSPy optimisation iteration.\n\n"
         )
     with FINDINGS_PATH.open("a") as f:
-        f.write(
-            f"\n---\n\n"
-            f"## Run `{run_tag}` — {datetime.datetime.now():%Y-%m-%d %H:%M}\n\n"
-        )
+        f.write(f"\n---\n\n## Run `{run_tag}` — {datetime.datetime.now():%Y-%m-%d %H:%M}\n\n")
 
 
 def _extract_instruction(module: object) -> str:
@@ -182,15 +177,11 @@ def append_finding(
     instruction_block = ""
     if new_instruction:
         instruction_block = (
-            f"\n**Updated instruction (MIPROv2 → new):**\n"
-            f"```\n{new_instruction.strip()}\n```\n"
+            f"\n**Updated instruction (MIPROv2 → new):**\n```\n{new_instruction.strip()}\n```\n"
         )
     elif module is not None and iteration == 0:
         instr = _extract_instruction(module)
-        instruction_block = (
-            f"\n**Instruction (baseline):**\n"
-            f"```\n{instr.strip()}\n```\n"
-        )
+        instruction_block = f"\n**Instruction (baseline):**\n```\n{instr.strip()}\n```\n"
 
     # Build new + still-failing summaries when we have task data
     summary_lines: list[str] = []
@@ -198,12 +189,20 @@ def append_finding(
         new_pass = passing - prev_passing
         new_fail = prev_passing - passing
         if new_pass:
-            summary_lines.append(f"**Newly passing:** {', '.join(f'`{t}`' for t in sorted(new_pass))}")
+            summary_lines.append(
+                f"**Newly passing:** {', '.join(f'`{t}`' for t in sorted(new_pass))}"
+            )
         if new_fail:
-            summary_lines.append(f"**Regressions:** {', '.join(f'`{t}`' for t in sorted(new_fail))}")
-        still_fail = {r[0].instance_id for r in getattr(eval_result, 'results', []) if not r[2]} - new_fail
+            summary_lines.append(
+                f"**Regressions:** {', '.join(f'`{t}`' for t in sorted(new_fail))}"
+            )
+        still_fail = {
+            r[0].instance_id for r in getattr(eval_result, "results", []) if not r[2]
+        } - new_fail
         if still_fail:
-            summary_lines.append(f"**Still failing ({len(still_fail)}):** {', '.join(f'`{t}`' for t in sorted(still_fail))}")
+            summary_lines.append(
+                f"**Still failing ({len(still_fail)}):** {', '.join(f'`{t}`' for t in sorted(still_fail))}"
+            )
 
     n_tasks = len(getattr(eval_result, "results", [])) if eval_result is not None else 0
     n_pass = round(score * n_tasks) if n_tasks else round(score * 12)
@@ -254,6 +253,7 @@ def load_dev_set(n: int, gold_eval: dict) -> list:
 
         # Check source DuckDB exists (requires gdown + setup.py to have been run)
         import yaml
+
         profiles_file = project_dir / "profiles.yml"
         if not profiles_file.exists():
             skipped += 1
@@ -330,27 +330,35 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--full-eval", action="store_true", help="Run all 68 tasks after each keep")
     p.add_argument("--threads", type=int, default=4, help="DSPy eval parallelism (default: 4)")
     p.add_argument(
-        "--model", default=None,
+        "--model",
+        default=None,
         help="Model alias: sonnet (default), haiku, opus — or a full model ID",
     )
     p.add_argument(
-        "--folds", type=int, default=4,
+        "--folds",
+        type=int,
+        default=4,
         help="K-fold CV: number of folds to rotate val set across (default: 4)",
     )
     p.add_argument(
-        "--examine-failures", action="store_true",
+        "--examine-failures",
+        action="store_true",
         help="Write generated SQL for failing tasks to autoresearch_output/<tag>/failures_iterN.md",
     )
     p.add_argument(
-        "--use-agent", action="store_true",
+        "--use-agent",
+        action="store_true",
         help="Use Spider2AgentModule (multi-turn ReAct) instead of DSPy single-shot module",
     )
     p.add_argument(
-        "--agent-max-turns", type=int, default=40,
+        "--agent-max-turns",
+        type=int,
+        default=40,
         help="Max turns for Spider2AgentModule (default: 40)",
     )
     p.add_argument(
-        "--baseline-only", action="store_true",
+        "--baseline-only",
+        action="store_true",
         help="Run baseline eval and print score, then exit (no MIPROv2 optimization)",
     )
     return p.parse_args()
@@ -398,6 +406,7 @@ def main() -> None:
     import shutil as _shutil
 
     from labrat.dspy_opt.claude_code_lm import _SUPPORTED_MODELS, ClaudeCodeLM
+
     if _shutil.which("claude"):
         lm = ClaudeCodeLM(model=args.model, timeout=180, max_tokens=4096)
         resolved = _SUPPORTED_MODELS.get(args.model or "", args.model) or "claude-sonnet-4-6"
@@ -429,6 +438,7 @@ def main() -> None:
     # Shuffle once with a fixed seed so fold boundaries are reproducible but not
     # biased by JSONL order (playbook001 was always first → always in training).
     import random as _random
+
     shuffled_dev = list(dev_set)
     _random.Random(42).shuffle(shuffled_dev)
     passing_ids = [e.instance_id for e in shuffled_dev]
@@ -439,6 +449,7 @@ def main() -> None:
     if args.use_agent:
         from labrat.dspy_opt.metric import make_agent_metric
         from labrat.dspy_opt.spider2_agent import Spider2AgentModule
+
         module = Spider2AgentModule(
             spider2_dbt_dir=SPIDER2_DBT_DIR,
             output_base=AUTORESEARCH_OUTPUT / run_tag,
@@ -482,8 +493,13 @@ def main() -> None:
     print(f"  Baseline score: {baseline_score:.1%}  ({elapsed:.0f}s)")
     log_result(git_hash(), baseline_score, len(dev_set), "keep", "baseline")
     prev_passing = append_finding(
-        0, baseline_score, None, "baseline", f"{elapsed:.0f}s eval time",
-        eval_result=baseline_eval, module=module,
+        0,
+        baseline_score,
+        None,
+        "baseline",
+        f"{elapsed:.0f}s eval time",
+        eval_result=baseline_eval,
+        module=module,
     )
     if args.examine_failures:
         examine_failures(0, baseline_eval, run_tag)
@@ -515,7 +531,7 @@ def main() -> None:
 
         print(
             f"\n[Iteration {iteration}] running MIPROv2…  "
-            f"(best so far: {best_score:.1%}, fold {fold_idx+1}/{k}, val={val_ids})"
+            f"(best so far: {best_score:.1%}, fold {fold_idx + 1}/{k}, val={val_ids})"
         )
 
         try:
@@ -535,7 +551,10 @@ def main() -> None:
             print(f"  MIPROv2 failed: {e}")
             append_finding(iteration, best_score, best_score, "⚠️ error", str(e)[:200])
             subprocess.run(["git", "add", str(FINDINGS_PATH)], cwd=REPO_ROOT)
-            subprocess.run(["git", "commit", "--allow-empty", "-m", f"findings: iter {iteration} error"], cwd=REPO_ROOT)
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", f"findings: iter {iteration} error"],
+                cwd=REPO_ROOT,
+            )
             continue
 
         new_instruction = _extract_instruction(optimized)
@@ -555,7 +574,10 @@ def main() -> None:
         if new_score > best_score:
             optimized.save(str(OPTIMIZED_MODULE_PATH))
             prev_passing = append_finding(
-                iteration, new_score, best_score, "✅ keep",
+                iteration,
+                new_score,
+                best_score,
+                "✅ keep",
                 f"eval {elapsed:.0f}s",
                 eval_result=new_eval,
                 prev_passing=prev_passing,
@@ -577,10 +599,15 @@ def main() -> None:
             best_module = optimized
 
             if args.full_eval:
-                _run_full_eval(module=optimized, gold_eval=gold_eval, executor=executor, metric=metric)
+                _run_full_eval(
+                    module=optimized, gold_eval=gold_eval, executor=executor, metric=metric
+                )
         else:
             append_finding(
-                iteration, new_score, best_score, "❌ discard",
+                iteration,
+                new_score,
+                best_score,
+                "❌ discard",
                 f"eval {elapsed:.0f}s",
                 eval_result=new_eval,
                 prev_passing=prev_passing,
@@ -591,8 +618,13 @@ def main() -> None:
         # Always commit findings so the log is tracked even on discard
         subprocess.run(["git", "add", str(FINDINGS_PATH)], cwd=REPO_ROOT)
         subprocess.run(
-            ["git", "commit", "--allow-empty", "-m",
-             f"findings: iter {iteration} {'keep' if new_score > best_score else 'discard'}"],
+            [
+                "git",
+                "commit",
+                "--allow-empty",
+                "-m",
+                f"findings: iter {iteration} {'keep' if new_score > best_score else 'discard'}",
+            ],
             cwd=REPO_ROOT,
         )
 

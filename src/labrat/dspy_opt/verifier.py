@@ -290,6 +290,7 @@ def _spot_check_row(
 
 def _types_compatible(t1: str, t2: str) -> bool:
     """Loose type compatibility: INTEGER/BIGINT/INT are interchangeable, etc."""
+
     def _family(t: str) -> str:
         t = t.upper().split("(")[0].strip()
         if t in ("INTEGER", "INT", "INT4", "BIGINT", "INT8", "SMALLINT", "TINYINT", "HUGEINT"):

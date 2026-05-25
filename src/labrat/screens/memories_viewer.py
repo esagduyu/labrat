@@ -71,7 +71,7 @@ class MemoriesViewerScreen(ModalScreen[None]):
             )
         count = len(memories)
         self.query_one("#status", Label).update(
-            f'{count} {"memory" if count == 1 else "memories"} '
+            f"{count} {'memory' if count == 1 else 'memories'} "
             f'stored for profile "{self._profile}".'
         )
 
@@ -81,9 +81,7 @@ class MemoriesViewerScreen(ModalScreen[None]):
         table = self.query_one("#memories-table", DataTable)
         if table.row_count == 0:
             return None
-        key = table.coordinate_to_cell_key(
-            Coordinate(table.cursor_row, 0)
-        ).row_key
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
         return str(key.value) if key and key.value is not None else None
 
     @on(Button.Pressed, "#delete-btn")

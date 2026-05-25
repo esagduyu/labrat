@@ -137,11 +137,16 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
     cmd = [
-        "claude", "--print",
-        "--output-format", "json",
-        "--max-turns", "1",
-        "--model", model,
-        "--tools", "",
+        "claude",
+        "--print",
+        "--output-format",
+        "json",
+        "--max-turns",
+        "1",
+        "--model",
+        model,
+        "--tools",
+        "",
     ]
 
     # Use asyncio.to_thread + subprocess.run instead of create_subprocess_exec.

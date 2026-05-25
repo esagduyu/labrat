@@ -406,7 +406,9 @@ async def main() -> None:
         print(f"  Agent accuracy: {correct}/{len(agent_results)}")
         for r in agent_results:
             icon = {"correct": "✓", "wrong": "✗", "error": "!"}.get(str(r.get("status")), "?")
-            print(f"    [{icon}] {r['id']}: {r.get('status')} — {r.get('error', r.get('generated_sql', ''))[:80]}")
+            print(
+                f"    [{icon}] {r['id']}: {r.get('status')} — {r.get('error', r.get('generated_sql', ''))[:80]}"
+            )
     else:
         print("\n[4/4] Agent eval: SKIPPED (no ANTHROPIC_API_KEY or claude CLI)")
 

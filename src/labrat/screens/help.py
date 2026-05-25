@@ -11,40 +11,58 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 _SECTIONS = [
-    ("Navigation", [
-        ("Ctrl+1", "Focus chat panel"),
-        ("Ctrl+2", "Focus editor"),
-        ("Ctrl+3", "Focus results table"),
-        ("Ctrl+4", "Focus schema browser"),
-        ("Ctrl+H", "Toggle schema pane"),
-        ("Ctrl+L", "Toggle chat panel"),
-        ("E", "Expand / collapse all schema nodes"),
-    ]),
-    ("Editor", [
-        ("Ctrl+Enter", "Run SQL (or selected text)"),
-        ("Ctrl+/", "Toggle SQL comment"),
-        ("Tab", "Accept autocomplete suggestion"),
-    ]),
-    ("Results table", [
-        ("P", "Pin current result as a Finding"),
-        ("S", "Sort by focused column"),
-        ("Ctrl+C", "Copy focused cell"),
-    ]),
-    ("Session", [
-        ("Ctrl+T", "Thread manager — create / rename / switch"),
-        ("Ctrl+K", "Pinned findings — view / delete / export HTML"),
-        ("Ctrl+R", "Query history — browse and reload past queries"),
-        ("Ctrl+G", "Agent memories — view and delete"),
-    ]),
-    ("Chat", [
-        ("Enter", "Send message"),
-        ("Escape", "Stop agent"),
-        ("Ctrl+\\", "Toggle tool-call traces"),
-    ]),
-    ("App", [
-        ("?  /  F1", "This help screen"),
-        ("Q", "Quit"),
-    ]),
+    (
+        "Navigation",
+        [
+            ("Ctrl+1", "Focus chat panel"),
+            ("Ctrl+2", "Focus editor"),
+            ("Ctrl+3", "Focus results table"),
+            ("Ctrl+4", "Focus schema browser"),
+            ("Ctrl+H", "Toggle schema pane"),
+            ("Ctrl+L", "Toggle chat panel"),
+            ("E", "Expand / collapse all schema nodes"),
+        ],
+    ),
+    (
+        "Editor",
+        [
+            ("Ctrl+Enter", "Run SQL (or selected text)"),
+            ("Ctrl+/", "Toggle SQL comment"),
+            ("Tab", "Accept autocomplete suggestion"),
+        ],
+    ),
+    (
+        "Results table",
+        [
+            ("P", "Pin current result as a Finding"),
+            ("S", "Sort by focused column"),
+            ("Ctrl+C", "Copy focused cell"),
+        ],
+    ),
+    (
+        "Session",
+        [
+            ("Ctrl+T", "Thread manager — create / rename / switch"),
+            ("Ctrl+K", "Pinned findings — view / delete / export HTML"),
+            ("Ctrl+R", "Query history — browse and reload past queries"),
+            ("Ctrl+G", "Agent memories — view and delete"),
+        ],
+    ),
+    (
+        "Chat",
+        [
+            ("Enter", "Send message"),
+            ("Escape", "Stop agent"),
+            ("Ctrl+\\", "Toggle tool-call traces"),
+        ],
+    ),
+    (
+        "App",
+        [
+            ("?  /  F1", "This help screen"),
+            ("Q", "Quit"),
+        ],
+    ),
 ]
 
 

@@ -14,10 +14,7 @@ from labrat.catalog.dbt.mschema import (
 def _make_entry(name: str, cols: dict[str, str]) -> CatalogEntry:
     return CatalogEntry(
         name=name,
-        columns={
-            c: ColumnEntry(name=c, data_type=dt)
-            for c, dt in cols.items()
-        },
+        columns={c: ColumnEntry(name=c, data_type=dt) for c, dt in cols.items()},
     )
 
 

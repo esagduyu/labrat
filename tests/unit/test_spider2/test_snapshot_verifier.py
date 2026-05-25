@@ -179,6 +179,7 @@ def test_verify_result_format_report_passed() -> None:
 
 def test_verify_result_format_report_failures() -> None:
     from labrat.dspy_opt.verifier import MissingTable
+
     r = VerifyResult(missing_tables=[MissingTable(table="my_model")])
     report = r.format_report()
     assert "my_model" in report

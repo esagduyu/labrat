@@ -73,10 +73,14 @@ class ClaudeCodeLM(dspy.BaseLM):
         cmd = [
             self._binary,
             "--print",
-            "--output-format", "json",
-            "--max-turns", "1",
-            "--tools", "",
-            "--model", self._model_id,
+            "--output-format",
+            "json",
+            "--max-turns",
+            "1",
+            "--tools",
+            "",
+            "--model",
+            self._model_id,
         ]
 
         proc = subprocess.run(
@@ -118,8 +122,7 @@ def _build_prompt(
         if isinstance(content, list):
             # Multi-part content (text + images etc.) — join text parts
             content = " ".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
+                part.get("text", "") if isinstance(part, dict) else str(part) for part in content
             )
         parts.append(f"{role}: {content}")
     return "\n".join(parts)

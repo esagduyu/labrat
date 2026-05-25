@@ -85,9 +85,7 @@ class HistoryBrowserScreen(ModalScreen[str | None]):
         table = self.query_one("#history-table", DataTable)
         if table.row_count == 0:
             return None
-        key = table.coordinate_to_cell_key(
-            Coordinate(table.cursor_row, 0)
-        ).row_key
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
         return str(key.value) if key and key.value is not None else None
 
     @on(Button.Pressed, "#load-btn")
