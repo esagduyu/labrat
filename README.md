@@ -43,7 +43,7 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | Audit log | ✅ | JSONL event sourcing |
 
 **Test coverage:** 500 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; Spider2-DBT multi-turn agent in active evaluation.
+**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; Spider2-DBT multi-turn agent 8.3% on current dataset (dataset quality issues identified; new benchmark in progress).
 
 ## Install
 
