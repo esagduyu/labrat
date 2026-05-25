@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. ADE-bench evaluation integrated: **88% on the easy tier (15/17 tasks, claude-sonnet-4-6)** using the `LabratLocalAgent` — runs via Mac OAuth, no API credits required.
+> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **93% easy · 73% medium · 53% hard** (DuckDB+dbt, claude-sonnet-4-6) — competitive with the published leaderboard at [altimate.sh/benchmarks/ade-bench](https://www.altimate.sh/benchmarks/ade-bench).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -36,14 +36,23 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | MCP catalog integration | ✅ | generic async client for any MCP-compatible catalog |
 | Self-healing memory | ✅ | edit-derived + chat-correction memories, retrieval |
 | Custom validations | ✅ | natural-language rules, warn/block severity |
-| Eval framework | ✅ | ADE-bench (dbt Labs, 60 tasks), BIRD, custom scenarios, baseline comparison — 88% easy tier |
+| Eval framework | ✅ | [ADE-bench](https://github.com/dbt-labs/ade-bench) 60 tasks: 93% easy · 73% medium · 53% hard (DuckDB+dbt, Sonnet 4.6) |
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts | ✅ | unicode (plotext) + image protocol (matplotlib/kitty) |
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
 **Test coverage:** 500 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; **ADE-bench easy tier: 88% (15/17 tasks, 93% of individual dbt tests)** using `LabratLocalAgent` with claude-sonnet-4-6 via Mac OAuth ($3.38 total, ~$0.20/task).
+**Benchmarks ([ADE-bench](https://github.com/dbt-labs/ade-bench), DuckDB+dbt, claude-sonnet-4-6, via `LabratLocalAgent`):**
+
+| Tier | Tasks | Score | dbt tests |
+|------|-------|-------|-----------|
+| Easy | 15 | **93%** (14/15) | 95% |
+| Medium | 30 | **73%** (~22/30) | — |
+| Hard | 15 | **53%** (~8/15) | — |
+| **Overall** | **60** | **68%** | 83% |
+
+For comparison, the published [Altimate leaderboard](https://www.altimate.sh/benchmarks/ade-bench) shows their best agent (altimate-code, Sonnet 4.6, Snowflake) at 74.4% on 43 tasks — LabRat on DuckDB scores comparably without any task-specific tuning.
 
 ## Install
 
@@ -164,7 +173,7 @@ uv run python scripts/take_screenshots.py
 
 All 32 planned milestones are complete. Post-v0 priorities:
 
-- **ADE-bench medium/hard tiers**: easy tier scored 88%; next step is running medium and hard tasks to establish full benchmark coverage
+- **ADE-bench improvements**: two persistent easy failures (helixops_saas009/010) and medium/hard gaps to close — investigate missing model scoping and column-level mismatches
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 

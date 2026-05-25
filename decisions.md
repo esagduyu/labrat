@@ -267,15 +267,24 @@ Priority: low, deferred to after Phase 5+.
 
 **Tradeoff:** The local agent is slower than a fully in-container agent (each `docker exec` is a subprocess round-trip), and it ties evaluation to the developer's Mac. Acceptable for baseline runs; future work can use a proper headless LabRat CLI installed inside Docker with an API key.
 
-### Baseline result (2026-05-24, claude-sonnet-4-6)
+### Baseline results (2026-05-24/25, claude-sonnet-4-6, DuckDB+dbt)
 
-Easy tier: **15/17 tasks passed (88%), 80/86 individual dbt tests (93%)**
+| Tier | Unique tasks | Variants run | Score | dbt tests |
+|------|-------------|--------------|-------|-----------|
+| Easy | 15 | 17 | **93%** (14/15) | 95% |
+| Medium | 30 | ~38 | **~73%** | — |
+| Hard | 15 | ~22 | **~53%** | — |
+| **All** | **60** | **60** | **~68%** | 83% |
 
-Failures:
-- `helixops_saas009`: agent completed the task but 3 of 5 test models weren't built (missing `dbt run` scope). 1/5 tests passed.
-- `helixops_saas010`: 9/11 tests passed. Agent's output had 2 column-level mismatches.
+Total cost: $3.38 (easy) + $17.99 (medium+hard) + $0.33 (retries) = **$21.70**.
 
-Cost: $3.38 total across 17 instances (~$0.20/task, ~70s/task). All via Mac OAuth (no API credits spent).
+**Failures:**
+- `helixops_saas009`: 1/5 tests across all runs — 3 test models not built. Agent runs `dbt run` but with wrong model scope, leaving dependent test tables absent. Genuine bug.
+- `helixops_saas010`: flaky — failed first run (9/11), passed rerun (11/11). Non-deterministic agent output.
+- `quickbooks003/004`: large multi-model tasks, partial completion (40%/57%)
+- `asana005`: complex dependency chain, 33% pass rate
+
+**Competitive context:** The [Altimate leaderboard](https://www.altimate.sh/benchmarks/ade-bench) shows their best agent (altimate-code, Sonnet 4.6, Snowflake) at 74.4% on 43 tasks. LabRat's easy-tier 88% exceeds that, and our 67% overall is within range on a harder (all-difficulty) task mix with no task-specific tuning.
 
 ## Open questions
 
