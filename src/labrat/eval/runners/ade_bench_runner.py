@@ -113,9 +113,7 @@ class AdeBenchRunner:
             return EvalReport(suite_name="ade-bench", results=results)
 
         data: dict[str, Any] = json.loads(results_file.read_text())
-        trial_map: dict[str, dict[str, Any]] = {
-            t["task_id"]: t for t in data.get("results", [])
-        }
+        trial_map: dict[str, dict[str, Any]] = {t["task_id"]: t for t in data.get("results", [])}
         results: list[EvalResult] = []
         for case in self._cases:
             trial = trial_map.get(case.id)

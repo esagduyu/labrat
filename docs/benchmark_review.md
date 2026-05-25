@@ -3,6 +3,11 @@
 > Research session: 2026-05-24  
 > Covers: [dbt-labs/ade-bench](https://github.com/dbt-labs/ade-bench) · [AltimateAI/altimate-code](https://github.com/AltimateAI/altimate-code) · LabRat current state
 
+> **Migration complete (2026-05-24):** Spider2-DBT has been removed. ADE-bench is now the
+> primary eval framework. See `src/labrat/eval/suites/ade_bench.py`,
+> `src/labrat/eval/runners/ade_bench_runner.py`, and `scripts/eval_ade_bench.py`.
+> Smoke test (`simple001` sage agent) passes 2/2 dbt tests.
+
 ---
 
 ## 1. ADE-Bench: What It Is
@@ -239,17 +244,18 @@ Missing vs. altimate-code:
 - No agent-writable persistent memory
 - No pre-execution validation pipeline
 
-### 3.3 Spider2-DBT Benchmark (Current)
+### 3.3 Spider2-DBT Benchmark (Removed)
 
-Located in `src/labrat/dspy_opt/`. Uses DSPy for optimization framing. Problems identified:
+Spider2-DBT and all associated dspy_opt code have been removed. Problems that led to removal:
 
-- **Dataset quality**: Spider2's `_tmp` Fivetran patterns and inconsistent source naming are
-  unsolvable at the prompt level — they're test-design bugs, not agent failures
-- **Turn limit hit**: 20-turn cap causes the agent to run dbt successfully but never call `submit`
-- **ClaudeCodeProvider timeout**: was 120s (too short); fixed to 300s
+- **Dataset quality**: Spider2's `_tmp` Fivetran patterns and inconsistent source naming were
+  unsolvable at the prompt level — test-design bugs, not agent failures
+- **Turn limit hit**: 20-turn cap caused the agent to run dbt successfully but never call `submit`
 - **Score**: 8.3% DSPy metric (1/12 tasks); 37.5% dbt success rate (3/8 tasks that ran)
-- **DSPy overhead**: the DSPy framing (LM, metric, evaluate) adds complexity without benefit;
-  the benchmark doesn't use DSPy's optimisation features meaningfully
+- **DSPy overhead**: the DSPy framing added complexity without benefit
+
+Replaced by ADE-bench (see Section 4 below). `src/labrat/dspy_opt/` now contains only the
+package `__init__.py`; all Spider2-specific modules are gone.
 
 ---
 
@@ -428,30 +434,29 @@ output?").
 
 ---
 
-## 6. Recommended Direction
+## 6. Direction (Updated 2026-05-24)
 
-The overall recommendation, in priority order:
+**Completed:**
+- ✅ Spider2-DBT removed from LabRat
+- ✅ ADE-bench suite and runner wired up (`AdeBenchSuite`, `AdeBenchRunner`, `scripts/eval_ade_bench.py`)
+- ✅ Smoke test: `simple001` with sage agent passes 2/2 dbt tests
+- ✅ Docker + databases set up at `~/repos/ade-bench`
 
-1. **Drop Spider2-DBT as the primary benchmark** — the dataset quality is the bottleneck, not
-   the agent. No amount of agent improvement will fix tasks that have bad gold references.
+**Next, in priority order:**
 
-2. **Build the headless `labrat agent` CLI** — this is the prerequisite for any external
-   benchmark integration. ~1 day of work.
+1. **Build the headless `labrat agent` CLI** — a subcommand that takes `--prompt` and runs the
+   agent loop non-interactively, then exits. This is the only thing ADE-bench needs from LabRat
+   to run it as a scored agent (not just the reference sage agent).
 
-3. **Add filesystem + shell tools behind a flag** — `ReadFileTool`, `WriteFileTool`,
-   `RunShellTool`. This unlocks dbt task types. ~0.5 days of work.
+2. **Add filesystem + shell tools behind a flag** — `ReadFileTool`, `WriteFileTool`,
+   `RunShellTool`. These unlock dbt task types where the agent needs to edit `.sql`/`.yml` files
+   and run `dbt run`/`dbt test` commands.
 
-4. **Run ADE-Bench DuckDB tasks against the new CLI** — start with the `easy` tier (10-15
-   tasks). Use as a regression baseline. ADE-Bench handles all the Docker/evaluation
-   infrastructure.
+3. **Run ADE-Bench easy-tier tasks against LabRat CLI** — start with the `easy` tier (~20
+   tasks). Use as a regression baseline. ADE-bench handles all Docker/evaluation infrastructure.
 
-5. **Add structured dbt tools** — `dbt_run`, `dbt_test`, `dbt_compile`, `dbt_manifest` —
-   as the benchmark surfaces failure modes. Implement these incrementally as fixes for specific
-   observed failures.
+4. **Add structured dbt tools** — `dbt_run`, `dbt_test`, `dbt_compile`, `dbt_manifest` —
+   implement incrementally as the benchmark surfaces specific failure modes.
 
-6. **Archive the Spider2-DBT code** — move `src/labrat/dspy_opt/` to `archive/` or a separate
-   branch. It's not actively useful and adds maintenance weight.
-
-This gives a clean feedback loop: external benchmark → identify gaps → improve LabRat tools
-→ re-benchmark → repeat. The benchmark repo stays outside LabRat, LabRat stays a focused agent
-library.
+The feedback loop: run ADE-bench → identify failure modes → improve LabRat tools/prompts →
+re-run → repeat. The benchmark repo stays outside LabRat; LabRat stays a focused agent library.

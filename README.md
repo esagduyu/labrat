@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. Spider2-DBT multi-turn agent loop running (phases 1–4 complete: tool loop, M-Schema context, output verifier, mandatory planning).
+> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. ADE-bench evaluation framework integrated (60 duckdb+dbt tasks from dbt Labs).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -36,14 +36,14 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | MCP catalog integration | ✅ | generic async client for any MCP-compatible catalog |
 | Self-healing memory | ✅ | edit-derived + chat-correction memories, retrieval |
 | Custom validations | ✅ | natural-language rules, warn/block severity |
-| Eval framework | ✅ | Spider2-DBT/Snow/Lite, BIRD, custom scenarios, baseline comparison |
+| Eval framework | ✅ | ADE-bench (dbt Labs, 60 tasks), BIRD, custom scenarios, baseline comparison |
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts | ✅ | unicode (plotext) + image protocol (matplotlib/kitty) |
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
 **Test coverage:** 500 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; Spider2-DBT multi-turn agent 8.3% on current dataset (dataset quality issues identified; new benchmark in progress).
+**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; ADE-bench `simple001` passes 2/2 dbt tests with sage agent ($0.00, sandbox-isolated).
 
 ## Install
 
@@ -129,7 +129,7 @@ LabRat stands on shoulders:
 - **[SQLGlot](https://sqlglot.com/)** by Toby Mao — the dialect handling we could never have built ourselves
 - **[Polars](https://pola.rs/)** — fast Arrow-backed DataFrames
 - **[uv](https://docs.astral.sh/uv/)** by Astral — finally, a Python package manager that doesn't make you sigh
-- **[Spider 2.0](https://spider2-sql.github.io/)** team at XLang AI — the benchmark that defines the bar for enterprise text-to-SQL
+- **[dbt Labs](https://github.com/dbt-labs/ade-bench)** ADE-bench team — the most serious public benchmark for data-engineering agents, Docker-sandboxed, execution-based, no LLM judges
 - **[Meta's Analytics at Meta team](https://medium.com/@AnalyticsAtMeta)** — their writeup of the home-grown analytics agent is the architectural foundation for LabRat's personal context layer
 - **The folks at [SignalPilot](https://signalpilot.ai/) and [Databao](https://databao.app/)** — competitors in adjacent categories. They've validated the space and set a high bar. We watch their work closely.
 
@@ -152,8 +152,8 @@ uv run python scripts/eval_duckdb.py
 # Full agent evaluation (requires API key)
 ANTHROPIC_API_KEY=<key> uv run python scripts/eval_duckdb.py
 
-# Spider2-DBT catalog exploration
-uv run python scripts/eval_spider2.py --limit 10
+# ADE-bench evaluation (requires Docker + ade-bench repo at ~/repos/ade-bench)
+ADE_BENCH_DIR=~/repos/ade-bench uv run python scripts/eval_ade_bench.py --agent sage --tasks simple001
 
 # Generate UI screenshots (no API key needed)
 uv run python scripts/take_screenshots.py
@@ -163,7 +163,7 @@ uv run python scripts/take_screenshots.py
 
 All 32 planned milestones are complete. Post-v0 priorities:
 
-- **Live Spider2-DBT eval**: multi-turn agent loop complete (phases 1–4); active benchmarking in progress
+- **ADE-bench integration**: framework wired up; next step is running LabRat's agent CLI directly as an ADE-bench agent against the full dbt task suite
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 
