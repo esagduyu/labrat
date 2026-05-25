@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Textual Snapshot Test Report</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-iYQeCzEYFbKjA/T2uDLTpkwGzCiq6soy8tYaI1GyVh/UjpbCx/TYkiZhlZB6+fzT" crossorigin="anonymous">
+    <style>
+        #page-header {
+            background: #983DE7;
+            background: linear-gradient(to right, #aa61ea 0%, #ea3bc1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .overlay-container {
+            position: relative;
+        }
+        .diff-wrapper-actual {
+            mix-blend-mode: difference;
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+        a {
+            color: #aa61ea !important;
+            font-weight: bold;
+            text-decoration: none;
+            &:hover {
+                color: #ea3bc1 !important;
+                text-decoration: underline;
+            }
+        }
+
+        .pass-green {
+            color: #22c55e;
+        }
+        .pass-green-bg {
+            background-color: #22c55e;
+        }
+        .pass-green-bg-20 {
+            background-color: rgba(34, 197, 94, 0.2);
+        }
+        .fail-red {
+            color: #ef4444;
+        }
+        .fail-red-bg {
+            background-color: #ef4444;
+        }
+        .fail-red-bg-20 {
+            background-color: rgba(239, 68, 68, 0.2);
+        }
+        .border-purple {
+            border-color: #aa61ea;
+        }
+    </style>
+</head>
+<body class="bg-dark text-white">
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-6 p-4">
+            <h3 id="page-header" class="mb-0">
+                <strong>Textual</strong> Snapshot Tests
+            </h3>
+        </div>
+        <div class="col p-4">
+            <div class="w-100 d-flex gap-1 justify-content-end mb-1 mt-2">
+                <span class="fail-red fail-red-bg-20 px-2 rounded-1">
+                    <strong>1</strong> snapshots changed
+                </span>
+                <span class="pass-green pass-green-bg-20 px-2 rounded-1">
+                    <strong>7</strong> snapshots matched
+                </span>
+            </div>
+        </div>
+    </div>
+
+    
+        <div class="row mb-4">
+            <div class="col">
+                <div class="card text-white bg-dark border-secondary rounded-1">
+                    <div class="card-header d-flex justify-content-between">
+                        <span class="font-monospace mt-1">
+                            <span class="fw-bold">test_schema_tree_snapshot</span>
+                            <span class="text-muted px-2">
+                                /Users/ege/repos/labrat/tests/widgets/test_schema_tree.py:167
+                            </span>
+                        </span>
+                        
+                        <div class="form-check form-switch mt-1 bg-dark">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   id="flexSwitchCheckDefault0" onchange="toggleOverlayCheckbox(this, 0)">
+                            <label class="form-check-label text-muted" for="flexSwitchCheckDefault0">
+                                Show difference
+                            </label>
+                        </div>
+                        
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col">
+                                <svg class="rich-terminal" viewBox="0 0 994 782.0" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-3693102896-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-3693102896-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-3693102896-r1-act1 { fill: #c5c8c6 }
+.terminal-3693102896-r2-act1 { fill: #121212 }
+.terminal-3693102896-r3-act1 { fill: #797979 }
+.terminal-3693102896-r4-act1 { fill: #e0e0e0 }
+.terminal-3693102896-r5-act1 { fill: #3e3e3e }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-3693102896-clip-terminal">
+      <rect x="0" y="0" width="975.0" height="731.0" />
+    </clipPath>
+    <clipPath id="terminal-3693102896-line-0">
+    <rect x="0" y="1.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-1">
+    <rect x="0" y="25.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-2">
+    <rect x="0" y="50.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-3">
+    <rect x="0" y="74.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-4">
+    <rect x="0" y="99.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-5">
+    <rect x="0" y="123.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-6">
+    <rect x="0" y="147.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-7">
+    <rect x="0" y="172.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-8">
+    <rect x="0" y="196.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-9">
+    <rect x="0" y="221.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-10">
+    <rect x="0" y="245.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-11">
+    <rect x="0" y="269.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-12">
+    <rect x="0" y="294.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-13">
+    <rect x="0" y="318.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-14">
+    <rect x="0" y="343.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-15">
+    <rect x="0" y="367.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-16">
+    <rect x="0" y="391.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-17">
+    <rect x="0" y="416.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-18">
+    <rect x="0" y="440.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-19">
+    <rect x="0" y="465.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-20">
+    <rect x="0" y="489.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-21">
+    <rect x="0" y="513.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-22">
+    <rect x="0" y="538.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-23">
+    <rect x="0" y="562.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-24">
+    <rect x="0" y="587.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-25">
+    <rect x="0" y="611.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-26">
+    <rect x="0" y="635.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-27">
+    <rect x="0" y="660.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-28">
+    <rect x="0" y="684.7" width="976" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="992" height="780" rx="8"/><text class="terminal-3693102896-title" fill="#c5c8c6" text-anchor="middle" x="496" y="27">_Host</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-3693102896-clip-terminal)">
+    <rect fill="#272727" x="0" y="1.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#e0e0e0" x="24.4" y="1.5" width="12.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="36.6" y="1.5" width="256.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="292.8" y="1.5" width="658.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="1.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="0" y="25.9" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="24.4" y="25.9" width="927.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="25.9" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="0" y="50.3" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="24.4" y="50.3" width="927.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="50.3" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="74.7" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#153854" x="24.4" y="74.7" width="73.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="74.7" width="878.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="99.1" width="48.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="48.8" y="99.1" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="73.2" y="99.1" width="48.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="99.1" width="854" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="123.5" width="97.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="123.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="123.5" width="73.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="195.2" y="123.5" width="780.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="147.9" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="147.9" width="317.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="463.6" y="147.9" width="512.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="172.3" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="172.3" width="244" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="390.4" y="172.3" width="585.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="196.7" width="97.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="196.7" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="196.7" width="61" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="183" y="196.7" width="793" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="221.1" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="221.1" width="305" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="451.4" y="221.1" width="524.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="245.5" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="245.5" width="280.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="427" y="245.5" width="549" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="269.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="294.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="318.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="343.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="367.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="391.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="416.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="440.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="465.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="489.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="513.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="538.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="562.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="587.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="611.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="635.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="660.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="684.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="709.1" width="976" height="24.65" shape-rendering="crispEdges"/>
+    <g class="terminal-3693102896-matrix">
+    <text class="terminal-3693102896-r2-act1" x="24.4" y="20" textLength="12.2" clip-path="url(#terminal-3693102896-line-0)">F</text><text class="terminal-3693102896-r3-act1" x="36.6" y="20" textLength="256.2" clip-path="url(#terminal-3693102896-line-0)">ilter&#160;tables/columns…</text><text class="terminal-3693102896-r1-act1" x="976" y="20" textLength="12.2" clip-path="url(#terminal-3693102896-line-0)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="44.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-1)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="68.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-2)">
+</text><text class="terminal-3693102896-r4-act1" x="0" y="93.2" textLength="24.4" clip-path="url(#terminal-3693102896-line-3)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="24.4" y="93.2" textLength="73.2" clip-path="url(#terminal-3693102896-line-3)">testdb</text><text class="terminal-3693102896-r1-act1" x="976" y="93.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-3)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="117.6" textLength="48.8" clip-path="url(#terminal-3693102896-line-4)">└──&#160;</text><text class="terminal-3693102896-r4-act1" x="48.8" y="117.6" textLength="24.4" clip-path="url(#terminal-3693102896-line-4)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="73.2" y="117.6" textLength="48.8" clip-path="url(#terminal-3693102896-line-4)">main</text><text class="terminal-3693102896-r1-act1" x="976" y="117.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-4)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="142" textLength="97.6" clip-path="url(#terminal-3693102896-line-5)">&#160;&#160;&#160;&#160;├──&#160;</text><text class="terminal-3693102896-r4-act1" x="97.6" y="142" textLength="24.4" clip-path="url(#terminal-3693102896-line-5)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="122" y="142" textLength="73.2" clip-path="url(#terminal-3693102896-line-5)">orders</text><text class="terminal-3693102896-r1-act1" x="976" y="142" textLength="12.2" clip-path="url(#terminal-3693102896-line-5)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="166.4" textLength="146.4" clip-path="url(#terminal-3693102896-line-6)">&#160;&#160;&#160;&#160;│&#160;&#160;&#160;├──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="166.4" textLength="317.2" clip-path="url(#terminal-3693102896-line-6)">order_id&#160;&#160;INTEGER&#160;NOT&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="166.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-6)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="190.8" textLength="146.4" clip-path="url(#terminal-3693102896-line-7)">&#160;&#160;&#160;&#160;│&#160;&#160;&#160;└──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="190.8" textLength="244" clip-path="url(#terminal-3693102896-line-7)">amount&#160;&#160;DECIMAL&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="190.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-7)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="215.2" textLength="97.6" clip-path="url(#terminal-3693102896-line-8)">&#160;&#160;&#160;&#160;└──&#160;</text><text class="terminal-3693102896-r4-act1" x="97.6" y="215.2" textLength="24.4" clip-path="url(#terminal-3693102896-line-8)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="122" y="215.2" textLength="61" clip-path="url(#terminal-3693102896-line-8)">users</text><text class="terminal-3693102896-r1-act1" x="976" y="215.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-8)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="239.6" textLength="146.4" clip-path="url(#terminal-3693102896-line-9)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;├──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="239.6" textLength="305" clip-path="url(#terminal-3693102896-line-9)">user_id&#160;&#160;INTEGER&#160;NOT&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="239.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-9)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="264" textLength="146.4" clip-path="url(#terminal-3693102896-line-10)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;└──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="264" textLength="280.6" clip-path="url(#terminal-3693102896-line-10)">email&#160;&#160;VARCHAR&#160;NOT&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="264" textLength="12.2" clip-path="url(#terminal-3693102896-line-10)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="288.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-11)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="312.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-12)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="337.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-13)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="361.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-14)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="386" textLength="12.2" clip-path="url(#terminal-3693102896-line-15)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="410.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-16)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="434.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-17)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="459.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-18)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="483.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-19)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="508" textLength="12.2" clip-path="url(#terminal-3693102896-line-20)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="532.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-21)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="556.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-22)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="581.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-23)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="605.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-24)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="630" textLength="12.2" clip-path="url(#terminal-3693102896-line-25)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="654.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-26)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="678.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-27)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="703.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-28)">
+</text>
+    </g>
+    </g>
+</svg>
+
+                                <div class="w-100 d-flex flex-column justify-content-center align-items-center mt-1">
+                                    
+                                    <div class="small opacity-75 text-center">Snapshot of the schema tree populated with sample catalog.</div>
+                                    <div class="small">
+                                        <a href="#" class="mb-0 fw-normal"
+                                           data-bs-toggle="modal"
+                                           data-bs-target="#environmentModal0">
+                                           View environment info
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="overlay-container">
+                                    <div class="diff-wrapper-actual" id="diff-overlay-0" hidden>
+                                        <svg class="rich-terminal" viewBox="0 0 994 782.0" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-3693102896-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-3693102896-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-3693102896-r1-act1 { fill: #c5c8c6 }
+.terminal-3693102896-r2-act1 { fill: #121212 }
+.terminal-3693102896-r3-act1 { fill: #797979 }
+.terminal-3693102896-r4-act1 { fill: #e0e0e0 }
+.terminal-3693102896-r5-act1 { fill: #3e3e3e }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-3693102896-clip-terminal">
+      <rect x="0" y="0" width="975.0" height="731.0" />
+    </clipPath>
+    <clipPath id="terminal-3693102896-line-0">
+    <rect x="0" y="1.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-1">
+    <rect x="0" y="25.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-2">
+    <rect x="0" y="50.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-3">
+    <rect x="0" y="74.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-4">
+    <rect x="0" y="99.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-5">
+    <rect x="0" y="123.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-6">
+    <rect x="0" y="147.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-7">
+    <rect x="0" y="172.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-8">
+    <rect x="0" y="196.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-9">
+    <rect x="0" y="221.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-10">
+    <rect x="0" y="245.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-11">
+    <rect x="0" y="269.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-12">
+    <rect x="0" y="294.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-13">
+    <rect x="0" y="318.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-14">
+    <rect x="0" y="343.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-15">
+    <rect x="0" y="367.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-16">
+    <rect x="0" y="391.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-17">
+    <rect x="0" y="416.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-18">
+    <rect x="0" y="440.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-19">
+    <rect x="0" y="465.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-20">
+    <rect x="0" y="489.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-21">
+    <rect x="0" y="513.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-22">
+    <rect x="0" y="538.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-23">
+    <rect x="0" y="562.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-24">
+    <rect x="0" y="587.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-25">
+    <rect x="0" y="611.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-26">
+    <rect x="0" y="635.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-27">
+    <rect x="0" y="660.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3693102896-line-28">
+    <rect x="0" y="684.7" width="976" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="992" height="780" rx="8"/><text class="terminal-3693102896-title" fill="#c5c8c6" text-anchor="middle" x="496" y="27">_Host</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-3693102896-clip-terminal)">
+    <rect fill="#272727" x="0" y="1.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#e0e0e0" x="24.4" y="1.5" width="12.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="36.6" y="1.5" width="256.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="292.8" y="1.5" width="658.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="1.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="0" y="25.9" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="24.4" y="25.9" width="927.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="25.9" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="0" y="50.3" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="24.4" y="50.3" width="927.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="50.3" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="74.7" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#153854" x="24.4" y="74.7" width="73.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="74.7" width="878.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="99.1" width="48.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="48.8" y="99.1" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="73.2" y="99.1" width="48.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="99.1" width="854" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="123.5" width="97.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="123.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="123.5" width="73.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="195.2" y="123.5" width="780.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="147.9" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="147.9" width="317.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="463.6" y="147.9" width="512.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="172.3" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="172.3" width="244" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="390.4" y="172.3" width="585.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="196.7" width="97.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="196.7" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="196.7" width="61" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="183" y="196.7" width="793" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="221.1" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="221.1" width="305" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="451.4" y="221.1" width="524.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="245.5" width="146.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="146.4" y="245.5" width="280.6" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="427" y="245.5" width="549" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="269.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="294.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="318.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="343.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="367.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="391.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="416.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="440.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="465.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="489.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="513.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="538.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="562.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="587.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="611.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="635.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="660.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="684.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="709.1" width="976" height="24.65" shape-rendering="crispEdges"/>
+    <g class="terminal-3693102896-matrix">
+    <text class="terminal-3693102896-r2-act1" x="24.4" y="20" textLength="12.2" clip-path="url(#terminal-3693102896-line-0)">F</text><text class="terminal-3693102896-r3-act1" x="36.6" y="20" textLength="256.2" clip-path="url(#terminal-3693102896-line-0)">ilter&#160;tables/columns…</text><text class="terminal-3693102896-r1-act1" x="976" y="20" textLength="12.2" clip-path="url(#terminal-3693102896-line-0)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="44.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-1)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="68.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-2)">
+</text><text class="terminal-3693102896-r4-act1" x="0" y="93.2" textLength="24.4" clip-path="url(#terminal-3693102896-line-3)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="24.4" y="93.2" textLength="73.2" clip-path="url(#terminal-3693102896-line-3)">testdb</text><text class="terminal-3693102896-r1-act1" x="976" y="93.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-3)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="117.6" textLength="48.8" clip-path="url(#terminal-3693102896-line-4)">└──&#160;</text><text class="terminal-3693102896-r4-act1" x="48.8" y="117.6" textLength="24.4" clip-path="url(#terminal-3693102896-line-4)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="73.2" y="117.6" textLength="48.8" clip-path="url(#terminal-3693102896-line-4)">main</text><text class="terminal-3693102896-r1-act1" x="976" y="117.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-4)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="142" textLength="97.6" clip-path="url(#terminal-3693102896-line-5)">&#160;&#160;&#160;&#160;├──&#160;</text><text class="terminal-3693102896-r4-act1" x="97.6" y="142" textLength="24.4" clip-path="url(#terminal-3693102896-line-5)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="122" y="142" textLength="73.2" clip-path="url(#terminal-3693102896-line-5)">orders</text><text class="terminal-3693102896-r1-act1" x="976" y="142" textLength="12.2" clip-path="url(#terminal-3693102896-line-5)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="166.4" textLength="146.4" clip-path="url(#terminal-3693102896-line-6)">&#160;&#160;&#160;&#160;│&#160;&#160;&#160;├──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="166.4" textLength="317.2" clip-path="url(#terminal-3693102896-line-6)">order_id&#160;&#160;INTEGER&#160;NOT&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="166.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-6)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="190.8" textLength="146.4" clip-path="url(#terminal-3693102896-line-7)">&#160;&#160;&#160;&#160;│&#160;&#160;&#160;└──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="190.8" textLength="244" clip-path="url(#terminal-3693102896-line-7)">amount&#160;&#160;DECIMAL&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="190.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-7)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="215.2" textLength="97.6" clip-path="url(#terminal-3693102896-line-8)">&#160;&#160;&#160;&#160;└──&#160;</text><text class="terminal-3693102896-r4-act1" x="97.6" y="215.2" textLength="24.4" clip-path="url(#terminal-3693102896-line-8)">▼&#160;</text><text class="terminal-3693102896-r4-act1" x="122" y="215.2" textLength="61" clip-path="url(#terminal-3693102896-line-8)">users</text><text class="terminal-3693102896-r1-act1" x="976" y="215.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-8)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="239.6" textLength="146.4" clip-path="url(#terminal-3693102896-line-9)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;├──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="239.6" textLength="305" clip-path="url(#terminal-3693102896-line-9)">user_id&#160;&#160;INTEGER&#160;NOT&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="239.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-9)">
+</text><text class="terminal-3693102896-r5-act1" x="0" y="264" textLength="146.4" clip-path="url(#terminal-3693102896-line-10)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;└──&#160;</text><text class="terminal-3693102896-r4-act1" x="146.4" y="264" textLength="280.6" clip-path="url(#terminal-3693102896-line-10)">email&#160;&#160;VARCHAR&#160;NOT&#160;NULL</text><text class="terminal-3693102896-r1-act1" x="976" y="264" textLength="12.2" clip-path="url(#terminal-3693102896-line-10)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="288.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-11)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="312.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-12)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="337.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-13)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="361.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-14)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="386" textLength="12.2" clip-path="url(#terminal-3693102896-line-15)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="410.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-16)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="434.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-17)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="459.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-18)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="483.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-19)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="508" textLength="12.2" clip-path="url(#terminal-3693102896-line-20)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="532.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-21)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="556.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-22)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="581.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-23)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="605.6" textLength="12.2" clip-path="url(#terminal-3693102896-line-24)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="630" textLength="12.2" clip-path="url(#terminal-3693102896-line-25)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="654.4" textLength="12.2" clip-path="url(#terminal-3693102896-line-26)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="678.8" textLength="12.2" clip-path="url(#terminal-3693102896-line-27)">
+</text><text class="terminal-3693102896-r1-act1" x="976" y="703.2" textLength="12.2" clip-path="url(#terminal-3693102896-line-28)">
+</text>
+    </g>
+    </g>
+</svg>
+
+                                    </div>
+                                </div>
+                                <div class="diff-wrapper-snapshot">
+                                    
+                                    
+                                        <svg class="rich-terminal" viewBox="0 0 994 782.0" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-3851573741-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-3851573741-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-3851573741-r1-exp1 { fill: #c5c8c6 }
+.terminal-3851573741-r2-exp1 { fill: #121212 }
+.terminal-3851573741-r3-exp1 { fill: #797979 }
+.terminal-3851573741-r4-exp1 { fill: #e0e0e0 }
+.terminal-3851573741-r5-exp1 { fill: #3e3e3e }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-3851573741-clip-terminal">
+      <rect x="0" y="0" width="975.0" height="731.0" />
+    </clipPath>
+    <clipPath id="terminal-3851573741-line-0">
+    <rect x="0" y="1.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-1">
+    <rect x="0" y="25.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-2">
+    <rect x="0" y="50.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-3">
+    <rect x="0" y="74.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-4">
+    <rect x="0" y="99.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-5">
+    <rect x="0" y="123.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-6">
+    <rect x="0" y="147.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-7">
+    <rect x="0" y="172.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-8">
+    <rect x="0" y="196.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-9">
+    <rect x="0" y="221.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-10">
+    <rect x="0" y="245.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-11">
+    <rect x="0" y="269.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-12">
+    <rect x="0" y="294.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-13">
+    <rect x="0" y="318.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-14">
+    <rect x="0" y="343.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-15">
+    <rect x="0" y="367.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-16">
+    <rect x="0" y="391.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-17">
+    <rect x="0" y="416.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-18">
+    <rect x="0" y="440.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-19">
+    <rect x="0" y="465.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-20">
+    <rect x="0" y="489.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-21">
+    <rect x="0" y="513.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-22">
+    <rect x="0" y="538.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-23">
+    <rect x="0" y="562.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-24">
+    <rect x="0" y="587.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-25">
+    <rect x="0" y="611.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-26">
+    <rect x="0" y="635.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-27">
+    <rect x="0" y="660.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-3851573741-line-28">
+    <rect x="0" y="684.7" width="976" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="992" height="780" rx="8"/><text class="terminal-3851573741-title" fill="#c5c8c6" text-anchor="middle" x="496" y="27">_Host</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-3851573741-clip-terminal)">
+    <rect fill="#272727" x="0" y="1.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#e0e0e0" x="24.4" y="1.5" width="12.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="36.6" y="1.5" width="256.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="292.8" y="1.5" width="658.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="1.5" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="0" y="25.9" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="24.4" y="25.9" width="927.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="25.9" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="0" y="50.3" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="24.4" y="50.3" width="927.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#272727" x="951.6" y="50.3" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="74.7" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#153854" x="24.4" y="74.7" width="73.2" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="97.6" y="74.7" width="878.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="99.1" width="48.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="48.8" y="99.1" width="24.4" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="73.2" y="99.1" width="48.8" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="122" y="99.1" width="854" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="123.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="147.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="172.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="196.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="221.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="245.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="269.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="294.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="318.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="343.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="367.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="391.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="416.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="440.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="465.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="489.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="513.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="538.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="562.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="587.1" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="611.5" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="635.9" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="660.3" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="684.7" width="976" height="24.65" shape-rendering="crispEdges"/><rect fill="#1e1e1e" x="0" y="709.1" width="976" height="24.65" shape-rendering="crispEdges"/>
+    <g class="terminal-3851573741-matrix">
+    <text class="terminal-3851573741-r2-exp1" x="24.4" y="20" textLength="12.2" clip-path="url(#terminal-3851573741-line-0)">F</text><text class="terminal-3851573741-r3-exp1" x="36.6" y="20" textLength="256.2" clip-path="url(#terminal-3851573741-line-0)">ilter&#160;tables/columns…</text><text class="terminal-3851573741-r1-exp1" x="976" y="20" textLength="12.2" clip-path="url(#terminal-3851573741-line-0)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="44.4" textLength="12.2" clip-path="url(#terminal-3851573741-line-1)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="68.8" textLength="12.2" clip-path="url(#terminal-3851573741-line-2)">
+</text><text class="terminal-3851573741-r4-exp1" x="0" y="93.2" textLength="24.4" clip-path="url(#terminal-3851573741-line-3)">▼&#160;</text><text class="terminal-3851573741-r4-exp1" x="24.4" y="93.2" textLength="73.2" clip-path="url(#terminal-3851573741-line-3)">testdb</text><text class="terminal-3851573741-r1-exp1" x="976" y="93.2" textLength="12.2" clip-path="url(#terminal-3851573741-line-3)">
+</text><text class="terminal-3851573741-r5-exp1" x="0" y="117.6" textLength="48.8" clip-path="url(#terminal-3851573741-line-4)">└──&#160;</text><text class="terminal-3851573741-r4-exp1" x="48.8" y="117.6" textLength="24.4" clip-path="url(#terminal-3851573741-line-4)">▶&#160;</text><text class="terminal-3851573741-r4-exp1" x="73.2" y="117.6" textLength="48.8" clip-path="url(#terminal-3851573741-line-4)">main</text><text class="terminal-3851573741-r1-exp1" x="976" y="117.6" textLength="12.2" clip-path="url(#terminal-3851573741-line-4)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="142" textLength="12.2" clip-path="url(#terminal-3851573741-line-5)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="166.4" textLength="12.2" clip-path="url(#terminal-3851573741-line-6)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="190.8" textLength="12.2" clip-path="url(#terminal-3851573741-line-7)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="215.2" textLength="12.2" clip-path="url(#terminal-3851573741-line-8)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="239.6" textLength="12.2" clip-path="url(#terminal-3851573741-line-9)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="264" textLength="12.2" clip-path="url(#terminal-3851573741-line-10)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="288.4" textLength="12.2" clip-path="url(#terminal-3851573741-line-11)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="312.8" textLength="12.2" clip-path="url(#terminal-3851573741-line-12)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="337.2" textLength="12.2" clip-path="url(#terminal-3851573741-line-13)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="361.6" textLength="12.2" clip-path="url(#terminal-3851573741-line-14)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="386" textLength="12.2" clip-path="url(#terminal-3851573741-line-15)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="410.4" textLength="12.2" clip-path="url(#terminal-3851573741-line-16)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="434.8" textLength="12.2" clip-path="url(#terminal-3851573741-line-17)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="459.2" textLength="12.2" clip-path="url(#terminal-3851573741-line-18)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="483.6" textLength="12.2" clip-path="url(#terminal-3851573741-line-19)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="508" textLength="12.2" clip-path="url(#terminal-3851573741-line-20)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="532.4" textLength="12.2" clip-path="url(#terminal-3851573741-line-21)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="556.8" textLength="12.2" clip-path="url(#terminal-3851573741-line-22)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="581.2" textLength="12.2" clip-path="url(#terminal-3851573741-line-23)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="605.6" textLength="12.2" clip-path="url(#terminal-3851573741-line-24)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="630" textLength="12.2" clip-path="url(#terminal-3851573741-line-25)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="654.4" textLength="12.2" clip-path="url(#terminal-3851573741-line-26)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="678.8" textLength="12.2" clip-path="url(#terminal-3851573741-line-27)">
+</text><text class="terminal-3851573741-r1-exp1" x="976" y="703.2" textLength="12.2" clip-path="url(#terminal-3851573741-line-28)">
+</text>
+    </g>
+    </g>
+</svg>
+
+                                    
+                                </div>
+                                
+                                <div class="w-100 d-flex justify-content-center mt-1">
+                                    <span class="small">
+                                        Historical snapshot
+                                    </span>
+                                </div>
+                                
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                
+                <div class="modal modal-lg fade" id="environmentModal0" tabindex="-1"
+                     aria-labelledby="environmentModalLabel0"
+                     aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content bg-dark text-white">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="environmentModalLabel0">More info for <span
+                                        class="font-monospace">test_schema_tree_snapshot</span></h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                        aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body overflow-auto">
+                                <h5>Textual App State</h5>
+                                <table class="table mb-4 text-white">
+                                    <thead>
+                                    <tr>
+                                        <th scope="col">Variable</th>
+                                        <th scope="col">Value</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    <tr>
+                                        <td class="font-monospace">app.console.legacy_windows</td>
+                                        <td class="font-monospace">False</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="font-monospace">app.console.size</td>
+                                        <td class="font-monospace">ConsoleDimensions(width=80, height=25)</td>
+                                    </tr>
+                                    </tbody>
+                                </table>
+                                <h5>Environment (<span class="font-monospace">os.environ</span>)</h5>
+                                <table class="table text-white">
+                                    <thead>
+                                    <tr>
+                                        <th scope="col">Variable</th>
+                                        <th scope="col">Value</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">AI_AGENT</td>
+                                            <td class="font-monospace">claude-code_2-1-142_agent</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">CLAUDECODE</td>
+                                            <td class="font-monospace">1</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">CLAUDE_CODE_ENTRYPOINT</td>
+                                            <td class="font-monospace">cli</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">CLAUDE_CODE_EXECPATH</td>
+                                            <td class="font-monospace">/opt/homebrew/Caskroom/claude-code/2.1.142/claude</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">CLAUDE_CODE_SESSION_ID</td>
+                                            <td class="font-monospace">69701a5a-f8e6-4427-83d3-1a7de80810cb</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">CLAUDE_EFFORT</td>
+                                            <td class="font-monospace">high</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">COLORTERM</td>
+                                            <td class="font-monospace">truecolor</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">COMMAND_MODE</td>
+                                            <td class="font-monospace">unix2003</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">COREPACK_ENABLE_AUTO_PIN</td>
+                                            <td class="font-monospace">0</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">FPATH</td>
+                                            <td class="font-monospace">/Users/ege/.oh-my-zsh/plugins/git:/Users/ege/.oh-my-zsh/functions:/Users/ege/.oh-my-zsh/completions:/Users/ege/.oh-my-zsh/custom/functions:/Users/ege/.oh-my-zsh/custom/completions:/Users/ege/.oh-my-zsh/cache/completions:/opt/homebrew/share/zsh/site-functions:/usr/local/share/zsh/site-functions:/usr/share/zsh/site-functions:/usr/share/zsh/5.9/functions</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">GHOSTTY_BIN_DIR</td>
+                                            <td class="font-monospace">/Applications/Ghostty.app/Contents/MacOS</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">GHOSTTY_RESOURCES_DIR</td>
+                                            <td class="font-monospace">/Applications/Ghostty.app/Contents/Resources/ghostty</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">GHOSTTY_SHELL_FEATURES</td>
+                                            <td class="font-monospace">cursor:blink,path,title</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">GIT_EDITOR</td>
+                                            <td class="font-monospace">true</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">HOME</td>
+                                            <td class="font-monospace">/Users/ege</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">HOMEBREW_CELLAR</td>
+                                            <td class="font-monospace">/opt/homebrew/Cellar</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">HOMEBREW_PREFIX</td>
+                                            <td class="font-monospace">/opt/homebrew</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">HOMEBREW_REPOSITORY</td>
+                                            <td class="font-monospace">/opt/homebrew</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">INFOPATH</td>
+                                            <td class="font-monospace">/opt/homebrew/share/info:</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">LANG</td>
+                                            <td class="font-monospace">en_CA.UTF-8</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">LESS</td>
+                                            <td class="font-monospace">-R</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">LOGNAME</td>
+                                            <td class="font-monospace">ege</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">LSCOLORS</td>
+                                            <td class="font-monospace">Gxfxcxdxbxegedabagacad</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">LS_COLORS</td>
+                                            <td class="font-monospace">di=1;36:ln=35:so=32:pi=33:ex=31:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">LaunchInstanceID</td>
+                                            <td class="font-monospace">F70331D0-CC15-4BBB-B40A-DB2FEE4D6F39</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">MANPATH</td>
+                                            <td class="font-monospace">:/usr/share/man:/usr/local/share/man:/Applications/Ghostty.app/Contents/Resources/ghostty/../man:</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">NoDefaultCurrentDirectoryInExePath</td>
+                                            <td class="font-monospace">1</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">OLDPWD</td>
+                                            <td class="font-monospace">/Users/ege/repos/labrat</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">OSLogRateLimit</td>
+                                            <td class="font-monospace">64</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">PAGER</td>
+                                            <td class="font-monospace">less</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">PATH</td>
+                                            <td class="font-monospace">/Users/ege/repos/labrat/.venv/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Users/ege/.local/bin:/Applications/Ghostty.app/Contents/MacOS:/Users/ege/.claude/plugins/cache/claude-plugins-official/claude-md-management/1.0.0/bin:/Users/ege/.claude/plugins/cache/claude-plugins-official/frontend-design/unknown/bin:/Users/ege/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/bin</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">PWD</td>
+                                            <td class="font-monospace">/Users/ege/repos/labrat</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">SECURITYSESSIONID</td>
+                                            <td class="font-monospace">186b0</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">SHELL</td>
+                                            <td class="font-monospace">/bin/zsh</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">SHLVL</td>
+                                            <td class="font-monospace">2</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">SSH_AUTH_SOCK</td>
+                                            <td class="font-monospace">/var/run/com.apple.launchd.0ml678Ckv2/Listeners</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">TERMINFO</td>
+                                            <td class="font-monospace">/Applications/Ghostty.app/Contents/Resources/terminfo</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">TERM_PROGRAM_VERSION</td>
+                                            <td class="font-monospace">1.3.1</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">TMPDIR</td>
+                                            <td class="font-monospace">/var/folders/rq/6clzmx6s64b72f5dbpg0wk900000gn/T/</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">USER</td>
+                                            <td class="font-monospace">ege</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">UV</td>
+                                            <td class="font-monospace">/opt/homebrew/bin/uv</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">UV_RUN_RECURSION_DEPTH</td>
+                                            <td class="font-monospace">1</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">VIRTUAL_ENV</td>
+                                            <td class="font-monospace">/Users/ege/repos/labrat/.venv</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">XDG_DATA_DIRS</td>
+                                            <td class="font-monospace">/usr/local/share:/usr/share:/Applications/Ghostty.app/Contents/Resources/ghostty/..</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">XPC_FLAGS</td>
+                                            <td class="font-monospace">0x0</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">XPC_SERVICE_NAME</td>
+                                            <td class="font-monospace">0</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">ZSH</td>
+                                            <td class="font-monospace">/Users/ege/.oh-my-zsh</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">_</td>
+                                            <td class="font-monospace">/opt/homebrew/bin/uv</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">__CFBundleIdentifier</td>
+                                            <td class="font-monospace">com.mitchellh.ghostty</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">__CF_USER_TEXT_ENCODING</td>
+                                            <td class="font-monospace">0x1F5:0x0:0x52</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">PYTEST_VERSION</td>
+                                            <td class="font-monospace">9.0.3</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">TEXTUAL_SNAPSHOT_TEMPDIR</td>
+                                            <td class="font-monospace">/var/folders/rq/6clzmx6s64b72f5dbpg0wk900000gn/T/tmp94uigqap</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">_RJEM_MALLOC_CONF</td>
+                                            <td class="font-monospace">dirty_decay_ms:500,muzzy_decay_ms:-1</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">TERM_PROGRAM</td>
+                                            <td class="font-monospace">ghostty</td>
+                                        </tr>
+                                    
+                                        <tr>
+                                            <td class="font-monospace">TERM</td>
+                                            <td class="font-monospace">xterm-ghostty</td>
+                                        </tr>
+                                    
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+
+    <div class="row">
+        <div class="col">
+            <div class="card text-white bg-dark border-secondary rounded-1">
+                <div class="card-body">
+                    <p class="card-text">If you're happy with the test output, run <span class="font-monospace">pytest</span> with the <span
+                            class="font-monospace">--snapshot-update</span> flag to update the snapshot.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col">
+            <div class="w-100 d-flex p-4 justify-content-center">
+                <p class="text-muted">Report generated at UTC 2026-05-24 22:43:20.539273.</p>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
+        crossorigin="anonymous"></script>
+
+<script type="application/javascript">
+    function toggleOverlayCheckbox(element, index) {
+        const overlay = document.getElementById(`diff-overlay-${index}`)
+        overlay.hidden = !overlay.hidden
+    }
+</script>
+
+</body>
+</html>
