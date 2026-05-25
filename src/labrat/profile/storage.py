@@ -46,19 +46,32 @@ def save_all(profiles: dict[str, Profile], profiles_path: Path | None = None) ->
 
 def store_secret(profile_name: str, secret: str) -> None:
     """Store a secret in the OS keyring."""
-    keyring.set_password(_SERVICE, f"{profile_name}.secret", secret)
+    from keyring.errors import NoKeyringError  # pyright: ignore[reportUnknownMemberType]
+
+    try:
+        keyring.set_password(_SERVICE, f"{profile_name}.secret", secret)
+    except NoKeyringError:  # pyright: ignore[reportUnknownVariableType]
+        pass
 
 
 def load_secret(profile_name: str) -> str | None:
     """Retrieve a secret from the OS keyring."""
-    return keyring.get_password(_SERVICE, f"{profile_name}.secret")
+    from keyring.errors import NoKeyringError  # pyright: ignore[reportUnknownMemberType]
+
+    try:
+        return keyring.get_password(_SERVICE, f"{profile_name}.secret")
+    except NoKeyringError:  # pyright: ignore[reportUnknownVariableType]
+        return None
 
 
 def delete_secret(profile_name: str) -> None:
     """Delete a secret from the OS keyring (best-effort)."""
-    from keyring.errors import PasswordDeleteError  # pyright: ignore[reportUnknownMemberType]
+    from keyring.errors import (  # pyright: ignore[reportUnknownMemberType]
+        NoKeyringError,
+        PasswordDeleteError,
+    )
 
     try:
         keyring.delete_password(_SERVICE, f"{profile_name}.secret")
-    except PasswordDeleteError:  # pyright: ignore[reportUnknownVariableType]
+    except (PasswordDeleteError, NoKeyringError):  # pyright: ignore[reportUnknownVariableType]
         pass
