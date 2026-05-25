@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **93% easy · 73% medium · 53% hard** (DuckDB+dbt, claude-sonnet-4-6) — competitive with the published leaderboard at [altimate.sh/benchmarks/ade-bench](https://www.altimate.sh/benchmarks/ade-bench).
+> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **93% easy · 73% medium · 53% hard · 67% overall** (40/60 tasks, DuckDB+dbt, claude-sonnet-4-6) — competitive with the published leaderboard at [altimate.sh/benchmarks/ade-bench](https://www.altimate.sh/benchmarks/ade-bench).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -50,7 +50,7 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | Easy | 15 | **93%** (14/15) | 95% |
 | Medium | 30 | **73%** (~22/30) | — |
 | Hard | 15 | **53%** (~8/15) | — |
-| **Overall** | **60** | **68%** | 83% |
+| **Overall** | **60** | **67%** (40/60) | 83% |
 
 For comparison, the published [Altimate leaderboard](https://www.altimate.sh/benchmarks/ade-bench) shows their best agent (altimate-code, Sonnet 4.6, Snowflake) at 74.4% on 43 tasks — LabRat on DuckDB scores comparably without any task-specific tuning.
 
