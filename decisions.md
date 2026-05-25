@@ -248,6 +248,35 @@ This is a stretch goal — the current validations framework (M32) covers most o
 via LLM-based checks. Deterministic checks would complement it for numeric/structural assertions.
 Priority: low, deferred to after Phase 5+.
 
+## ADE-bench integration (2026-05-24)
+
+### LabratLocalAgent: run Claude Code locally, bridge via docker exec/cp
+
+**Problem:** The ADE-bench harness runs agents inside a Docker container. Claude Code authenticates via macOS Keychain OAuth (Max subscription); the API key has no credits. Keychain tokens aren't portable to Linux containers — mounting `~/.claude/` gives "Not logged in · Please run /login."
+
+**Solution — local bridge agent:**
+- `LabratLocalAgent` extends `BaseAgent` directly (not `AbstractInstalledAgent` — no in-container install)
+- `perform_task()` runs `claude --output-format stream-json --verbose -p <prompt> --allowedTools Bash` locally via `subprocess.run`
+- The prompt preamble explains to Claude how to interact with the container using `docker exec <name> cat/bash` to read/run and `docker cp` to write files
+- `session.container.name` gives the container name; the harness spins Docker up before calling the agent
+
+**Why not API key / CI mode / keychain mount:**
+- API key: no credits on the Max subscription
+- CI mode (`CLAUDE_CODE_USE_BEDROCK`, etc.): requires additional IAM config, out of scope
+- Keychain mount: macOS Keychain is process-local; serializing tokens to files isn't supported
+
+**Tradeoff:** The local agent is slower than a fully in-container agent (each `docker exec` is a subprocess round-trip), and it ties evaluation to the developer's Mac. Acceptable for baseline runs; future work can use a proper headless LabRat CLI installed inside Docker with an API key.
+
+### Baseline result (2026-05-24, claude-sonnet-4-6)
+
+Easy tier: **15/17 tasks passed (88%), 80/86 individual dbt tests (93%)**
+
+Failures:
+- `helixops_saas009`: agent completed the task but 3 of 5 test models weren't built (missing `dbt run` scope). 1/5 tests passed.
+- `helixops_saas010`: 9/11 tests passed. Agent's output had 2 column-level mismatches.
+
+Cost: $3.38 total across 17 instances (~$0.20/task, ~70s/task). All via Mac OAuth (no API credits spent).
+
 ## Open questions
 
 - Can Haiku with an optimized prompt approach Sonnet's baseline? Haiku scored 0.0% at baseline —

@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. ADE-bench evaluation framework integrated (60 duckdb+dbt tasks from dbt Labs).
+> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. ADE-bench evaluation integrated: **88% on the easy tier (15/17 tasks, claude-sonnet-4-6)** using the `LabratLocalAgent` — runs via Mac OAuth, no API credits required.
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -36,14 +36,14 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | MCP catalog integration | ✅ | generic async client for any MCP-compatible catalog |
 | Self-healing memory | ✅ | edit-derived + chat-correction memories, retrieval |
 | Custom validations | ✅ | natural-language rules, warn/block severity |
-| Eval framework | ✅ | ADE-bench (dbt Labs, 60 tasks), BIRD, custom scenarios, baseline comparison |
+| Eval framework | ✅ | ADE-bench (dbt Labs, 60 tasks), BIRD, custom scenarios, baseline comparison — 88% easy tier |
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts | ✅ | unicode (plotext) + image protocol (matplotlib/kitty) |
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
 **Test coverage:** 500 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; ADE-bench `simple001` passes 2/2 dbt tests with sage agent ($0.00, sandbox-isolated).
+**Benchmarks:** DuckDB e-commerce eval 5/5 gold SQL correct; **ADE-bench easy tier: 88% (15/17 tasks, 93% of individual dbt tests)** using `LabratLocalAgent` with claude-sonnet-4-6 via Mac OAuth ($3.38 total, ~$0.20/task).
 
 ## Install
 
@@ -153,7 +153,8 @@ uv run python scripts/eval_duckdb.py
 ANTHROPIC_API_KEY=<key> uv run python scripts/eval_duckdb.py
 
 # ADE-bench evaluation (requires Docker + ade-bench repo at ~/repos/ade-bench)
-ADE_BENCH_DIR=~/repos/ade-bench uv run python scripts/eval_ade_bench.py --agent sage --tasks simple001
+# Uses local Claude Code via Mac OAuth — no API credits needed
+cd ~/repos/ade-bench && uv run ade run helixops_saas001 airbnb001 --db duckdb --project-type dbt --agent labrat_local --no-diffs
 
 # Generate UI screenshots (no API key needed)
 uv run python scripts/take_screenshots.py
@@ -163,7 +164,7 @@ uv run python scripts/take_screenshots.py
 
 All 32 planned milestones are complete. Post-v0 priorities:
 
-- **ADE-bench integration**: framework wired up; next step is running LabRat's agent CLI directly as an ADE-bench agent against the full dbt task suite
+- **ADE-bench medium/hard tiers**: easy tier scored 88%; next step is running medium and hard tasks to establish full benchmark coverage
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 
