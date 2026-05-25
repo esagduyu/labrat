@@ -172,7 +172,7 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
         try:
             data = json.loads(out)
             if isinstance(data, dict) and "result" in data:
-                out = str(data["result"])
+                out = str(cast(object, data["result"]))
         except json.JSONDecodeError:
             pass
         raise RuntimeError(f"claude CLI error: {err or out[:300]}")

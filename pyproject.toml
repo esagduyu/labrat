@@ -60,6 +60,10 @@ select = ["E", "F", "I", "N", "W", "B", "UP", "RUF"]
 [tool.pyright]
 include = ["src"]
 strict = ["src/labrat"]
+ignore = [
+    "src/labrat/dspy_opt",   # dspy/pandas have no type stubs
+    "src/labrat/screens",    # Textual DataTable/app stubs are incomplete
+]
 pythonVersion = "3.12"
 
 [tool.pytest.ini_options]
