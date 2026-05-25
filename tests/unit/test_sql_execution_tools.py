@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from labrat.agent.tools.base import ToolContext, ToolRegistry
@@ -12,12 +13,34 @@ from labrat.agent.tools.explain_sql import ExplainSqlTool
 from labrat.agent.tools.run_sql import RunSqlTool
 from labrat.db.duckdb_engine import DuckDBConnection
 
-FIXTURE_DB = Path(__file__).parent.parent / "fixtures" / "sample_dbs" / "test.duckdb"
+
+@pytest.fixture(scope="session")
+def fixture_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    p = tmp_path_factory.mktemp("sample_dbs") / "test.duckdb"
+    con = duckdb.connect(str(p))
+    con.execute("""
+        CREATE TABLE users (id INTEGER, name VARCHAR);
+        INSERT INTO users VALUES (1,'Alice'),(2,'Bob'),(3,'Carol'),(4,'Dan'),(5,'Eve');
+        CREATE TABLE regions (id INTEGER, name VARCHAR);
+        INSERT INTO regions VALUES (1,'North'),(2,'South');
+        CREATE TABLE orders (
+            id INTEGER, user_id INTEGER, region_id INTEGER,
+            total_amount DOUBLE, status VARCHAR, order_date DATE
+        );
+        INSERT INTO orders VALUES
+            (1,1,1,100.0,'complete','2024-01-01'),
+            (2,2,1,200.0,'pending','2024-01-02'),
+            (3,3,2,150.0,'complete','2024-01-03'),
+            (4,4,2,300.0,'cancelled','2024-01-04'),
+            (5,5,1,50.0,'complete','2024-01-05');
+    """)
+    con.close()
+    return p
 
 
 @pytest.fixture()
-def ctx() -> ToolContext:  # type: ignore[misc]
-    conn = DuckDBConnection(FIXTURE_DB, read_only=True)
+def ctx(fixture_db: Path) -> ToolContext:  # type: ignore[misc]
+    conn = DuckDBConnection(fixture_db, read_only=True)
     conn.connect()
     catalog = conn.introspect_catalog()
     yield ToolContext(connection=conn, catalog=catalog, profile_name="fixture")  # type: ignore[misc]
