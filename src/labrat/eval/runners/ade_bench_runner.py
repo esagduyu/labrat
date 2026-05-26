@@ -47,11 +47,20 @@ def _map_trial(trial: dict[str, Any]) -> EvalResult:
     )
 
 
+def _best_trial(trials: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the first passing trial; fall back to the last trial."""
+    for t in trials:
+        if t.get("is_resolved"):
+            return t
+    return trials[-1]
+
+
 class AdeBenchRunner:
     """Runs ADE-bench tasks via the ade CLI and returns an EvalReport.
 
     Uses `ade run` with the sage agent by default (no LLM cost).
     Requires Docker to be running and ADE_BENCH_DIR to be set up.
+    With n_attempts > 1, a task passes if any attempt passes (pass@k semantics).
     """
 
     def __init__(
@@ -61,6 +70,7 @@ class AdeBenchRunner:
         agent: str = "sage",
         output_path: Path | None = None,
         n_concurrent_trials: int = 1,
+        n_attempts: int = 1,
         no_diffs: bool = True,
     ) -> None:
         self._cases = cases
@@ -68,6 +78,7 @@ class AdeBenchRunner:
         self._agent = agent
         self._output_path = output_path or (ade_bench_dir / "experiments")
         self._n_concurrent_trials = n_concurrent_trials
+        self._n_attempts = n_attempts
         self._no_diffs = no_diffs
 
     def run(self) -> EvalReport:
@@ -87,6 +98,8 @@ class AdeBenchRunner:
             self._agent,
             "--n-concurrent-trials",
             str(self._n_concurrent_trials),
+            "--n-attempts",
+            str(self._n_attempts),
             "--output-path",
             str(self._output_path),
         ]
@@ -113,11 +126,16 @@ class AdeBenchRunner:
             return EvalReport(suite_name="ade-bench", results=results)
 
         data: dict[str, Any] = json.loads(results_file.read_text())
-        trial_map: dict[str, dict[str, Any]] = {t["task_id"]: t for t in data.get("results", [])}
+
+        # Group all trials by task_id; with n_attempts > 1, pick best (pass if any passes)
+        trial_groups: dict[str, list[dict[str, Any]]] = {}
+        for trial in data.get("results", []):
+            trial_groups.setdefault(trial["task_id"], []).append(trial)
+
         results: list[EvalResult] = []
         for case in self._cases:
-            trial = trial_map.get(case.id)
-            if trial is None:
+            trials = trial_groups.get(case.id)
+            if not trials:
                 results.append(
                     EvalResult(
                         case_id=case.id,
@@ -126,7 +144,7 @@ class AdeBenchRunner:
                     )
                 )
             else:
-                results.append(_map_trial(trial))
+                results.append(_map_trial(_best_trial(trials)))
         return EvalReport(suite_name="ade-bench", results=results)
 
     def _find_results_json(self) -> Path | None:
