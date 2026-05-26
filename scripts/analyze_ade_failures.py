@@ -6,7 +6,7 @@ Usage:
 
 Reads all trials from a run directory, filters to failures, and prints:
 - task_id, turns, cost, which tests failed
-- The dbt commands the agent ran (extracted from cast file)
+- The dbt commands the agent ran (extracted from cast file; often empty since LabratLocalAgent runs via claude CLI subprocess, not direct shell)
 - Any ERROR or FAIL lines seen in the cast output
 """
 
@@ -97,7 +97,7 @@ def analyze_run(run_dir: Path) -> None:
 
     print(f"Run: {run_dir.name}")
     print(f"Total: {len(all_results)}  Passed: {len(passes)}  Failed: {len(failures)}")
-    print(f"Pass rate: {len(passes)/len(all_results)*100:.1f}%\n")
+    print(f"Pass rate: {len(passes) / len(all_results) * 100:.1f}%\n")
     print("=" * 70)
 
     for result in sorted(failures, key=lambda r: r["task_id"]):
@@ -107,7 +107,7 @@ def analyze_run(run_dir: Path) -> None:
         parser = result.get("parser_results", {})
         failed_tests = [k for k, v in parser.items() if v == "failed"]
 
-        print(f"\n{'─'*60}")
+        print(f"\n{'─' * 60}")
         print(f"FAIL  {task_id}  ({turns} turns, ${cost:.3f})")
         print(f"      Failed tests: {', '.join(failed_tests) or 'none'}")
 
@@ -132,7 +132,7 @@ def analyze_run(run_dir: Path) -> None:
 
             errors = _find_error_lines(cast_path)
             if errors:
-                print(f"      Error lines:")
+                print("      Error lines:")
                 for e in errors:
                     print(f"        {e[:120]}")
         else:
