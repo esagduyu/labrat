@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Test
-uv run pytest                                    # full suite (~500 tests)
+uv run pytest                                    # full suite (~450 tests)
 uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
@@ -21,6 +21,7 @@ uv run labrat
 
 # Evals
 uv run python scripts/eval_duckdb.py             # no API key needed
+uv run scripts/eval_ade_bench.py --tasks helixops_saas001   # wrapper; needs ADE_BENCH_DIR + Docker
 cd ~/repos/ade-bench && uv run ade run helixops_saas001 --db duckdb --project-type dbt --agent labrat_local --no-diffs
 ```
 
@@ -93,6 +94,8 @@ for d in sorted(Path('tasks').iterdir()):
 **ADE-bench known failures** — `helixops_saas009` persistently fails (dbt run scope too narrow, 3 test models never built — genuine bug). `helixops_saas010` is flaky (passes ~50% of runs).
 
 **decisions.md** is the living design log — add a dated entry for every significant architectural decision made in this repo.
+
+**TESTING.md** is the manual TUI testing guide — step-by-step commands and verification conditions for milestones, using `tests/fixtures/sample_dbs/ecommerce.duckdb`. Consult it before manual UI testing rather than improvising.
 
 ## Key conventions
 

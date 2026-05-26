@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: alpha. All 32 milestones (M1–M32) complete. 500 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **93% easy · 73% medium · 53% hard · 67% overall** (40/60 tasks, DuckDB+dbt, claude-sonnet-4-6) — competitive with the published leaderboard at [altimate.sh/benchmarks/ade-bench](https://www.altimate.sh/benchmarks/ade-bench).
+> Status: feature-complete v0 alpha. 443 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **93% easy · 73% medium · 53% hard · 67% overall** (40/60 tasks, DuckDB+dbt, claude-sonnet-4-6) — competitive with the published leaderboard at [altimate.sh/benchmarks/ade-bench](https://www.altimate.sh/benchmarks/ade-bench).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -23,12 +23,12 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 
 ## Status
 
-**All 32 milestones complete.** LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
+LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 
 | Layer | Status | Details |
 |---|---|---|
 | 7 warehouse adapters | ✅ | DuckDB, Postgres, Snowflake, BigQuery, Redshift, Trino, MySQL |
-| 4 LLM providers | ✅ | Anthropic (default), OpenAI-compatible, Bedrock, Vertex |
+| 3 LLM providers | ✅ | Anthropic API, Claude Code CLI (Mac OAuth), OpenAI-compatible |
 | Agent tool loop | ✅ | schema exploration, SQL execution, safety gates |
 | Query history | ✅ | always-on, PII-redacted JSONL per profile |
 | Personal context engine | ✅ | table relevance scoring, LLM-generated descriptions |
@@ -42,7 +42,7 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
-**Test coverage:** 500 passing, 6 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
+**Test coverage:** 443 passing, 7 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
 **Benchmarks ([ADE-bench](https://github.com/dbt-labs/ade-bench), DuckDB+dbt, claude-sonnet-4-6, via `LabratLocalAgent`):**
 
 | Tier | Tasks | Score | dbt tests |
@@ -110,12 +110,11 @@ Pull requests for additional warehouses welcome — the `Connection` abstract ba
 
 ## Supported LLM providers
 
-- **Anthropic Claude** (default, recommended) — best tool use, native streaming
+- **Anthropic API** — direct SDK access; recommended when you have API credits
+- **Claude Code CLI** — shells out to the local `claude` binary, authenticated via Mac OAuth (Claude Max subscription). Used by `LabratLocalAgent` for ADE-bench runs where the API key has no credits
 - **OpenAI-compatible endpoints** — Azure OpenAI, LiteLLM gateways, vLLM, Together, Fireworks, Ollama for local
-- **AWS Bedrock** — IAM-authenticated, for AWS shops
-- **Google Vertex AI** — for GCP shops
 
-Configure per profile. The default is `claude-sonnet-4-6`; switch in settings.
+Configure per profile. The default model is `claude-sonnet-4-6`; switch in settings.
 
 ## Why "LabRat"?
 
@@ -155,11 +154,10 @@ uv run pytest
 # Lint and type-check
 uv run ruff check . && uv run ruff format --check . && uv run pyright
 
-# Evaluate against the sample DuckDB (no API key needed for schema/SQL tests)
+# Evaluate against the sample DuckDB
+# Schema/SQL tests run with no auth; the agent NL→SQL step uses ANTHROPIC_API_KEY
+# if set, otherwise falls back to the local `claude` CLI (Mac OAuth)
 uv run python scripts/eval_duckdb.py
-
-# Full agent evaluation (requires API key)
-ANTHROPIC_API_KEY=<key> uv run python scripts/eval_duckdb.py
 
 # ADE-bench evaluation (requires Docker + ade-bench repo at ~/repos/ade-bench)
 # Uses local Claude Code via Mac OAuth — no API credits needed
@@ -171,7 +169,7 @@ uv run python scripts/take_screenshots.py
 
 ## Roadmap
 
-All 32 planned milestones are complete. Post-v0 priorities:
+v0 alpha is feature-complete. Post-v0 priorities:
 
 - **ADE-bench improvements**: two persistent easy failures (helixops_saas009/010) and medium/hard gaps to close — investigate missing model scoping and column-level mismatches
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
