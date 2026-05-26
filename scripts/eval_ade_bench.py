@@ -46,6 +46,12 @@ def main() -> None:
         default=1,
         help="Number of concurrent trials (default: 1)",
     )
+    parser.add_argument(
+        "--n-attempts",
+        type=int,
+        default=1,
+        help="Number of attempts per task; pass if any attempt passes (default: 1)",
+    )
     args = parser.parse_args()
 
     ade_bench_dir = Path(os.environ.get("ADE_BENCH_DIR", "~/repos/ade-bench")).expanduser()
@@ -64,7 +70,7 @@ def main() -> None:
         if missing:
             print(f"Warning: tasks not found in suite: {', '.join(sorted(missing))}")
 
-    print(f"Running {len(cases)} ADE-bench task(s) with agent={args.agent}")
+    print(f"Running {len(cases)} ADE-bench task(s) with agent={args.agent}, n_attempts={args.n_attempts}")
 
     runner = AdeBenchRunner(
         cases=cases,
@@ -72,6 +78,7 @@ def main() -> None:
         agent=args.agent,
         output_path=args.output_dir,
         n_concurrent_trials=args.concurrent,
+        n_attempts=args.n_attempts,
     )
     report = runner.run()
     print(report.to_markdown())
