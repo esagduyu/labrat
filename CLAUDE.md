@@ -69,10 +69,14 @@ Built on Textual. `app.py` is the root `App`. The main screen is a 3-pane layout
 
 Run command:
 ```bash
-cd ~/repos/ade-bench && uv run ade run <task_ids> --db duckdb --project-type dbt --agent labrat_local --no-diffs --n-concurrent-trials 3
+cd ~/repos/ade-bench && uv run ade run <task_ids> --db duckdb --project-type dbt --agent labrat_local --no-diffs --n-concurrent-trials 3 --n-attempts 3
+
+# Analyse a completed run's failures:
+uv run scripts/analyze_ade_failures.py ~/repos/ade-bench/experiments/<run_id>/
 ```
 
-Baseline (2026-05-25, claude-sonnet-4-6): **67% overall** (40/60 tasks) — 93% easy, 73% medium, 53% hard.
+Current score (2026-05-27, claude-sonnet-4-6): **80% overall** (48/60 tasks) — 100% easy, 80% medium, 60% hard.
+Roadmap and remaining failures: `docs/ade_bench_failure_analysis.md`
 
 ## Gotchas
 
@@ -91,7 +95,11 @@ for d in sorted(Path('tasks').iterdir()):
 "
 ```
 
-**ADE-bench known failures** — `helixops_saas009` persistently fails (dbt run scope too narrow, 3 test models never built — genuine bug). `helixops_saas010` is flaky (passes ~50% of runs).
+**ADE-bench known failures** — 12 tasks currently fail consistently. `helixops_saas010` fails 9/11 tests every run (was flaky; now a consistent failure). `helixops_saas015` fails 3/4 tests; `.low` variant passes. Full list and root causes: `docs/ade_bench_failure_analysis.md`.
+
+**`_DOCKER_PREAMBLE` is a Python format string** — called with `.format(container_name=..., task_prompt=...)`. Any literal `{` must be `{{`. Dbt Jinja `{{ ref('x') }}` must be written `{{{{ ref('x') }}}}` in the source so it survives `.format()`. Same applies to `_FAMILY_HINTS` values. Verify with: `python3 -c "open('labrat_local_agent.py').read()" | grep -A2 'format('`.
+
+**`_FAMILY_HINTS` injects by `task_name.startswith(prefix)`** — rules added to `analytics_engineering` never fire for `asana` tasks, even if the issue is identical. When adding a new rule, verify the correct family prefix. Next known gap: JOIN grain rules need copying to the `asana` family (T1.5a in `docs/ade_bench_failure_analysis.md`).
 
 **decisions.md** is the living design log — add a dated entry for every significant architectural decision made in this repo.
 
