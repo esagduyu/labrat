@@ -13,13 +13,12 @@ from labrat.eval.runners.ade_bench_runner import AdeBenchRunner
 
 def _make_case(task_id: str):
     from labrat.eval.models import EvalCase
+
     return EvalCase(id=task_id, question=f"Question for {task_id}")
 
 
 def _make_results_json(trials: list[dict]) -> Path:
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False, dir="/tmp"
-    )
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir="/tmp")
     json.dump({"results": trials}, tmp)
     tmp.flush()
     return Path(tmp.name)
@@ -48,8 +47,10 @@ def test_n_attempts_included_in_ade_command():
         n_attempts=3,
     )
 
-    with patch("subprocess.run") as mock_run, \
-         patch.object(runner, "_find_results_json", return_value=None):
+    with (
+        patch("subprocess.run") as mock_run,
+        patch.object(runner, "_find_results_json", return_value=None),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         runner.run()
 
@@ -66,8 +67,10 @@ def test_n_attempts_default_is_one():
         ade_bench_dir=ade_bench_dir,
     )
 
-    with patch("subprocess.run") as mock_run, \
-         patch.object(runner, "_find_results_json", return_value=None):
+    with (
+        patch("subprocess.run") as mock_run,
+        patch.object(runner, "_find_results_json", return_value=None),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         runner.run()
 
@@ -82,11 +85,13 @@ def test_n_attempts_default_is_one():
 
 def test_pass_if_any_trial_passes():
     """With 3 attempts, task is marked correct if any attempt passes."""
-    results_path = _make_results_json([
-        _trial("airbnb001", is_resolved=False, attempt=1, n_attempts=3),
-        _trial("airbnb001", is_resolved=False, attempt=2, n_attempts=3),
-        _trial("airbnb001", is_resolved=True, attempt=3, n_attempts=3),
-    ])
+    results_path = _make_results_json(
+        [
+            _trial("airbnb001", is_resolved=False, attempt=1, n_attempts=3),
+            _trial("airbnb001", is_resolved=False, attempt=2, n_attempts=3),
+            _trial("airbnb001", is_resolved=True, attempt=3, n_attempts=3),
+        ]
+    )
     ade_bench_dir = results_path.parent
     runner = AdeBenchRunner(
         cases=[_make_case("airbnb001")],
@@ -94,8 +99,10 @@ def test_pass_if_any_trial_passes():
         n_attempts=3,
     )
 
-    with patch("subprocess.run") as mock_run, \
-         patch.object(runner, "_find_results_json", return_value=results_path):
+    with (
+        patch("subprocess.run") as mock_run,
+        patch.object(runner, "_find_results_json", return_value=results_path),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         report = runner.run()
 
@@ -104,11 +111,13 @@ def test_pass_if_any_trial_passes():
 
 def test_fail_if_all_trials_fail():
     """Task is wrong if all 3 attempts fail."""
-    results_path = _make_results_json([
-        _trial("airbnb001", is_resolved=False, attempt=1, n_attempts=3),
-        _trial("airbnb001", is_resolved=False, attempt=2, n_attempts=3),
-        _trial("airbnb001", is_resolved=False, attempt=3, n_attempts=3),
-    ])
+    results_path = _make_results_json(
+        [
+            _trial("airbnb001", is_resolved=False, attempt=1, n_attempts=3),
+            _trial("airbnb001", is_resolved=False, attempt=2, n_attempts=3),
+            _trial("airbnb001", is_resolved=False, attempt=3, n_attempts=3),
+        ]
+    )
     ade_bench_dir = results_path.parent
     runner = AdeBenchRunner(
         cases=[_make_case("airbnb001")],
@@ -116,8 +125,10 @@ def test_fail_if_all_trials_fail():
         n_attempts=3,
     )
 
-    with patch("subprocess.run") as mock_run, \
-         patch.object(runner, "_find_results_json", return_value=results_path):
+    with (
+        patch("subprocess.run") as mock_run,
+        patch.object(runner, "_find_results_json", return_value=results_path),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         report = runner.run()
 
@@ -126,17 +137,21 @@ def test_fail_if_all_trials_fail():
 
 def test_single_trial_still_works():
     """Default n_attempts=1 single-trial behavior is unchanged."""
-    results_path = _make_results_json([
-        _trial("airbnb001", is_resolved=True, attempt=1, n_attempts=1),
-    ])
+    results_path = _make_results_json(
+        [
+            _trial("airbnb001", is_resolved=True, attempt=1, n_attempts=1),
+        ]
+    )
     ade_bench_dir = results_path.parent
     runner = AdeBenchRunner(
         cases=[_make_case("airbnb001")],
         ade_bench_dir=ade_bench_dir,
     )
 
-    with patch("subprocess.run") as mock_run, \
-         patch.object(runner, "_find_results_json", return_value=results_path):
+    with (
+        patch("subprocess.run") as mock_run,
+        patch.object(runner, "_find_results_json", return_value=results_path),
+    ):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         report = runner.run()
 

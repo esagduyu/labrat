@@ -70,7 +70,9 @@ def main() -> None:
         if missing:
             print(f"Warning: tasks not found in suite: {', '.join(sorted(missing))}")
 
-    print(f"Running {len(cases)} ADE-bench task(s) with agent={args.agent}, n_attempts={args.n_attempts}")
+    print(
+        f"Running {len(cases)} ADE-bench task(s) with agent={args.agent}, n_attempts={args.n_attempts}"
+    )
 
     runner = AdeBenchRunner(
         cases=cases,
