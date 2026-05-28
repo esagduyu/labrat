@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: feature-complete v0 alpha. 443 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **93% easy · 73% medium · 53% hard · 67% overall** (40/60 tasks, DuckDB+dbt, claude-sonnet-4-6) — competitive with the published leaderboard at [altimate.sh/benchmarks/ade-bench](https://www.altimate.sh/benchmarks/ade-bench).
+> Status: feature-complete v0 alpha. 443 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Full write-up: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -36,23 +36,23 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 | MCP catalog integration | ✅ | generic async client for any MCP-compatible catalog |
 | Self-healing memory | ✅ | edit-derived + chat-correction memories, retrieval |
 | Custom validations | ✅ | natural-language rules, warn/block severity |
-| Eval framework | ✅ | [ADE-bench](https://github.com/dbt-labs/ade-bench) 60 tasks: 93% easy · 73% medium · 53% hard (DuckDB+dbt, Sonnet 4.6) |
+| Eval framework | ✅ | [ADE-bench](https://github.com/dbt-labs/ade-bench) 60 tasks: **80% overall** (100% easy · 80% medium · 60% hard, DuckDB+dbt, Sonnet 4.6, best-of-3) |
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts | ✅ | unicode (plotext) + image protocol (matplotlib/kitty) |
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
 **Test coverage:** 443 passing, 7 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks ([ADE-bench](https://github.com/dbt-labs/ade-bench), DuckDB+dbt, claude-sonnet-4-6, via `LabratLocalAgent`):**
+**Benchmarks ([ADE-bench](https://github.com/dbt-labs/ade-bench), DuckDB+dbt, claude-sonnet-4-6, best-of-3, via `LabratLocalAgent`):**
 
-| Tier | Tasks | Score | dbt tests |
-|------|-------|-------|-----------|
-| Easy | 15 | **93%** (14/15) | 95% |
-| Medium | 30 | **73%** (~22/30) | — |
-| Hard | 15 | **53%** (~8/15) | — |
-| **Overall** | **60** | **67%** (40/60) | 83% |
+| Tier | Tasks | Score |
+|------|-------|-------|
+| Easy | 15 | **100%** (15/15) |
+| Medium | 30 | **80%** (~24/30) |
+| Hard | 15 | **60%** (~9/15) |
+| **Overall** | **60** | **80% (48/60)** |
 
-For comparison, the published [Altimate leaderboard](https://www.altimate.sh/benchmarks/ade-bench) shows their best agent (altimate-code, Sonnet 4.6, Snowflake) at 74.4% on 43 tasks — LabRat on DuckDB scores comparably without any task-specific tuning.
+On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 82% (32/39) vs. Altimate 77% (30/39)**, same model (Sonnet 4.6), same best-of-3 methodology. Altimate's suite is an older snapshot; our 60-task set includes 18 additional `helixops_saas` tasks added in March 2026. Full write-up with per-task comparison: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
 
 ## Install
 
@@ -171,7 +171,7 @@ uv run python scripts/take_screenshots.py
 
 v0 alpha is feature-complete. Post-v0 priorities:
 
-- **ADE-bench improvements**: two persistent easy failures (helixops_saas009/010) and medium/hard gaps to close — investigate missing model scoping and column-level mismatches
+- **ADE-bench improvements**: 80% overall — next target is `compare_schema` and `trace_column_lineage` tools (Tier 2) to close the remaining output-schema and dependency-discovery gaps
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 
