@@ -1,8 +1,9 @@
 # DAB-Bench Integration Design
 
-**Status:** Draft (2026-05-27)
+**Status:** Draft (2026-05-27, revised 2026-05-28 to align with unified-suite layout)
 **Branch:** `feat/dab-integration` (fully isolated; abandonable if regressions occur)
 **Author:** Ege (via Claude brainstorm)
+**Related:** [`2026-05-28-unified-benchmark-suite-design.md`](2026-05-28-unified-benchmark-suite-design.md) — file layout and protocol come from there; this spec is the DAB-specific contract on top.
 
 ## Goals
 
@@ -58,18 +59,26 @@ src/labrat/
 │       ├── list_tables.py        # CHANGED — same
 │       └── describe_table.py     # CHANGED — same
 └── eval/
-    ├── suites/
-    │   ├── dab.py                # NEW — DabSuite
-    │   └── ade_smoke.py          # NEW — fixed 9-task regression smoke set
-    ├── runners/
-    │   └── dab_runner.py         # NEW — pass@5, resumable, parallel
-    └── validators/
-        └── dab.py                # NEW — wraps per-query validate.py
+    ├── types.py                  # NEW — BenchmarkTask / TrialResult / AggregateScore / BenchmarkReport / BenchmarkSuite protocol (per unified-suite spec)
+    ├── smoke.py                  # NEW — SubsetSuite + ade_smoke_suite()  (replaces the originally-proposed eval/suites/ade_smoke.py)
+    └── benchmarks/
+        ├── dab/                  # NEW
+        │   ├── suite.py          # DabSuite implements BenchmarkSuite
+        │   ├── env.py            # multi-DB ToolContext factory
+        │   ├── scorer.py         # wraps per-query validate.py  (was: eval/validators/dab.py)
+        │   └── reporter.py       # submission.json writer
+        └── ade_bench/            # NEW — port from legacy eval/suites/ade_bench.py + eval/runners/ade_bench_runner.py
+            ├── suite.py
+            ├── external_runner.py
+            └── reporter.py
 
 scripts/
 ├── dab_setup.py                  # NEW — one-time PG/Mongo data loader
-└── eval_dab.py                   # NEW — CLI entrypoint mirror of eval_ade_bench.py
+├── eval_dab.py                   # NEW — CLI entrypoint; hosts DAB's interim runner (concurrency / jsonl / resumability) in Phase 1; switches to BenchmarkOrchestrator in Phase 4
+└── run_smoke_regression.py       # NEW — runs ade_smoke_suite() and diffs against tests/baselines/ade_smoke_baseline.json
 ```
+
+**Layout note:** the originally-proposed `eval/suites/dab.py`, `eval/runners/dab_runner.py`, `eval/validators/dab.py`, and `eval/suites/ade_smoke.py` were superseded by the unified-suite layout (see related spec). DAB's per-trial logic lives in `benchmarks/dab/suite.py`; concurrency / jsonl / resumability live inline in `scripts/eval_dab.py` during Phase 1 and migrate to `eval/orchestrator.py` in Phase 4.
 
 ### Multi-DB ToolContext
 
@@ -174,16 +183,18 @@ This is **non-trivial**: Mongo's lack of schema is a real impedance mismatch. Th
 
 ## DAB Eval Infrastructure
 
-### `DabSuite` (`src/labrat/eval/suites/dab.py`)
+### `DabSuite` (`src/labrat/eval/benchmarks/dab/suite.py`)
 
 - **Enumeration:** walks `<dab_dir>/query_*/query*/` to build an `EvalCase` per (dataset × query) pair
 - **EvalCase fields:** `id` (`"<dataset>:<query_n>"`), `question`, `dataset`, `db_config` (parsed YAML), `db_description`, `validator_path`
 - **Hint flag:** `DabSuite(hints=True)` reads `db_description_withhint.txt` (preferred for competitive submission); `hints=False` reads `db_description.txt`
 - **Filtering:** `datasets=[...]`, `queries=[...]` (subset selection for dev iteration)
 
-### `DabRunner` (`src/labrat/eval/runners/dab_runner.py`)
+### DAB interim runner (in `scripts/eval_dab.py` during Phase 1; → `eval/orchestrator.py` in Phase 4)
 
-Per-trial flow:
+`DabSuite` implements `BenchmarkSuite.run_trial`, which is the per-trial flow below. The surrounding interim runner (concurrency, jsonl streaming, resumability) lives inline in `scripts/eval_dab.py` during Phase 1 and migrates to the shared `BenchmarkOrchestrator` in Phase 4. The interim runner must contain no DAB-specific logic — see the unified-suite spec's Phase 4 commitment.
+
+Per-trial flow (= `DabSuite.run_trial`):
 1. Build `ToolContext` with `connections` populated from `db_config.yaml` (DuckDB always present as primary; PG/Mongo/SQLite added as named connections)
 2. System prompt: `db_description` text + standard LabRat agent instructions + DAB-specific guidance ("answer in plain text, return your final answer once the question is fully resolved")
 3. Run `AgentLoop` with `max_turns=100`
@@ -202,7 +213,7 @@ Resumability:
 - On startup, read existing `trials.jsonl` and skip already-recorded `(dataset, query, run)` tuples
 - Resume is a first-class flow, not a recovery edge case
 
-### `DabValidator` (`src/labrat/eval/validators/dab.py`)
+### DAB scorer (`src/labrat/eval/benchmarks/dab/scorer.py`)
 
 Thin wrapper that imports each `validate.py` as a module and calls `validate(llm_output: str) -> (bool, str)`. Catches import/runtime errors, treats as `(False, "validator_error: <msg>")`.
 
@@ -246,7 +257,7 @@ Three layers with different cadences.
 
 ### Layer 2: ADE-bench regression smoke (phase boundaries)
 
-**File:** `src/labrat/eval/suites/ade_smoke.py` — fixed 9-task ADE-bench subset, codified in source.
+**File:** `src/labrat/eval/smoke.py` — `SubsetSuite` over `AdeBenchSuite` with a fixed 9-task ID list. Composition, not a hardcoded suite class. See unified-suite spec's "Smoke Regression" section.
 
 Composition (selected in Phase 0, then immutable):
 - **3 easy** — one per family among `analytics_engineering`, `asana`, `f1` (different hint-injection paths)
@@ -292,20 +303,27 @@ Each phase has explicit entry/exit gates. Regression check at every boundary.
 
 **Exit:** spike works (or pivot decision made), all DBs loaded, smoke baseline recorded.
 
-### Phase 1a — Multi-DB foundation (1 week)
+### Phase 1a — Multi-DB foundation + unified-suite scaffolding (1 week)
 
 **Entry:** Phase 0 exit met.
 
-1. `ToolContext` change with backwards-compat shims
-2. `DabSuite` enumeration (no runner yet)
-3. `DabRunner` v0 — single-trial-per-query, no pass@5, no resumability
-4. End-to-end run on the 5 DuckDB+SQLite-only datasets (~17 queries × 1 trial)
-5. Record per-query results, eyeball answer quality
+1. **Unified-suite scaffolding** (per [`2026-05-28-unified-benchmark-suite-design.md`](2026-05-28-unified-benchmark-suite-design.md)):
+   - Create `src/labrat/eval/types.py` with `BenchmarkTask`, `TrialResult`, `AggregateScore`, `BenchmarkReport`, `BenchmarkSuite` protocol.
+   - Port `eval/suites/ade_bench.py` + `eval/runners/ade_bench_runner.py` to `eval/benchmarks/ade_bench/`. Pass port-acceptance test (run one easy task on legacy and new shapes; results match). Delete legacy paths.
+   - Create `eval/smoke.py` with `SubsetSuite` + `ade_smoke_suite()`. Populate `ADE_SMOKE_TASK_IDS` from Phase 0 selection.
+   - Recapture `tests/baselines/ade_smoke_baseline.json` on the new shape (replaces any baseline captured on legacy code).
+   - Create `eval/benchmarks/spider2_dbt/README.md` referencing the unified-suite spec.
+2. `ToolContext` change with backwards-compat shims
+3. `DabSuite` enumeration (no runner yet) — implements `BenchmarkSuite.tasks()`
+4. `DabSuite.run_trial` v0 — single-trial-per-query, no pass@5, no resumability. Surrounding interim runner is inline in `scripts/eval_dab.py`, must contain no DAB-specific logic.
+5. End-to-end run on the 5 DuckDB+SQLite-only datasets (~17 queries × 1 trial)
+6. Record per-query results, eyeball answer quality
 
 **Exit gate:**
 - All 17 queries complete without runner crashes
 - `submission.json` shape validates against DAB schema
-- **ADE smoke regression check passes**
+- AdeBenchSuite port-acceptance test passes (legacy vs new produce matching results)
+- **ADE smoke regression check passes** (running through the new shape)
 
 ### Phase 1b — All datasets, full submission (2 weeks)
 
