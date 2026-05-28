@@ -11,10 +11,10 @@ uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
 
-# Lint / format / types
-uv run ruff check .
-uv run ruff format .
-uv run pyright
+# Lint / format / types — run all three before committing
+uv run ruff format .          # auto-fixes formatting (run this first)
+uv run ruff check .           # linting (must be clean)
+uv run pyright                # type checking (must be clean)
 
 # Run the app
 uv run labrat
@@ -96,6 +96,19 @@ for d in sorted(Path('tasks').iterdir()):
 **decisions.md** is the living design log — add a dated entry for every significant architectural decision made in this repo.
 
 **TESTING.md** is the manual TUI testing guide — step-by-step commands and verification conditions for milestones, using `tests/fixtures/sample_dbs/ecommerce.duckdb`. Consult it before manual UI testing rather than improvising.
+
+## Before every commit
+
+Run in this order — CI enforces all three:
+
+```bash
+uv run ruff format .   # must run first; fixes formatting in-place
+uv run ruff check .    # must be clean
+uv run pyright         # must be clean
+uv run pytest -q       # must pass
+```
+
+`ruff format` must come before `ruff check` — format violations are check failures too.
 
 ## Key conventions
 
