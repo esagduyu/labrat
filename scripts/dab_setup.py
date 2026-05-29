@@ -22,6 +22,7 @@ DEFAULT_DAB_DIR = Path("~/repos/DataAgentBench").expanduser()
 
 def pg_database_exists(name: str) -> bool:
     """True if a PG database with this name exists."""
+    name = name.lower()
     result = subprocess.run(
         [
             "psql",
@@ -40,7 +41,13 @@ def pg_database_exists(name: str) -> bool:
 
 
 def pg_load_dataset(name: str, sql_file: Path) -> None:
-    """Create PG database `name` and load `sql_file`. Idempotent."""
+    """Create PG database `name` and load `sql_file`. Idempotent.
+
+    Caveat: if CREATE DATABASE succeeds but the SQL load fails, the empty DB
+    persists and a retry will skip with 'already loaded'. To retry a failed
+    load, manually `DROP DATABASE <name>` first.
+    """
+    name = name.lower()
     if pg_database_exists(name):
         print(f"  [pg] {name}: already loaded, skipping")
         return
@@ -118,7 +125,10 @@ def main(argv: list[str] | None = None) -> int:
                 db_name = spec.get("db_name")
                 sql_rel = spec.get("sql_file")
                 if not db_name or not sql_rel:
-                    print(f"  [pg] {client_name}: config missing db_name or sql_file — skipping")
+                    print(
+                        f"  [pg] {client_name}: config missing db_name or sql_file — skipping",
+                        file=sys.stderr,
+                    )
                     continue
                 sql_file = dataset_dir / sql_rel
                 if not sql_file.exists():
@@ -133,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
                 dump_rel = spec.get("dump_folder")
                 if not db_name or not dump_rel:
                     print(
-                        f"  [mongo] {client_name}: config missing db_name or dump_folder — skipping"
+                        f"  [mongo] {client_name}: config missing db_name or dump_folder — skipping",
+                        file=sys.stderr,
                     )
                     continue
                 dump_dir = dataset_dir / dump_rel

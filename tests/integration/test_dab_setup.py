@@ -6,11 +6,18 @@ that won't collide with real DAB datasets.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
 
 from scripts.dab_setup import pg_database_exists, pg_load_dataset
+
+_RUN_PG = os.environ.get("LABRAT_RUN_PG_TESTS")
+
+pytestmark = pytest.mark.skipif(
+    not _RUN_PG, reason="Set LABRAT_RUN_PG_TESTS=1 to run Postgres integration tests"
+)
 
 _SENTINEL_DB = "dabsetup_test_sentinel"
 
