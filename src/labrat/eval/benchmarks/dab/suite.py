@@ -200,7 +200,30 @@ class DabSuite:
         )
 
     def aggregate(self, results: list[TrialResult]) -> AggregateScore:
-        raise NotImplementedError("Implemented in Task 21")
+        if not results:
+            return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
+
+        per_task: dict[str, list[bool]] = {}
+        for r in results:
+            per_task.setdefault(r.task_id, []).append(r.passed)
+        per_task_pass_rate = {tid: sum(passes) / len(passes) for tid, passes in per_task.items()}
+
+        by_dataset: dict[str, list[float]] = {}
+        for tid, pr in per_task_pass_rate.items():
+            dataset = tid.split(":", 1)[0]
+            by_dataset.setdefault(dataset, []).append(pr)
+        dataset_means = {ds: sum(prs) / len(prs) for ds, prs in by_dataset.items()}
+
+        return AggregateScore(
+            overall=sum(dataset_means.values()) / len(dataset_means),
+            per_task=per_task_pass_rate,
+            by_dimension={"dataset": dataset_means},
+            n_tasks=len(per_task),
+            n_trials=len(results),
+            n_passes=sum(1 for r in results if r.passed),
+        )
 
     def write_submission(self, report: BenchmarkReport, output_dir: Path) -> None:
-        raise NotImplementedError("Implemented in Task 22")
+        from labrat.eval.benchmarks.dab.reporter import write_submission_json
+
+        write_submission_json(report, output_dir)
