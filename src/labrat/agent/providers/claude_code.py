@@ -74,7 +74,7 @@ def _build_prompt(
         parts.append("AVAILABLE TOOLS:")
         parts.append(
             "If you need to call a tool, respond with ONLY a single-line JSON object:\n"
-            '  {"type":"tool_use","name":"<tool_name>","input":{...}}\n'
+            '  {"call":"<tool_name>","input":{...}}\n'
             "If your answer is complete (no more tool calls needed), respond with plain text."
         )
         for t in tools:
@@ -134,7 +134,14 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
 
     # Strip ANTHROPIC_API_KEY so the CLI uses stored OAuth credentials (Max
     # subscription) rather than falling back to API-key billing.
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    # Also strip CLAUDECODE / CLAUDE_CODE_* so a nested `claude --print` call
+    # inside a Claude Code session doesn't try to communicate back to the
+    # parent session, which causes the subprocess to hang indefinitely.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k != "ANTHROPIC_API_KEY" and k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE")
+    }
 
     cmd = [
         "claude",
@@ -146,7 +153,7 @@ async def _run_claude_p(prompt: str, model: str, timeout: int) -> str:
         "--model",
         model,
         "--tools",
-        "",
+        "",  # disable built-in tools; our protocol uses {"call":...} not {"type":"tool_use",...}
     ]
 
     # Use asyncio.to_thread + subprocess.run instead of create_subprocess_exec.
@@ -199,15 +206,15 @@ def _parse_response(text: str) -> list[ContentBlock]:
 
     for line in stripped.splitlines():
         line = line.strip()
-        if not (line.startswith("{") and '"tool_use"' in line):
+        if not (line.startswith("{") and '"call"' in line):
             continue
         try:
             obj = json.loads(line)
-            if obj.get("type") == "tool_use" and isinstance(obj.get("name"), str):
+            if isinstance(obj.get("call"), str):
                 return [
                     ToolUseBlock(
                         id=f"tu_{uuid.uuid4().hex[:8]}",
-                        name=obj["name"],
+                        name=obj["call"],
                         input=obj.get("input") or {},
                     )
                 ]

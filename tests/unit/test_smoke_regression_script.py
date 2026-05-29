@@ -6,29 +6,33 @@ from scripts.run_smoke_regression import RegressionVerdict, compare_against_base
 
 
 def test_compare_pass_when_all_within_envelope():
-    baseline = {"t1": {"passes": 8, "attempts": 9}, "t2": {"passes": 9, "attempts": 9}}
-    current = {"t1": 8 / 9, "t2": 9 / 9}
+    # With early-exit baseline: passes ∈ {0..n_runs}, current rate ∈ {0, 1/n_attempts}
+    baseline = {"t1": {"passes": 3, "attempts": 9}, "t2": {"passes": 3, "attempts": 9}}
+    current = {"t1": 1 / 3, "t2": 1 / 3}
     verdict = compare_against_baseline(baseline, current)
     assert verdict.kind == "pass"
 
 
 def test_compare_hard_fail_on_strong_drop():
-    baseline = {"t1": {"passes": 8, "attempts": 9}}
-    current = {"t1": 3 / 9}
+    # Hard fail: task that passed all 3 baseline runs now passes zero check attempts.
+    baseline = {"t1": {"passes": 3, "attempts": 9}}
+    current = {"t1": 0.0}
     verdict = compare_against_baseline(baseline, current)
     assert verdict.kind == "hard_fail"
     assert "t1" in verdict.message
 
 
 def test_compare_soft_signal_on_small_drop():
+    # t3 was solvable (passes=1 > 0) but not "always passing" (passes < 3),
+    # so it can't trigger hard_fail; it going to 0 triggers soft_signal only.
     baseline = {
-        "t1": {"passes": 9, "attempts": 9},
-        "t2": {"passes": 9, "attempts": 9},
-        "t3": {"passes": 9, "attempts": 9},
+        "t1": {"passes": 3, "attempts": 9},
+        "t2": {"passes": 3, "attempts": 9},
+        "t3": {"passes": 1, "attempts": 9},
     }
-    current = {"t1": 1.0, "t2": 1.0, "t3": 0.66}  # one task drops a bit
+    current = {"t1": 1 / 3, "t2": 1 / 3, "t3": 0.0}
     verdict = compare_against_baseline(baseline, current)
-    assert verdict.kind in ("soft_signal", "pass")
+    assert verdict.kind == "soft_signal"
 
 
 def test_verdict_exit_codes():

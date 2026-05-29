@@ -15,13 +15,14 @@ Real DAB repo layout (~/repos/DataAgentBench/):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from labrat.eval.types import (
     AggregateScore,
@@ -31,64 +32,82 @@ from labrat.eval.types import (
 )
 
 _DAB_SYSTEM_PROMPT = (
-    "You are LabRat, a data agent answering a question about a database. "
-    "Use the available tools to explore tables and run SQL. "
+    "You are a data analyst. Query the databases using Python+DuckDB/SQLite via Bash. "
     "Return your final answer as plain text once you are confident."
 )
+
+_DAB_TIMEOUT = 300  # per-turn timeout for the claude subprocess
 
 
 async def _invoke_agent(
     prompt: str,
     ctx: Any,
-    max_turns: int = 100,
+    max_turns: int = 15,
 ) -> dict[str, Any]:
-    """Run AgentLoop and return final_text + tool_calls count.
+    """Invoke claude --print with Bash tool to query DuckDB/SQLite databases.
+
+    Uses --disable-slash-commands (skip superpowers skill overhead) and
+    --dangerously-skip-permissions (auto-approve Bash) so the model can run
+    Python+DuckDB queries directly without a permission dialog.
 
     Extracted as a module-level helper so unit tests can patch it.
     Will be replaced by LabRatAgentDriver in Phase 4.
     """
-    from labrat.agent.loop import AgentLoop
-    from labrat.agent.providers.claude_code import ClaudeCodeProvider
-    from labrat.agent.tools.base import ToolRegistry
-    from labrat.agent.tools.column_stats import ColumnStatsTool
-    from labrat.agent.tools.describe_table import DescribeTableTool
-    from labrat.agent.tools.explain_sql import ExplainSqlTool
-    from labrat.agent.tools.list_tables import ListTablesTool
-    from labrat.agent.tools.run_sql import RunSqlTool
-    from labrat.agent.tools.sample_rows import SampleRowsTool
-    from labrat.agent.tools.search_columns import SearchColumnsTool
+    import shutil
+    import subprocess
 
-    registry = ToolRegistry()
-    for tool in [
-        ListTablesTool(),
-        DescribeTableTool(),
-        SampleRowsTool(),
-        SearchColumnsTool(),
-        ColumnStatsTool(),
-        ExplainSqlTool(),
-        RunSqlTool(),
-    ]:
-        registry.register(tool)
+    if not shutil.which("claude"):
+        raise RuntimeError(
+            "claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
+        )
 
-    text_parts: list[str] = []
-    loop = AgentLoop(
-        provider=ClaudeCodeProvider(),
-        registry=registry,
-        ctx=ctx,
-        system=_DAB_SYSTEM_PROMPT,
-    )
-    for _ in range(max_turns):
-        await loop.run(prompt, on_text=text_parts.append)
-        break  # single-turn; loop.run handles tool round-trips internally
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k != "ANTHROPIC_API_KEY" and k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE")
+    }
 
-    tool_calls = sum(
-        1
-        for msg in loop.history
-        if msg["role"] == "assistant"
-        for block in cast(list[dict[str, Any]], msg.get("content") or [])
-        if block.get("type") == "tool_use"
-    )
-    return {"final_text": "".join(text_parts), "tool_calls": tool_calls}
+    cmd = [
+        "claude",
+        "--print",
+        "--output-format",
+        "json",
+        "--max-turns",
+        str(max_turns),
+        "--model",
+        "claude-sonnet-4-6",
+        "--disable-slash-commands",
+        "--dangerously-skip-permissions",
+    ]
+
+    full_prompt = f"SYSTEM:\n{_DAB_SYSTEM_PROMPT}\n\n{prompt}"
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            input=full_prompt.encode(),
+            capture_output=True,
+            timeout=_DAB_TIMEOUT,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"claude --print timed out after {_DAB_TIMEOUT}s") from None
+
+    if result.returncode != 0:
+        err = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"claude CLI error: {err[:300]}")
+
+    raw = result.stdout.decode(errors="replace").strip()
+    final_text = raw
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "result" in data:
+            final_text = str(data["result"])  # type: ignore[arg-type]
+    except json.JSONDecodeError:
+        pass
+
+    return {"final_text": final_text, "tool_calls": 0}
 
 
 _DATASET_DIR_RE = re.compile(r"^query_(.+)$", re.IGNORECASE)
@@ -174,17 +193,42 @@ class DabSuite:
     async def run_trial(
         self, task: BenchmarkTask, trial_num: int, scratch_dir: Path
     ) -> TrialResult:
-        from labrat.eval.benchmarks.dab.env import build_dab_tool_context
+        import yaml
+
         from labrat.eval.benchmarks.dab.scorer import score_with_validator
 
         scratch_dir.mkdir(parents=True, exist_ok=True)
         db_config_path = Path(task.config["db_config_path"])
         validator_path = Path(task.config["validator_path"])
+        dataset_dir = db_config_path.parent
 
-        ctx = build_dab_tool_context(db_config_path)
+        # Build db-access preamble so the model can query via Python+DuckDB/SQLite.
+        config = yaml.safe_load(db_config_path.read_text())
+        clients: dict[str, Any] = config.get("db_clients") or {}
+        db_lines: list[str] = []
+        for name, spec in clients.items():
+            db_type = str(spec.get("db_type", "")).lower()
+            db_path = dataset_dir / str(spec.get("db_path", ""))
+            if db_type == "duckdb":
+                db_lines.append(
+                    f'  {name} (DuckDB): python3 -c "import duckdb; '
+                    f"conn = duckdb.connect('{db_path}'); "
+                    "print(conn.execute('SELECT ...').fetchall())\""
+                )
+            elif db_type == "sqlite":
+                db_lines.append(
+                    f'  {name} (SQLite): python3 -c "import sqlite3; '
+                    f"conn = sqlite3.connect('{db_path}'); "
+                    "print(conn.execute('SELECT ...').fetchall())\""
+                )
+
+        db_preamble = "You can query these databases via Bash (Python is available):\n" + "\n".join(
+            db_lines
+        )
+        enriched_prompt = f"{db_preamble}\n\n{task.prompt}"
 
         t0 = time.monotonic()
-        agent_out = await _invoke_agent(prompt=task.prompt, ctx=ctx)
+        agent_out = await _invoke_agent(prompt=enriched_prompt, ctx=None)
         latency = time.monotonic() - t0
 
         passed, reason = score_with_validator(validator_path, agent_out["final_text"])
