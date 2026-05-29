@@ -71,8 +71,22 @@ def compare_against_baseline(
     return RegressionVerdict(kind="pass", message="All tasks within envelope")
 
 
+class InfraFailureError(RuntimeError):
+    """A trial returned an infra-level failure (e.g. quota exceeded, agent crashed).
+
+    Raised to abort the capture rather than count infra failures as semantic
+    misses, which would silently drag the baseline down.
+    """
+
+
 async def _run_smoke(n_attempts: int) -> dict[str, float]:
-    """Run the smoke suite once at n_attempts per task; return per-task pass-rate."""
+    """Run the smoke suite once at n_attempts per task; return per-task pass-rate.
+
+    Raises InfraFailureError if any trial returns reason starting with `infra:`.
+    Budget exhaustion (Opus burns ~5x faster than Sonnet) showed up as
+    `infra:unknown_agent_error` mid-capture; silently counting those as misses
+    produced a useless baseline. Fail fast and let the operator restart.
+    """
     suite = ade_smoke_suite()
     tasks = list(suite.tasks())
     per_task_passes: dict[str, int] = {t.id: 0 for t in tasks}
@@ -81,6 +95,11 @@ async def _run_smoke(n_attempts: int) -> dict[str, float]:
             scratch = Path("runs") / "ade_smoke" / "scratch" / f"{task.id}__attempt{attempt}"
             scratch.mkdir(parents=True, exist_ok=True)
             r = await suite.run_trial(task, attempt, scratch)
+            if r.reason and r.reason.startswith("infra:"):
+                raise InfraFailureError(
+                    f"Infra failure on {task.id} attempt {attempt}: {r.reason}. "
+                    "Aborting capture rather than corrupting the baseline."
+                )
             if r.passed:
                 per_task_passes[task.id] += 1
                 break  # best-of-k early exit
