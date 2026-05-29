@@ -59,9 +59,6 @@ ADE_SMOKE_TASK_IDS: list[str] = [
 def ade_smoke_suite() -> BenchmarkSuite:
     """Build the ADE smoke regression suite — frozen task subset of AdeBenchSuite."""
     # Import locally to avoid a top-level cycle if AdeBenchSuite ever depends on smoke.
-    # type: ignore[import-not-found] will be resolved when AdeBenchSuite lands in Task 11.
-    from labrat.eval.benchmarks.ade_bench.suite import (  # type: ignore[import-not-found]
-        AdeBenchSuite,  # type: ignore[no-redef]
-    )
+    from labrat.eval.benchmarks.ade_bench.suite import AdeBenchSuite
 
-    return SubsetSuite(AdeBenchSuite(), ADE_SMOKE_TASK_IDS, name="ade-smoke")  # type: ignore[arg-type]
+    return SubsetSuite(AdeBenchSuite(), ADE_SMOKE_TASK_IDS, name="ade-smoke")
