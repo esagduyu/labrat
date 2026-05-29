@@ -139,3 +139,25 @@ prompts:
     assert score.by_dimension["difficulty"]["easy"] == 1.0
     assert score.by_dimension["difficulty"]["medium"] == 0.0
     assert score.overall == 0.5
+
+
+def test_ade_bench_suite_accepts_missing_project_type(tmp_path):
+    """A variant with no project_type defaults to dbt (legacy behavior)."""
+    d = tmp_path / "tasks" / "fake_easy_01"
+    d.mkdir(parents=True)
+    (d / "task.yaml").write_text(
+        """
+task_id: fake_easy_01
+status: ready
+difficulty: easy
+variants:
+  - db_type: duckdb
+prompts:
+  - key: base
+    prompt: x
+"""
+    )
+    suite = AdeBenchSuite(ade_bench_dir=tmp_path)
+    tasks = list(suite.tasks())
+    assert len(tasks) == 1
+    assert tasks[0].id == "fake_easy_01"

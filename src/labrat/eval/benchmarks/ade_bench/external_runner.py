@@ -40,7 +40,13 @@ def run_one(
     ]
     if no_diffs:
         cmd.append("--no-diffs")
-    subprocess.run(cmd, cwd=ade_bench_dir, check=True)
+    subprocess.run(
+        cmd,
+        cwd=ade_bench_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
     experiments = ade_bench_dir / "experiments"
     if not experiments.exists():
