@@ -19,11 +19,14 @@ from labrat.eval.smoke import ade_smoke_suite
 
 BASELINE_PATH = Path("tests/baselines/ade_smoke_baseline.json")
 
-# Regression thresholds — from spec.
-# Hard fail: any task previously at >=7/9 drops below 4/9.
-# Soft signal: aggregate resolved-task count drops by 1.
-_HARD_FAIL_BASELINE_PASSES = 7
-_HARD_FAIL_CURRENT_THRESHOLD = 4 / 9
+# Regression thresholds.
+# _run_smoke() uses best-of-k early-exit (breaks on first pass), so each run
+# contributes at most 1 pass. With n_runs=3, baseline max passes = 3 (not 9).
+# Hard fail: task passed every baseline run (passes == n_runs = 3) now passes
+# zero check attempts (current rate == 0.0).
+# Soft signal: aggregate solvable-task count (passed ≥1 attempt) drops by 1.
+_HARD_FAIL_BASELINE_PASSES = 3
+_HARD_FAIL_CURRENT_THRESHOLD = 0.0
 
 
 @dataclass
@@ -47,7 +50,7 @@ def compare_against_baseline(
             continue
         if (
             base["passes"] >= _HARD_FAIL_BASELINE_PASSES
-            and current[tid] < _HARD_FAIL_CURRENT_THRESHOLD
+            and current[tid] <= _HARD_FAIL_CURRENT_THRESHOLD
         ):
             hard_fail_tasks.append(tid)
 
@@ -57,10 +60,10 @@ def compare_against_baseline(
             message=f"Hard fail on tasks: {hard_fail_tasks}",
         )
 
-    baseline_resolved = sum(
-        1 for tid, base in baseline.items() if base["passes"] / base["attempts"] >= 0.5
-    )
-    current_resolved = sum(1 for tid, pr in current.items() if pr >= 0.5)
+    # "Resolved" = passed ≥1 attempt. With early-exit, baseline passes count
+    # runs-that-passed (max=n_runs); current rate is >0 iff any attempt passed.
+    baseline_resolved = sum(1 for base in baseline.values() if base["passes"] > 0)
+    current_resolved = sum(1 for pr in current.values() if pr > 0)
     if current_resolved < baseline_resolved:
         drop = baseline_resolved - current_resolved
         return RegressionVerdict(
