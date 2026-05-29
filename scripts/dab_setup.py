@@ -77,11 +77,19 @@ def mongo_database_exists(name: str) -> bool:
 
 
 def mongo_load_dataset(name: str, dump_dir: Path) -> None:
-    """Restore `dump_dir` into Mongo database `name`. Idempotent."""
+    """Restore `dump_dir` into Mongo database `name`. Idempotent.
+
+    The DAB dump layout is ``dump_dir/<db_name>/<collection>.bson``.  We pass
+    ``dump_dir`` to mongorestore *without* ``--db`` so it uses the nested
+    directory name as the database name — this is the standard mongodump layout
+    when ``--db`` was supplied at dump time.  Passing ``--db <name>`` on
+    restore would require BSON files directly in ``dump_dir``, which is not the
+    case here.
+    """
     if mongo_database_exists(name):
         print(f"  [mongo] {name}: already loaded, skipping")
         return
-    subprocess.run(["mongorestore", "--db", name, str(dump_dir)], check=True)
+    subprocess.run(["mongorestore", str(dump_dir)], check=True)
     print(f"  [mongo] {name}: loaded from {dump_dir}")
 
 
