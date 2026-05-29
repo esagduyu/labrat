@@ -52,7 +52,18 @@ class SubsetSuite:
 # Frozen smoke task set. Populated from docs/superpowers/notes/2026-05-29-ade-smoke-selection.md.
 # Changing this invalidates tests/baselines/ade_smoke_baseline.json.
 ADE_SMOKE_TASK_IDS: list[str] = [
-    # Populated in Task 14 once AdeBenchSuite exists.
+    # easy
+    "analytics_engineering001",
+    "asana001",
+    "f1004",
+    # medium
+    "intercom001",
+    "f1001",
+    "helixops_saas005",
+    # hard
+    "helixops_saas016",
+    "analytics_engineering006",
+    "airbnb013",
 ]
 
 
