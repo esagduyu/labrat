@@ -58,8 +58,8 @@ def run_one(
             "experiment_dir": None,
         }
     most_recent = max(experiments.iterdir(), key=lambda p: p.stat().st_mtime)
-    metadata_path = most_recent / "results_metadata.jsonl"
-    if not metadata_path.exists():
+    results_path = most_recent / "results.json"
+    if not results_path.exists():
         return {
             "task_id": task_id,
             "is_resolved": False,
@@ -68,17 +68,16 @@ def run_one(
             "experiment_dir": str(most_recent),
         }
 
-    with metadata_path.open() as f:
-        for line in f:
-            row = json.loads(line.strip())
-            if row.get("task_id") == task_id:
-                return {
-                    "task_id": task_id,
-                    "is_resolved": bool(row.get("is_resolved", False)),
-                    "failure_mode": row.get("failure_mode", "none"),
-                    "runtime_ms": int(row.get("runtime_ms") or 0),
-                    "experiment_dir": str(most_recent),
-                }
+    data: dict[str, Any] = json.loads(results_path.read_text())
+    for row in data.get("results", []):
+        if row.get("task_id") == task_id:
+            return {
+                "task_id": task_id,
+                "is_resolved": bool(row.get("is_resolved", False)),
+                "failure_mode": row.get("failure_mode", "none"),
+                "runtime_ms": int(row.get("runtime_ms") or 0),
+                "experiment_dir": str(most_recent),
+            }
 
     return {
         "task_id": task_id,
