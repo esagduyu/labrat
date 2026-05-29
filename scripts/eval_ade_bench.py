@@ -13,12 +13,39 @@ Requires:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+
+from labrat.eval.benchmarks.ade_bench.suite import AdeBenchSuite
+from labrat.eval.reporting import report_to_markdown
+from labrat.eval.types import BenchmarkReport, TrialResult
+
+
+async def run(suite: AdeBenchSuite, task_ids: list[str] | None, n_attempts: int) -> BenchmarkReport:
+    tasks = [t for t in suite.tasks() if task_ids is None or t.id in set(task_ids)]
+    trials: list[TrialResult] = []
+    for task in tasks:
+        # Best-of-k: stop early if any attempt passes
+        for attempt in range(n_attempts):
+            scratch = Path("runs") / "ade_bench" / "scratch" / f"{task.id}__trial{attempt}"
+            scratch.mkdir(parents=True, exist_ok=True)
+            r = await suite.run_trial(task, attempt, scratch)
+            trials.append(r)
+            if r.passed:
+                break
+    score = suite.aggregate(trials)
+    return BenchmarkReport(
+        benchmark=suite.name,
+        run_id="ade-bench-local",
+        score=score,
+        trials=trials,
+        config={"n_attempts": n_attempts, "tasks": task_ids},
+    )
 
 
 def main() -> None:
@@ -58,32 +85,22 @@ def main() -> None:
     if not ade_bench_dir.exists():
         sys.exit(f"ADE_BENCH_DIR not found: {ade_bench_dir}")
 
-    from labrat.eval.runners.ade_bench_runner import AdeBenchRunner
-    from labrat.eval.suites.ade_bench import AdeBenchSuite
-
     suite = AdeBenchSuite(ade_bench_dir=ade_bench_dir)
-    cases = suite.cases
-    if args.tasks:
-        ids = set(args.tasks)
-        cases = [c for c in cases if c.id in ids]
-        missing = ids - {c.id for c in cases}
+
+    task_ids: list[str] | None = args.tasks
+    if task_ids is not None:
+        all_task_ids = {t.id for t in suite.tasks()}
+        missing = set(task_ids) - all_task_ids
         if missing:
             print(f"Warning: tasks not found in suite: {', '.join(sorted(missing))}")
 
+    n_tasks = sum(1 for t in suite.tasks() if task_ids is None or t.id in set(task_ids or []))
     print(
-        f"Running {len(cases)} ADE-bench task(s) with agent={args.agent}, n_attempts={args.n_attempts}"
+        f"Running {n_tasks} ADE-bench task(s) with agent={args.agent}, n_attempts={args.n_attempts}"
     )
 
-    runner = AdeBenchRunner(
-        cases=cases,
-        ade_bench_dir=ade_bench_dir,
-        agent=args.agent,
-        output_path=args.output_dir,
-        n_concurrent_trials=args.concurrent,
-        n_attempts=args.n_attempts,
-    )
-    report = runner.run()
-    print(report.to_markdown())
+    report = asyncio.run(run(suite, task_ids, args.n_attempts))
+    print(report_to_markdown(report))
 
 
 if __name__ == "__main__":
