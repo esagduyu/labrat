@@ -106,23 +106,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hints", action="store_true")
     parser.add_argument(
         "--driver",
-        choices=["raw-bash", "labrat-agent"],
+        choices=["raw-bash", "labrat-agent", "claude-mcp"],
         default=None,
         help=(
             "Agent driver. 'raw-bash' (default for new runs) reproduces the Phase 1b "
             "baseline by shelling claude --print with the native Bash tool (Max-plan "
-            "billing). 'labrat-agent' routes the trial through AgentLoop + LabRat tools "
-            "+ AnthropicProvider (metered API billing) — this is the Phase 4 measurement. "
-            "On --output-dir resume, the driver is restored from config.json unless "
-            "overridden here (mismatches are rejected to prevent mixed-driver runs)."
+            "billing). 'labrat-agent' routes through AgentLoop + LabRat tools + "
+            "AnthropicProvider (metered API billing). 'claude-mcp' runs claude --print "
+            "with the LabRat MCP server mounted (Max-plan billing, LabRat tools used "
+            "natively — recommended Phase 4 measurement). On --output-dir resume, "
+            "the driver is restored from config.json unless overridden here "
+            "(mismatches are rejected to prevent mixed-driver runs)."
         ),
     )
     parser.add_argument(
         "--agent-model",
         default=None,
         help=(
-            "Model id used by the labrat-agent driver (default claude-sonnet-4-6 for "
-            "new runs; restored from config.json on resume)."
+            "Model id passed to the agent subprocess for the labrat-agent and "
+            "claude-mcp drivers. Defaults to claude-sonnet-4-6 for new runs (Sonnet, "
+            "to avoid burning Max-plan budget on Opus); restored from config.json on "
+            "resume. Always pass --model explicitly to the underlying claude CLI so "
+            "the subprocess doesn't fall through to whatever the parent session uses."
         ),
     )
     parser.add_argument(

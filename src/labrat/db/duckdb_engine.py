@@ -22,6 +22,11 @@ class DuckDBConnection(Connection):
         self._conn: duckdb.DuckDBPyConnection | None = None
 
     @property
+    def path(self) -> str:
+        """Filesystem path (or ':memory:') this connection was constructed with."""
+        return self._path
+
+    @property
     def _connection(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
             raise RuntimeError("Not connected; call connect() first.")

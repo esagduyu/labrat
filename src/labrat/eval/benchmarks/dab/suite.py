@@ -32,7 +32,11 @@ from labrat.eval.types import (
     TrialResult,
 )
 
-Driver = Literal["raw-bash", "labrat-agent"]
+Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]
+
+# Absolute path to the labrat repo root, needed when generating mcp-config files
+# that reference this codebase via `uv --directory <labrat>`.
+_LABRAT_ROOT = Path(__file__).resolve().parents[4]
 
 _DAB_SYSTEM_PROMPT = (
     "You are a data analyst. Query the databases using Python+DuckDB/SQLite via Bash. "
@@ -251,6 +255,10 @@ class DabSuite:
             final_text, tool_calls, latency = await self._run_trial_labrat_agent(
                 task, db_config_path
             )
+        elif self._driver == "claude-mcp":
+            final_text, tool_calls, latency = await self._run_trial_claude_mcp(
+                task, db_config_path, scratch_dir
+            )
         else:
             final_text, tool_calls, latency = await self._run_trial_raw_bash(task, db_config_path)
 
@@ -323,6 +331,157 @@ class DabSuite:
         agent_out = await _invoke_agent(prompt=enriched_prompt, ctx=None)
         latency = time.monotonic() - t0
         return agent_out["final_text"], int(agent_out["tool_calls"]), latency
+
+    # ── claude-mcp driver (Phase 4 on Max-plan billing) ──────────────────────
+
+    async def _run_trial_claude_mcp(
+        self, task: BenchmarkTask, db_config_path: Path, scratch_dir: Path
+    ) -> tuple[str, int, float]:
+        """Phase 4 driver that uses the LabRat MCP server inside `claude --print`.
+
+        Generates a per-trial mcp-config.json pointing at ``labrat.mcp.server``
+        with the task's DuckDB primary, then shells the claude CLI with
+        ``--model <agent_model>`` (so the subprocess never falls through to
+        whatever model the parent claude session is using). SQLite secondaries
+        are surfaced in the prompt; the model uses the ``attach_database`` MCP
+        tool to bring them in.
+        """
+        import shutil
+        import subprocess
+
+        from labrat.db.duckdb_engine import DuckDBConnection
+        from labrat.eval.benchmarks.dab.env import build_dab_task_env
+
+        if not shutil.which("claude"):
+            raise RuntimeError(
+                "claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
+            )
+
+        env_spec = build_dab_task_env(db_config_path)
+        primary_name = env_spec.ctx.primary
+        primary_conn = env_spec.ctx.connections[primary_name]
+        if not isinstance(primary_conn, DuckDBConnection):
+            raise RuntimeError(
+                f"claude-mcp driver requires a DuckDB primary; got "
+                f"{type(primary_conn).__name__} for {primary_name!r}."
+            )
+
+        mcp_config = {
+            "mcpServers": {
+                "labrat": {
+                    "command": "uv",
+                    "args": [
+                        "--directory",
+                        str(_LABRAT_ROOT),
+                        "run",
+                        "python",
+                        "-m",
+                        "labrat.mcp.server",
+                    ],
+                    "env": {
+                        "LABRAT_MCP_CONNECTIONS": json.dumps(
+                            {
+                                primary_name: {
+                                    "db_type": "duckdb",
+                                    "db_path": primary_conn.path,
+                                }
+                            }
+                        ),
+                        "LABRAT_MCP_PRIMARY": primary_name,
+                    },
+                }
+            }
+        }
+        mcp_config_path = scratch_dir / "mcp-config.json"
+        mcp_config_path.write_text(json.dumps(mcp_config))
+
+        prompt_lines = [
+            "You have a labrat MCP server connected. It exposes data tools "
+            "(list_tables, describe_table, run_sql, attach_database, …) against "
+            f"the primary DuckDB database '{primary_name}'.",
+        ]
+        if env_spec.attachable:
+            prompt_lines.append("")
+            prompt_lines.append(
+                "Secondary databases you can bring in via attach_database (alias / path / db_type):"
+            )
+            for spec in env_spec.attachable:
+                prompt_lines.append(f"  {spec.alias} / {spec.path} / {spec.db_type}")
+            prompt_lines.append("After attach, query tables as <alias>.<table_name> in run_sql.")
+        prompt_lines.extend(
+            [
+                "",
+                "Question:",
+                task.prompt,
+                "",
+                "When confident, respond with the final answer on the last line.",
+            ]
+        )
+        prompt = "\n".join(prompt_lines)
+
+        cmd = [
+            "claude",
+            "--print",
+            "--strict-mcp-config",
+            "--mcp-config",
+            str(mcp_config_path),
+            "--model",
+            self._agent_model,
+            "--permission-mode",
+            "bypassPermissions",
+            "--max-turns",
+            "25",
+            "--output-format",
+            "json",
+        ]
+
+        # Max-plan billing: strip ANTHROPIC_API_KEY so the CLI falls through to
+        # OAuth credentials. Drop CLAUDECODE / CLAUDE_CODE_* so a nested call
+        # under a Claude Code session doesn't try to phone home to the parent.
+        env_vars = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "ANTHROPIC_API_KEY" and k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE")
+        }
+
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                input=prompt.encode(),
+                capture_output=True,
+                timeout=_DAB_TIMEOUT,
+                env=env_vars,
+            )
+        except subprocess.TimeoutExpired:
+            raise TimeoutError(f"claude --print timed out after {_DAB_TIMEOUT}s") from None
+        latency = time.monotonic() - t0
+
+        raw = result.stdout.decode(errors="replace").strip()
+        final_text = raw
+        num_turns = 0
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                if "result" in data:
+                    final_text = str(data["result"])  # type: ignore[arg-type]
+                turns_val = data.get("num_turns", 0)  # type: ignore[arg-type]
+                if isinstance(turns_val, int):
+                    num_turns = turns_val
+        except json.JSONDecodeError:
+            pass
+
+        if result.returncode != 0 and not final_text:
+            err = result.stderr.decode(errors="replace").strip()
+            raise RuntimeError(
+                f"claude --print error (exit {result.returncode}): "
+                f"stderr={err[:200] or '(empty)'} stdout={raw[:200] or '(empty)'}"
+            )
+
+        # num_turns counts assistant rounds; tool calls = rounds beyond the final answer.
+        tool_calls = max(0, num_turns - 1)
+        return final_text, tool_calls, latency
 
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
