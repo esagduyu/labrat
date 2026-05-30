@@ -94,11 +94,11 @@ async def _invoke_agent(
     except subprocess.TimeoutExpired:
         raise TimeoutError(f"claude --print timed out after {_DAB_TIMEOUT}s") from None
 
-    if result.returncode != 0:
-        err = result.stderr.decode(errors="replace").strip()
-        raise RuntimeError(f"claude CLI error: {err[:300]}")
-
     raw = result.stdout.decode(errors="replace").strip()
+    err = result.stderr.decode(errors="replace").strip()
+
+    # claude CLI sometimes exits non-zero but still emits a JSON result (e.g.
+    # error_max_turns). Try to extract the result before deciding to fail.
     final_text = raw
     try:
         data = json.loads(raw)
@@ -106,6 +106,12 @@ async def _invoke_agent(
             final_text = str(data["result"])  # type: ignore[arg-type]
     except json.JSONDecodeError:
         pass
+
+    if result.returncode != 0 and not final_text:
+        raise RuntimeError(
+            f"claude CLI error (exit {result.returncode}): "
+            f"stderr={err[:200] or '(empty)'} stdout={raw[:200] or '(empty)'}"
+        )
 
     return {"final_text": final_text, "tool_calls": 0}
 
