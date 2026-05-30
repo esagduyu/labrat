@@ -1,9 +1,42 @@
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import yaml
 
 from labrat.eval.benchmarks.dab.suite import DabSuite
+
+
+def _make_mixed_db_fixture(tmp_path: Path) -> None:
+    """Fixture with both DuckDB and SQLite databases (like deps_dev_v1/music_brainz_20k)."""
+    dataset_dir = tmp_path / "query_mixed1"
+    dataset_dir.mkdir(parents=True)
+
+    sqlite_path = tmp_path / "pkg.db"
+    sqlite_path.touch()
+    duckdb_path = tmp_path / "proj.duckdb"
+    duckdb_path.touch()
+
+    (dataset_dir / "db_config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "db_clients": {
+                    "package_database": {
+                        "db_type": "sqlite",
+                        "db_path": str(sqlite_path),
+                    },
+                    "project_database": {
+                        "db_type": "duckdb",
+                        "db_path": str(duckdb_path),
+                    },
+                }
+            }
+        )
+    )
+    (dataset_dir / "db_description.txt").write_text("Mixed DB dataset")
+    (dataset_dir / "query1").mkdir()
+    (dataset_dir / "query1" / "query.json").write_text('"Which packages are most used?"')
+    (dataset_dir / "query1" / "validate.py").write_text("def validate(out): return (True, None)\n")
 
 
 def _make_synthetic_fixture(tmp_path: Path) -> None:
@@ -65,6 +98,27 @@ async def test_run_trial_records_failing_answer(tmp_path: Path) -> None:
 
     assert result.passed is False
     assert result.reason
+
+
+async def test_run_trial_prompt_includes_attach_for_duckdb_sqlite_mix(tmp_path: Path) -> None:
+    """When a dataset has DuckDB + SQLite, the prompt must include the ATTACH idiom."""
+    _make_mixed_db_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path)
+    task = next(iter(suite.tasks()))
+
+    captured: list[str] = []
+
+    async def capture_invoke(prompt: str, ctx: Any, **kwargs: Any) -> dict[str, Any]:
+        captured.append(prompt)
+        return {"final_text": "answer", "tool_calls": 0}
+
+    with patch("labrat.eval.benchmarks.dab.suite._invoke_agent", new=capture_invoke):
+        await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+
+    assert captured, "invoke_agent was never called"
+    prompt = captured[0]
+    assert "ATTACH" in prompt, "Cross-DB ATTACH idiom missing from prompt"
+    assert "TYPE SQLITE" in prompt, "SQLITE attachment type missing from prompt"
 
 
 async def test_run_trial_records_validator_error(tmp_path: Path) -> None:

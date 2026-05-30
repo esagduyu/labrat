@@ -212,21 +212,45 @@ class DabSuite:
         config = yaml.safe_load(db_config_path.read_text())
         clients: dict[str, Any] = config.get("db_clients") or {}
         db_lines: list[str] = []
+        duckdb_clients: dict[str, Path] = {}
+        sqlite_clients: dict[str, Path] = {}
         for name, spec in clients.items():
             db_type = str(spec.get("db_type", "")).lower()
             db_path = dataset_dir / str(spec.get("db_path", ""))
             if db_type == "duckdb":
+                duckdb_clients[name] = db_path
                 db_lines.append(
                     f'  {name} (DuckDB): python3 -c "import duckdb; '
                     f"conn = duckdb.connect('{db_path}'); "
                     "print(conn.execute('SELECT ...').fetchall())\""
                 )
             elif db_type == "sqlite":
+                sqlite_clients[name] = db_path
                 db_lines.append(
                     f'  {name} (SQLite): python3 -c "import sqlite3; '
                     f"conn = sqlite3.connect('{db_path}'); "
                     "print(conn.execute('SELECT ...').fetchall())\""
                 )
+
+        # When the dataset mixes DuckDB and SQLite, show the ATTACH idiom so the
+        # model can JOIN across both databases in a single DuckDB connection instead
+        # of querying them separately and failing to combine the results.
+        if duckdb_clients and sqlite_clients:
+            _duck_name, duck_path = next(iter(duckdb_clients.items()))
+            attach_lines = [
+                "\nCross-database JOINs — attach SQLite into DuckDB"
+                " (use this for queries spanning both databases):"
+            ]
+            for sql_name, sql_path in sqlite_clients.items():
+                attach_lines.append(
+                    f'  python3 -c "\nimport duckdb\n'
+                    f"conn = duckdb.connect('{duck_path}')\n"
+                    f"conn.execute(\\\"ATTACH '{sql_path}' AS {sql_name} (TYPE SQLITE)\\\")\n"
+                    f"# query: SELECT ... FROM duck_table"
+                    f" JOIN {sql_name}.sqlite_table ON ...\n"
+                    f"print(conn.execute('SELECT ...').fetchall())\n\""
+                )
+            db_lines.extend(attach_lines)
 
         db_preamble = "You can query these databases via Bash (Python is available):\n" + "\n".join(
             db_lines
