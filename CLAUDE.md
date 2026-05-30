@@ -168,6 +168,16 @@ Baseline lives at `tests/baselines/ade_smoke_baseline.json`. Capture aborts with
 
 ## Gotchas
 
+**Plain `python3` doesn't see project deps** — use `uv run python3 -c '...'` even for one-off inline inspection. The system `python3` has no duckdb / polars / mcp / etc.
+
+**`DuckDBConnection.execute()` is SELECT-only** — it goes through `pl.read_database`, which expects a result set. For DDL/DML on DuckDB (ATTACH, CREATE, INSERT, …) call `self._connection.execute(sql)` directly, as `DuckDBConnection.attach()` does in `src/labrat/db/duckdb_engine.py`.
+
+**Long-running `uv run` piped to `tail`/`grep` block-buffers stdout** — output won't appear in the task-output file until the process exits. For live progress, drop the pipe or wrap with `stdbuf -oL`; or run via `run_in_background` and read the output file directly.
+
+**One-off `claude --print` needs `env -u ANTHROPIC_API_KEY -u CLAUDECODE`** — if `ANTHROPIC_API_KEY` is in the shell, the CLI uses it (metered API) instead of Max-plan OAuth, and a credit-less account returns "Credit balance is too low". The `_invoke_agent` / `_run_trial_claude_mcp` subprocess paths strip this automatically; interactive spikes (MCP toy tests, prompt experiments) need to do it themselves.
+
+**MCP server: use low-level `mcp.server.Server`, not FastMCP** — FastMCP's `@mcp.tool()` decorator infers schemas from Python function signatures, which doesn't fit a runtime `ToolRegistry` of arbitrary tools. Register handlers via `@server.list_tools()` + `@server.call_tool()` and feed schemas from `tool.anthropic_schema()` — see `src/labrat/mcp/server.py`.
+
 **HTML tour files** — `docs/index.html` and `labrat_tour.html` are 2.2MB and exceed the Read tool's token limit. Use `grep`/`sed` for inspection; spawn a subagent for edits. The two files are always byte-identical — every edit must be applied to both.
 
 **ADE-bench task.yaml** — difficulty field is `difficulty` (not `tier`); variant db field is `db_type` (not `db`). Enumerate tasks with:
@@ -234,3 +244,4 @@ uv run pytest -q       # must pass
 - `QueryEvent` never stores result rows (security decision).
 - `asyncio_mode = "auto"` — no decorator needed on async tests.
 - Tool `name`, `description`, and `input_model` must be `@property` methods, not class attributes.
+- `json.loads()` results are `Unknown` under pyright strict — when reading keys, use `# type: ignore[arg-type]` on the specific access (e.g. `str(data["result"])  # type: ignore[arg-type]`), matching the pattern in `src/labrat/eval/benchmarks/dab/suite.py::_invoke_agent`.
