@@ -1,6 +1,6 @@
 # DAB-Bench Integration Design
 
-**Status:** Draft (2026-05-27, revised 2026-05-28 to align with unified-suite layout)
+**Status:** Draft (2026-05-27, revised 2026-05-28 to align with unified-suite layout, revised 2026-05-29 to reflect agent architecture pivot)
 **Branch:** `feat/dab-integration` (fully isolated; abandonable if regressions occur)
 **Author:** Ege (via Claude brainstorm)
 **Related:** [`2026-05-28-unified-benchmark-suite-design.md`](2026-05-28-unified-benchmark-suite-design.md) — file layout and protocol come from there; this spec is the DAB-specific contract on top.
@@ -107,9 +107,16 @@ The shim is permanent (not deprecated) — single-DB use is a legitimate ongoing
 
 ### Inference backend
 
-`ClaudeCodeProvider` shells out to the `claude` CLI for inference. Zero API cost on the Max plan.
+> **Architecture pivot (2026-05-29):** Phase 0 spike confirmed the assumption was wrong. `ClaudeCodeProvider`'s text protocol (`{"call":...}`) conflicts with the `claude` CLI's native tool handling — `--tools ""` causes hangs when the model emits `{"type":"tool_use",...}`, and without it the model uses built-in Bash/Read/Edit instead of our registry. The design pivoted to the Bash-tool-prompting approach.
+>
+> **Current DAB harness:** `claude --print --disable-slash-commands --dangerously-skip-permissions --max-turns 15` with native Bash tool. The model runs Python+DuckDB/SQLite directly via subprocess. No LabRat tool registry is exposed to the model.
+>
+> **What this means for phasing:**
+> - Phase 1a/1b scores reflect *raw Claude + prompt engineering* (preamble, ATTACH idiom, schema descriptions). This is the **baseline floor**, not "LabRat's score."
+> - The new tools below (`list_databases`, `attach_database`, etc.) are built as first-class TUI product tools — they serve the TUI, ADE-bench, and the future SDK. They are NOT used in the DAB harness until Phase 4.
+> - Phase 4 (`LabRatAgentDriver`) routes DAB through the actual LabRat tool loop. The Phase 1b→Phase 4 delta quantifies the tool layer's value.
 
-**Critical assumption to validate in Phase 0:** `ClaudeCodeProvider` correctly exposes LabRat's tool registry to the model (the `claude` CLI's own Bash/Read/Edit tools should not interfere with LabRat's `run_sql` / `list_databases` / etc.). If this assumption is wrong, the entire design pivots to a Bash-tool-prompting approach (the LabratLocalAgent pattern, adapted for query-answering).
+`ClaudeCodeProvider` shells out to the `claude` CLI for inference. Zero API cost on the Max plan. (Used by the TUI; the DAB harness bypasses it — see pivot note above.)
 
 ### Tool-registry scaling (note, not built now)
 
@@ -325,21 +332,22 @@ Each phase has explicit entry/exit gates. Regression check at every boundary.
 - AdeBenchSuite port-acceptance test passes (legacy vs new produce matching results)
 - **ADE smoke regression check passes** (running through the new shape)
 
-### Phase 1b — All datasets, full submission (2 weeks)
+### Phase 1b — Pass@5 baseline on existing datasets (revised scope)
+
+> **Scope revised 2026-05-29** following the Bash-tool pivot. Phase 1b is now *prompt-engineering and runner infrastructure only* — no LabRat tools in the DAB harness yet. Tools ship as TUI product work independently.
 
 **Entry:** Phase 1a exit met.
 
-1. `MongoDBConnection` adapter
-2. Tools: `list_databases`, `attach_database`, `load_mongo_collection`, `execute_python` (Tier 1)
-3. Extend `run_sql`, `list_tables`, `describe_table` with optional `database` param
-4. `DabRunner` v1 — pass@5, resumability, parallel trials, scratch-dir isolation
-5. Full 270-trial run without hints — record baseline score
+1. DuckDB ATTACH idiom injected into `run_trial` preamble (cross-DB join guidance for DuckDB+SQLite datasets) ✅ shipped
+2. `eval_dab.py` runner: pass@5 default (`--n-trials 5`), JSONL resumability (`--output-dir` resume) ✅ shipped
+3. Full pass@5 run on 5 DuckDB+SQLite datasets — record **prompt-engineering baseline** score
+4. *(TUI product work, parallel, not in DAB harness):* `MongoDBConnection` adapter; `list_databases`, `attach_database`, `load_mongo_collection`, `execute_python` tools; extend `run_sql`/`list_tables`/`describe_table` with `database` param
 
 **Exit gate:**
-- All 270 trials complete (or fail with logged reasons)
+- All 85 trials complete (17 tasks × 5 trials, 5 datasets)
 - Submission JSON validates against DAB schema
 - **ADE smoke regression check passes**
-- Baseline score recorded (likely 35–50% without hints/tuning)
+- Baseline score recorded and documented as "raw Claude + prompt engineering floor"
 
 ### Phase 1c — Hints, prompting, competitive score (1 week)
 
