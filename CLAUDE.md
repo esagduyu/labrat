@@ -59,7 +59,7 @@ Built on Textual. `app.py` is the root `App`. The main screen is a 3-pane layout
 | `history/` | Always-on `QueryHistoryLog` (JSONL, PII-redacted). Singleton in `run_sql.py`, monkeypatched in tests |
 | `memory/` | Self-healing memories: global/table/thread scopes, JSONL store, LLM-driven extraction |
 | `validations/` | Per-rule LLM checks returning `"pass"` / `"warn: ..."` / `"block: ..."` |
-| `eval/` | `EvalSuite` → `EvalRunner` → `EvalReport` pipeline. ADE-bench suite + runner live here |
+| `eval/` | Two coexisting shapes. Legacy `EvalCase`/`EvalRunner`/`EvalReport` for internal SQL-correctness evals (`bird.py`, `latency.py`, `custom_scenarios.py`). New unified `BenchmarkSuite` protocol (`types.py`) for benchmark integrations — DAB and ADE-bench live under `benchmarks/<bench>/{suite,external_runner,scorer,reporter}.py`. `smoke.py` provides `SubsetSuite` + `ade_smoke_suite()`. `reporting.py` renders `BenchmarkReport` to markdown. See `docs/superpowers/specs/2026-05-28-unified-benchmark-suite-design.md` for the contract. |
 | `audit/` | JSONL event sourcing for every interaction |
 | `dspy_opt/` | DSPy-based prompt optimisation utilities. Pyright strict excluded here (no dspy stubs) |
 
@@ -67,8 +67,19 @@ Built on Textual. `app.py` is the root `App`. The main screen is a 3-pane layout
 
 `LabratLocalAgent` (in the ade-bench repo at `ade_bench/agents/installed_agents/labrat_local/`) extends `BaseAgent` directly. It runs `claude` locally via `subprocess` using Mac OAuth, and bridges into the Docker container via `docker exec` / `docker cp`. See `decisions.md` for the auth rationale.
 
+`LabratLocalAgent.__init__` pins `model_name="claude-sonnet-4-6"` by default — passes `--model` to the `claude` subprocess explicitly so it doesn't silently fall through to whatever the user's CLI session is configured to (which can be Opus, burns Max plan budget ~5x faster). Override by passing `model_name=None` to use CLI default.
+
+LabRat-side integration lives at `src/labrat/eval/benchmarks/ade_bench/`:
+- `suite.py` — `AdeBenchSuite` implements `BenchmarkSuite`
+- `external_runner.py` — shells `uv run ade run <task_id> ...`, parses `experiments/<exp_id>/results.json`
+- `reporter.py` — maps trial dict → `TrialResult`
+
 Run command:
 ```bash
+# Single task via the new entrypoint:
+uv run python scripts/eval_ade_bench.py --tasks <task_id> --n-attempts 3
+
+# Full benchmark (still uses ade CLI directly):
 cd ~/repos/ade-bench && uv run ade run <task_ids> --db duckdb --project-type dbt --agent labrat_local --no-diffs --n-concurrent-trials 3 --n-attempts 3
 
 # Analyse a completed run's failures:
@@ -77,6 +88,20 @@ uv run scripts/analyze_ade_failures.py ~/repos/ade-bench/experiments/<run_id>/
 
 Current score (2026-05-27, claude-sonnet-4-6): **80% overall** (48/60 tasks) — 100% easy, 80% medium, 60% hard.
 Roadmap and remaining failures: `docs/ade_bench_failure_analysis.md`
+
+### Smoke regression (`scripts/run_smoke_regression.py`)
+
+Fixed 9-task ADE subset (`src/labrat/eval/smoke.py::ADE_SMOKE_TASK_IDS`, frozen — see `docs/superpowers/notes/2026-05-29-ade-smoke-selection.md`). Run at every DAB phase boundary:
+
+```bash
+# One-time baseline capture (n_runs × n_attempts trials):
+uv run python scripts/run_smoke_regression.py capture --n-runs 3 --n-attempts 3
+
+# Check current state against the captured baseline (exit 1 on hard fail):
+uv run python scripts/run_smoke_regression.py check --n-attempts 3
+```
+
+Baseline lives at `tests/baselines/ade_smoke_baseline.json`. Capture aborts with `InfraFailureError` if any trial returns `reason.startswith("infra:")` — prevents budget-exhaustion runs from silently corrupting the baseline with zero-time fake failures.
 
 ## Gotchas
 
@@ -96,6 +121,10 @@ for d in sorted(Path('tasks').iterdir()):
 ```
 
 **ADE-bench known failures** — 12 tasks currently fail consistently. `helixops_saas010` fails 9/11 tests every run (was flaky; now a consistent failure). `helixops_saas015` fails 3/4 tests; `.low` variant passes. Full list and root causes: `docs/ade_bench_failure_analysis.md`.
+
+**ADE experiment results file is `results.json`, not `results_metadata.jsonl`** — the file has a top-level `{"results": [...], ...}` shape. The port-acceptance spike caught a 0% pass rate when `external_runner.py` read the wrong filename. If you write new ADE-results parsing code, read `results.json` and iterate `data["results"]`.
+
+**Model pin in ADE harness** — `LabratLocalAgent` defaults to `claude-sonnet-4-6`. Without this, the `claude` CLI subprocess uses session defaults (often Opus on `opusplan`), and a smoke baseline capture can burn through Max plan budget mid-run and leave bogus zero-time `unknown_agent_error` trials in the baseline. The `InfraFailureError` fail-fast in `run_smoke_regression.py` is the safety net.
 
 **`_DOCKER_PREAMBLE` is a Python format string** — called with `.format(container_name=..., task_prompt=...)`. Any literal `{` must be `{{`. Dbt Jinja `{{ ref('x') }}` must be written `{{{{ ref('x') }}}}` in the source so it survives `.format()`. Same applies to `_FAMILY_HINTS` values. Verify with: `python3 -c "open('labrat_local_agent.py').read()" | grep -A2 'format('`.
 
