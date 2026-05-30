@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -12,6 +13,13 @@ def score_with_validator(validator_path: Path, llm_output: str) -> tuple[bool, s
     Returns (passed, reason). On import or runtime error returns
     (False, "validator_error: <message>").
     """
+    # DAB validators import common_scaffold from the repo root (three dirs up from
+    # query_<DATASET>/query<N>/validate.py → repo root).
+    dab_root = validator_path.parent.parent.parent
+    _inserted = str(dab_root) not in sys.path
+    if _inserted:
+        sys.path.insert(0, str(dab_root))
+
     try:
         spec = importlib.util.spec_from_file_location(
             f"dab_validator_{hash(str(validator_path))}", validator_path
@@ -22,6 +30,9 @@ def score_with_validator(validator_path: Path, llm_output: str) -> tuple[bool, s
         spec.loader.exec_module(module)  # type: ignore[union-attr]
     except Exception as e:
         return (False, f"validator_error: import: {type(e).__name__}: {e}")
+    finally:
+        if _inserted and str(dab_root) in sys.path:
+            sys.path.remove(str(dab_root))
 
     validate = getattr(module, "validate", None)
     if validate is None:
