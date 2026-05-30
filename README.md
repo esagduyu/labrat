@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: feature-complete v0 alpha. 504 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Also evaluated on [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley): **48.5% Phase 1b** baseline on 5 DuckDB+SQLite datasets (pass@5, raw Claude + prompt engineering). The Phase 4 substrate (LabRat tools + AgentLoop + MCP server) ships on `feat/labrat-agent-substrate` and routes DAB through LabRat's own tool stack — the gap between Phase 1b and Phase 4 is the measured value of the tool layer. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
+> Status: feature-complete v0 alpha. 504 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Also evaluated on [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley): **48.5% Phase 1b** baseline on 5 DuckDB+SQLite datasets (pass@5, raw Claude + prompt engineering). The Phase 4 substrate (LabRat tools + AgentLoop + MCP server, three DAB drivers) is shipped on `master` and routes DAB through LabRat's own tool stack — the gap between Phase 1b and Phase 4 is the measured value of the tool layer. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -50,8 +50,8 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 | Tier | Tasks | Score |
 |------|-------|-------|
 | Easy | 15 | **100%** (15/15) |
-| Medium | 30 | **80%** (~24/30) |
-| Hard | 15 | **60%** (~9/15) |
+| Medium | 30 | **80%** (24/30) |
+| Hard | 15 | **60%** (9/15) |
 | **Overall** | **60** | **80% (48/60)** |
 
 On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 82% (32/39) vs. Altimate 77% (30/39)**, same model (Sonnet 4.6), same best-of-3 methodology. Full write-up: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
@@ -76,7 +76,7 @@ uv tool install labrat
 Until then, build from source:
 
 ```bash
-git clone https://github.com/{username}/labrat
+git clone https://github.com/esagduyu/labrat
 cd labrat
 uv sync
 uv run labrat
@@ -178,8 +178,20 @@ cd ~/repos/ade-bench && uv run ade run helixops_saas001 airbnb001 --db duckdb --
 # DataAgentBench evaluation (requires DataAgentBench repo at ~/repos/DataAgentBench)
 # Phase 1b: pass@5 by default; --n-trials 1 for a quick single-trial run
 uv run python scripts/eval_dab.py --datasets deps_dev_v1,github_repos,music_brainz_20k,stockindex,stockmarket
+# Phase 4 measurement via the LabRat MCP server inside claude --print (Max-plan billing)
+uv run python scripts/eval_dab.py --driver claude-mcp --n-trials 5
 # Resume a crashed run:
 uv run python scripts/eval_dab.py --output-dir runs/dab/dab-<id>
+
+# Standalone LabRat agent against an arbitrary prompt (any provider, any DuckDB connection)
+uv run python scripts/run_task.py \
+    --prompt "How many rows in orders?" \
+    --connections '{"main":{"db_type":"duckdb","db_path":"/path.duckdb"}}' \
+    --provider anthropic --model claude-sonnet-4-6
+
+# Mount the LabRat MCP server inside Claude Code / Codex / Cursor / OpenCode
+LABRAT_MCP_CONNECTIONS='{"main":{"db_type":"duckdb","db_path":"/path.duckdb"}}' \
+    uv run python -m labrat.mcp.server
 
 # Generate UI screenshots (no API key needed)
 uv run python scripts/take_screenshots.py
@@ -190,7 +202,8 @@ uv run python scripts/take_screenshots.py
 v0 alpha is feature-complete. Post-v0 priorities:
 
 - **ADE-bench improvements**: 80% overall — next target is `compare_schema` and `trace_column_lineage` tools (Tier 2) to close the remaining output-schema and dependency-discovery gaps
-- **DataAgentBench Phase 1c**: prompt iteration on music_brainz_20k (7%) and deps_dev_v1 (10%); then Phase 2 (PostgreSQL) and Phase 3 (MongoDB) for full 54-query submission
+- **DataAgentBench Phase 4 measurement**: run the 17-query Phase 1b suite through `--driver=claude-mcp` (LabRat tools, Max-plan billing) and `--driver=labrat-agent` (Anthropic API, multi-provider) to quantify the tool-layer delta over the 48.5% baseline
+- **DataAgentBench Phase 1c / 2 / 3**: prompt iteration on music_brainz_20k (7%) and deps_dev_v1 (10%); then PostgreSQL (Phase 2) and MongoDB (Phase 3) adapters for the full 54-query submission
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 
