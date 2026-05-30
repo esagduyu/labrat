@@ -43,7 +43,7 @@ _DAB_SYSTEM_PROMPT = (
     "Return your final answer as plain text once you are confident."
 )
 
-_DAB_TIMEOUT = 300  # per-turn timeout for the claude subprocess
+_DAB_TIMEOUT = 600  # per-trial wall-clock timeout for the claude subprocess
 
 
 def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
@@ -128,7 +128,11 @@ async def _invoke_agent(
             env=env,
         )
     except subprocess.TimeoutExpired:
-        raise TimeoutError(f"claude --print timed out after {_DAB_TIMEOUT}s") from None
+        # Record the timeout as a trial-level failure rather than crashing the run.
+        return {
+            "final_text": f"[trial exceeded {_DAB_TIMEOUT}s timeout]",
+            "tool_calls": 0,
+        }
 
     raw = result.stdout.decode(errors="replace").strip()
     err = result.stderr.decode(errors="replace").strip()
@@ -476,7 +480,10 @@ class DabSuite:
                 env=env_vars,
             )
         except subprocess.TimeoutExpired:
-            raise TimeoutError(f"claude --print timed out after {_DAB_TIMEOUT}s") from None
+            # Record the timeout as a trial-level failure (the validator will mark
+            # passed=False) rather than crashing the whole run.
+            latency = time.monotonic() - t0
+            return f"[trial exceeded {_DAB_TIMEOUT}s timeout]", 0, latency
         latency = time.monotonic() - t0
 
         raw = result.stdout.decode(errors="replace").strip()
