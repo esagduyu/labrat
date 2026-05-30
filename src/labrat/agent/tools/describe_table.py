@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
 from labrat.db.catalog import Catalog
@@ -12,6 +12,10 @@ from labrat.db.catalog import Catalog
 
 class _Input(BaseModel):
     table: str
+    database: str | None = Field(
+        default=None,
+        description="Connection name when multiple databases are available; defaults to primary.",
+    )
 
 
 class _ColumnDetail(BaseModel):
@@ -54,7 +58,7 @@ class DescribeTableTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        catalog = cast(Catalog, ctx.catalog)
+        catalog = cast(Catalog, ctx.catalogs[args.database or ctx.primary])
         table = catalog.find_table(args.table)
         if table is None:
             raise ValueError(f"Table {args.table!r} not found in catalog")

@@ -22,8 +22,9 @@ import re
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from labrat.eval.benchmarks.dab.env import DabTaskEnv
 from labrat.eval.types import (
     AggregateScore,
     BenchmarkReport,
@@ -31,12 +32,43 @@ from labrat.eval.types import (
     TrialResult,
 )
 
+Driver = Literal["raw-bash", "labrat-agent"]
+
 _DAB_SYSTEM_PROMPT = (
     "You are a data analyst. Query the databases using Python+DuckDB/SQLite via Bash. "
     "Return your final answer as plain text once you are confident."
 )
 
 _DAB_TIMEOUT = 300  # per-turn timeout for the claude subprocess
+
+
+def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
+    parts = [
+        "You are a data analyst. Answer the question by querying the available databases "
+        "using the provided tools.",
+        "",
+        "Tools available:",
+        "  list_tables / describe_table / search_columns — discover schema",
+        "  sample_rows / column_stats — inspect actual values",
+        "  run_sql — execute SQL (DuckDB dialect; primary connection by default)",
+        "  explain_sql — show the query plan without executing",
+        "  attach_database — pull a SQLite/Postgres/MySQL file into the primary DuckDB "
+        "session for cross-database JOINs",
+    ]
+    if env.attachable:
+        parts.append("")
+        parts.append("Secondary databases you may attach (call attach_database first):")
+        for spec in env.attachable:
+            parts.append(f"  alias={spec.alias} path={spec.path} db_type={spec.db_type}")
+        parts.append("Once attached, refer to its tables as <alias>.<table_name> in run_sql.")
+    parts.extend(
+        [
+            "",
+            "Run queries until you are confident, then respond with a single plain answer "
+            "on the last line.",
+        ]
+    )
+    return "\n".join(parts)
 
 
 async def _invoke_agent(
@@ -129,12 +161,22 @@ class DabSuite:
         self,
         dab_dir: Path | None = None,
         hints: bool = False,
+        driver: Driver = "raw-bash",
+        agent_model: str = "claude-sonnet-4-6",
+        agent_provider: str = "anthropic",
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
         )
         self._hints = hints
+        self._driver: Driver = driver
+        self._agent_model = agent_model
+        self._agent_provider = agent_provider
         self._tasks_cache: list[BenchmarkTask] | None = None
+
+    @property
+    def driver(self) -> Driver:
+        return self._driver
 
     def tasks(self) -> Iterable[BenchmarkTask]:
         if self._tasks_cache is None:
@@ -199,16 +241,39 @@ class DabSuite:
     async def run_trial(
         self, task: BenchmarkTask, trial_num: int, scratch_dir: Path
     ) -> TrialResult:
-        import yaml
-
         from labrat.eval.benchmarks.dab.scorer import score_with_validator
 
         scratch_dir.mkdir(parents=True, exist_ok=True)
         db_config_path = Path(task.config["db_config_path"])
         validator_path = Path(task.config["validator_path"])
-        dataset_dir = db_config_path.parent
 
-        # Build db-access preamble so the model can query via Python+DuckDB/SQLite.
+        if self._driver == "labrat-agent":
+            final_text, tool_calls, latency = await self._run_trial_labrat_agent(
+                task, db_config_path
+            )
+        else:
+            final_text, tool_calls, latency = await self._run_trial_raw_bash(task, db_config_path)
+
+        passed, reason = score_with_validator(validator_path, final_text)
+
+        return TrialResult(
+            task_id=task.id,
+            trial_num=trial_num,
+            passed=passed,
+            reason=reason,
+            latency_seconds=latency,
+            tool_calls=tool_calls,
+            artifact={"type": "text", "payload": final_text},
+        )
+
+    # ── raw-bash driver (Phase 1b baseline) ──────────────────────────────────
+
+    async def _run_trial_raw_bash(
+        self, task: BenchmarkTask, db_config_path: Path
+    ) -> tuple[str, int, float]:
+        import yaml
+
+        dataset_dir = db_config_path.parent
         config = yaml.safe_load(db_config_path.read_text())
         clients: dict[str, Any] = config.get("db_clients") or {}
         db_lines: list[str] = []
@@ -232,9 +297,6 @@ class DabSuite:
                     "print(conn.execute('SELECT ...').fetchall())\""
                 )
 
-        # When the dataset mixes DuckDB and SQLite, show the ATTACH idiom so the
-        # model can JOIN across both databases in a single DuckDB connection instead
-        # of querying them separately and failing to combine the results.
         if duckdb_clients and sqlite_clients:
             _duck_name, duck_path = next(iter(duckdb_clients.items()))
             attach_lines = [
@@ -260,18 +322,40 @@ class DabSuite:
         t0 = time.monotonic()
         agent_out = await _invoke_agent(prompt=enriched_prompt, ctx=None)
         latency = time.monotonic() - t0
+        return agent_out["final_text"], int(agent_out["tool_calls"]), latency
 
-        passed, reason = score_with_validator(validator_path, agent_out["final_text"])
+    # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
-        return TrialResult(
-            task_id=task.id,
-            trial_num=trial_num,
-            passed=passed,
-            reason=reason,
-            latency_seconds=latency,
-            tool_calls=agent_out["tool_calls"],
-            artifact={"type": "text", "payload": agent_out["final_text"]},
-        )
+    async def _run_trial_labrat_agent(
+        self, task: BenchmarkTask, db_config_path: Path
+    ) -> tuple[str, int, float]:
+        from labrat.agent.data_tools import build_data_tools_registry
+        from labrat.agent.providers import build_provider
+        from labrat.agent.runner import run_agent_task
+        from labrat.eval.benchmarks.dab.env import build_dab_task_env
+
+        env = build_dab_task_env(db_config_path)
+        for conn in env.ctx.connections.values():
+            connect = getattr(conn, "connect", None)
+            if callable(connect):
+                connect()
+        try:
+            registry = build_data_tools_registry()
+            provider = build_provider(self._agent_provider, self._agent_model)
+            system_prompt = _build_labrat_agent_system_prompt(env)
+            result = await run_agent_task(
+                prompt=task.prompt,
+                ctx=env.ctx,
+                registry=registry,
+                provider=provider,
+                system_prompt=system_prompt,
+            )
+        finally:
+            for conn in env.ctx.connections.values():
+                disconnect = getattr(conn, "disconnect", None)
+                if callable(disconnect):
+                    disconnect()
+        return result.final_text, result.tool_calls, result.latency_seconds
 
     def aggregate(self, results: list[TrialResult]) -> AggregateScore:
         if not results:

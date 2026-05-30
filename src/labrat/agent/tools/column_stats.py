@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
 from labrat.db.base import Connection
@@ -13,6 +13,10 @@ from labrat.db.base import Connection
 class _Input(BaseModel):
     table: str
     column: str
+    database: str | None = Field(
+        default=None,
+        description="Connection name when multiple databases are available; defaults to primary.",
+    )
 
 
 class _Output(BaseModel):
@@ -45,7 +49,7 @@ class ColumnStatsTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        conn = cast(Connection, ctx.connection)
+        conn = cast(Connection, ctx.connections[args.database or ctx.primary])
         stats = conn.column_stats(args.table, args.column)
         return _Output(
             column_name=stats.column_name,

@@ -20,6 +20,10 @@ class _Input(BaseModel):
     x: str = Field(description="Column name for the X axis.")
     y: str = Field(description="Column name for the Y axis (must be numeric).")
     title: str | None = Field(default=None, description="Optional chart title.")
+    database: str | None = Field(
+        default=None,
+        description="Connection name when multiple databases are available; defaults to primary.",
+    )
 
 
 class CreateChartTool(Tool[_Input]):
@@ -58,7 +62,7 @@ class CreateChartTool(Tool[_Input]):
                 ),
             }
 
-        conn = cast(Connection, ctx.connection)
+        conn = cast(Connection, ctx.connections[args.database or ctx.primary])
         try:
             df: pl.DataFrame = conn.execute(args.query)
         except Exception as exc:

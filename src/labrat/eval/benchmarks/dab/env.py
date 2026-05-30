@@ -1,4 +1,4 @@
-"""Build a multi-DB ToolContext for one DAB trial from db_config.yaml.
+"""Build a multi-DB ToolContext and attach-list for one DAB trial from db_config.yaml.
 
 Real DAB db_config.yaml format:
 
@@ -8,39 +8,52 @@ Real DAB db_config.yaml format:
       db_path: <path relative to dataset dir>   # duckdb / sqlite
       db_name: <pg dbname>                       # postgres
       sql_file: <path>                           # postgres
+
+Design (Phase 4):
+  - DuckDB clients become real `DuckDBConnection`s in `ctx.connections`.
+  - SQLite clients are NOT separate connections — they are exposed as `AttachSpec`s
+    so the agent calls `attach_database` to bring them into the primary DuckDB
+    session and JOIN via `alias.table_name`.
+  - Postgres / MongoDB clients remain skipped until later phases.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
+from pydantic import BaseModel, ConfigDict
 
 from labrat.agent.tools.base import ToolContext
 from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
 
 
-def _build_connection(spec: dict[str, Any], dataset_dir: Path) -> DuckDBConnection | None:
-    """Return a DuckDBConnection for the spec, or None if unsupported in Phase 1a."""
-    db_type = str(spec.get("db_type", "")).lower()
-    if db_type == "duckdb":
-        db_path = dataset_dir / str(spec["db_path"])
-        return DuckDBConnection(path=db_path)
-    if db_type == "sqlite":
-        # SQLite reached via DuckDB ATTACH — use in-memory DuckDB as the host.
-        return DuckDBConnection(path=":memory:")
-    # postgres / mongodb — Phase 1b
-    return None
+class AttachSpec(BaseModel):
+    """A non-DuckDB database the agent can pull into the primary session via attach_database."""
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str
+    path: str
+    db_type: Literal["sqlite", "postgres", "mysql"]
 
 
-def build_dab_tool_context(db_config_path: Path) -> ToolContext:
-    """Parse db_config.yaml and return a multi-DB ToolContext.
+class DabTaskEnv(BaseModel):
+    """Per-trial environment: primary DuckDB context + attachable secondaries."""
 
-    Primary = first DuckDB entry (agent's run_sql default routes here).
-    SQLite entries get an in-memory DuckDB proxy (ATTACH wired in Phase 1b).
-    Postgres / MongoDB entries are skipped until Phase 1b.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    ctx: ToolContext
+    attachable: list[AttachSpec]
+
+
+def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
+    """Parse db_config.yaml and return a DabTaskEnv.
+
+    Primary connection = first DuckDB entry. SQLite entries become AttachSpecs.
+    Postgres / MongoDB entries are dropped silently until adapters land.
     """
     dataset_dir = db_config_path.parent
     config = yaml.safe_load(db_config_path.read_text())
@@ -48,29 +61,36 @@ def build_dab_tool_context(db_config_path: Path) -> ToolContext:
 
     connections: dict[str, object] = {}
     file_backed_duckdb: list[str] = []
+    attachable: list[AttachSpec] = []
+
     for name, spec in clients.items():
-        conn = _build_connection(spec, dataset_dir)
-        if conn is not None:
-            connections[name] = conn
-            if str(spec.get("db_type", "")).lower() == "duckdb":
-                file_backed_duckdb.append(name)
+        db_type = str(spec.get("db_type", "")).lower()
+        if db_type == "duckdb":
+            db_path = dataset_dir / str(spec["db_path"])
+            connections[name] = DuckDBConnection(path=db_path)
+            file_backed_duckdb.append(name)
+        elif db_type == "sqlite":
+            attachable.append(
+                AttachSpec(
+                    alias=name,
+                    path=str(dataset_dir / str(spec["db_path"])),
+                    db_type="sqlite",
+                )
+            )
+        # postgres / mongodb — deferred
 
-    # Primary = first file-backed DuckDB, then first connection overall.
-    duckdb_primary: str | None = file_backed_duckdb[0] if file_backed_duckdb else None
-    if duckdb_primary is None and connections:
-        duckdb_primary = next(iter(connections))
-
-    # If nothing at all was built, add a federation host.
-    if not connections or duckdb_primary is None:
-        connections["__federation"] = DuckDBConnection(path=":memory:")
-        duckdb_primary = "__federation"
+    # If no DuckDB primary, synthesize an in-memory one so the agent can still ATTACH.
+    primary = file_backed_duckdb[0] if file_backed_duckdb else "__federation"
+    if primary == "__federation":
+        connections[primary] = DuckDBConnection(path=":memory:", read_only=False)
 
     catalogs: dict[str, object] = {
         name: Catalog(database_name=name, schemas=[]) for name in connections
     }
 
-    return ToolContext(
+    ctx = ToolContext(
         connections=connections,
         catalogs=catalogs,
-        primary=duckdb_primary,
+        primary=primary,
     )
+    return DabTaskEnv(ctx=ctx, attachable=attachable)

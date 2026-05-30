@@ -86,3 +86,53 @@ Added `src/labrat/eval/types.py` with `BenchmarkSuite` protocol, `BenchmarkTask`
 **Why not a tool:** the DAB harness uses raw Bash, not LabRat tools. An `attach_database` LabRat tool will be built for the TUI product independently.
 
 **Phase 1b result:** marginal help — deps_dev_v1:2 improved from 0% to 20% (1/5 passes); deps_dev_v1:1 still 0/5 (more complex traversal required). music_brainz_20k unchanged at 7% — root cause is the model answering from context without querying (sub-10s response times), not a federation gap. Overall Phase 1b score: 48.5% on 5 DuckDB+SQLite datasets.
+
+## LabRat agent substrate for DAB (2026-05-30)
+
+**Goal:** route DAB through LabRat's own `AgentLoop` + tool registry so the
+Phase 4 measurement reflects LabRat's tool quality, not raw Claude + Bash.
+Also make the substrate harness-agnostic (MCP) and provider-agnostic (any
+`ModelProvider`) per current product direction.
+
+**Shipped on `feat/labrat-agent-substrate`:**
+- Multi-DB routing on 8 tools (`run_sql`, `explain_sql`, `sample_rows`,
+  `column_stats`, `create_chart`, `list_tables`, `describe_table`,
+  `search_columns`) — optional `database` param resolves
+  `ctx.connections[name]` / `ctx.catalogs[name]`.
+- New `attach_database` tool + `DuckDBConnection.attach()` — first-class
+  cross-DB JOIN via DuckDB ATTACH (replaces the prompt-engineering preamble
+  for the labrat-agent driver).
+- `eval/benchmarks/dab/env.py` returns `DabTaskEnv(ctx, attachable)`. SQLite
+  is no longer a phantom `:memory:` DuckDB stub; it's exposed as an
+  `AttachSpec` the agent uses via `attach_database`.
+- `src/labrat/agent/runner.py::run_agent_task` — in-process `AgentLoop`
+  wrapper that returns `(final_text, tool_calls, latency_seconds)`. Used by
+  the DAB labrat-agent driver and the `scripts/run_task.py` CLI shim.
+- `DabSuite(driver=, agent_model=, agent_provider=)`. `_run_trial_raw_bash`
+  preserves the Phase 1b baseline byte-for-byte; `_run_trial_labrat_agent`
+  builds `DabTaskEnv`, connects DBs, registers data tools, calls
+  `run_agent_task`.
+- `scripts/eval_dab.py` flags: `--driver`, `--agent-model`,
+  `--agent-provider`. `config.json` records all three; resume restores them
+  and refuses mismatched overrides.
+- `src/labrat/agent/providers/__init__.py::build_provider` factory shared by
+  `run_task.py` and the DAB suite.
+
+**ClaudeCodeProvider fragility (2026-05-30 smoke confirmation):**
+- stockmarket:1 with `--agent-provider claude-code`: PASS in 11.9s, 1 tool
+  call. The model used the text-protocol `{"call":...}` format correctly.
+- music_brainz_20k:1 with `--agent-provider claude-code`: FAIL with
+  `error_max_turns` / `stop_reason: tool_use`. The model emitted the native
+  `{"type":"tool_use",...}` format instead of the text protocol; CLI couldn't
+  progress.
+- Conclusion: the original Phase 0 conflict isn't a hard block, it's a
+  *behavioral fragility*. Simple single-step queries work; harder
+  multi-step / cross-DB queries push the model toward native tool_use and
+  the path breaks. ClaudeCodeProvider is not a reliable Phase 4 driver.
+- The proper Max-plan + agent path is the MCP server (Layer 2 of the plan).
+  `claude --print --mcp-config` handles MCP tool calls natively — no
+  custom text protocol, no model-format dependence.
+
+**What this means for Phase 4 billing:** until MCP ships, the only fully
+reliable labrat-agent driver is `AnthropicProvider` (metered API). MCP is the
+critical path for the Max-plan version of the Phase 4 measurement.

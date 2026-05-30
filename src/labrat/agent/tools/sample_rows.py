@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
 from labrat.db.base import Connection
@@ -13,6 +13,10 @@ from labrat.db.base import Connection
 class _Input(BaseModel):
     table: str
     n: int = 10
+    database: str | None = Field(
+        default=None,
+        description="Connection name when multiple databases are available; defaults to primary.",
+    )
 
 
 class _Output(BaseModel):
@@ -42,7 +46,7 @@ class SampleRowsTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        conn = cast(Connection, ctx.connection)
+        conn = cast(Connection, ctx.connections[args.database or ctx.primary])
         df = conn.sample_table(args.table, n=args.n)
         rows = [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
         return _Output(

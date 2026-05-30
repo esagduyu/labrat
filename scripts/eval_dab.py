@@ -20,8 +20,9 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
-from labrat.eval.benchmarks.dab.suite import DabSuite
+from labrat.eval.benchmarks.dab.suite import DabSuite, Driver
 from labrat.eval.reporting import report_to_markdown
 from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
 
@@ -104,6 +105,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dab-dir", type=Path, default=None)
     parser.add_argument("--hints", action="store_true")
     parser.add_argument(
+        "--driver",
+        choices=["raw-bash", "labrat-agent"],
+        default=None,
+        help=(
+            "Agent driver. 'raw-bash' (default for new runs) reproduces the Phase 1b "
+            "baseline by shelling claude --print with the native Bash tool (Max-plan "
+            "billing). 'labrat-agent' routes the trial through AgentLoop + LabRat tools "
+            "+ AnthropicProvider (metered API billing) — this is the Phase 4 measurement. "
+            "On --output-dir resume, the driver is restored from config.json unless "
+            "overridden here (mismatches are rejected to prevent mixed-driver runs)."
+        ),
+    )
+    parser.add_argument(
+        "--agent-model",
+        default=None,
+        help=(
+            "Model id used by the labrat-agent driver (default claude-sonnet-4-6 for "
+            "new runs; restored from config.json on resume)."
+        ),
+    )
+    parser.add_argument(
+        "--agent-provider",
+        choices=["anthropic", "claude-code", "openai"],
+        default=None,
+        help=(
+            "Model provider for the labrat-agent driver. 'anthropic' (default) uses "
+            "metered API billing. 'claude-code' shells the claude CLI subprocess "
+            "(Max-plan billing; subject to the documented text-protocol conflict for "
+            "tool round-trips). 'openai' uses an OpenAI-compatible endpoint."
+        ),
+    )
+    parser.add_argument(
         "--n-trials",
         type=int,
         default=5,
@@ -129,7 +162,44 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    suite = DabSuite(dab_dir=args.dab_dir, hints=args.hints)
+    # Resolve resume config first so driver / agent_model can be restored before
+    # we construct the suite. CLI args always win; missing CLI args fall back to
+    # the config.json from a previous run if --output-dir points at one.
+    existing_cfg: dict[str, Any] = {}
+    if args.output_dir:
+        existing_cfg_path = args.output_dir / "config.json"
+        if existing_cfg_path.exists():
+            existing_cfg = json.loads(existing_cfg_path.read_text())
+
+    for field, cli_val in [
+        ("driver", args.driver),
+        ("agent_model", args.agent_model),
+        ("agent_provider", args.agent_provider),
+    ]:
+        prior = existing_cfg.get(field)
+        if cli_val is not None and prior is not None and cli_val != prior:
+            raise SystemExit(
+                f"Resume conflict: --{field.replace('_', '-')}={cli_val!r} but "
+                f"existing config.json has {prior!r}. Refusing to mix drivers/models/"
+                f"providers in one run (would invalidate aggregate scoring). Drop the "
+                f"override to resume, or start a fresh --output-dir."
+            )
+
+    effective_driver: Driver = args.driver or existing_cfg.get("driver") or "raw-bash"
+    effective_model: str = (
+        args.agent_model or existing_cfg.get("agent_model") or "claude-sonnet-4-6"
+    )
+    effective_provider: str = (
+        args.agent_provider or existing_cfg.get("agent_provider") or "anthropic"
+    )
+
+    suite = DabSuite(
+        dab_dir=args.dab_dir,
+        hints=args.hints,
+        driver=effective_driver,
+        agent_model=effective_model,
+        agent_provider=effective_provider,
+    )
 
     task_filter: list[str] | None = None
     if args.tasks:
@@ -140,11 +210,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.output_dir:
         output_dir = args.output_dir
-        # Read task_filter and hints from existing config if not overridden.
-        existing_cfg = output_dir / "config.json"
-        if existing_cfg.exists() and not args.tasks and not args.datasets:
-            cfg = json.loads(existing_cfg.read_text())
-            task_filter = cfg.get("task_filter")
+        if existing_cfg and not args.tasks and not args.datasets:
+            task_filter = existing_cfg.get("task_filter")
     else:
         run_id = f"dab-{int(time.time())}"
         output_dir = Path("runs") / "dab" / run_id
@@ -152,7 +219,14 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(
         json.dumps(
-            {"hints": args.hints, "n_trials": args.n_trials, "task_filter": task_filter},
+            {
+                "hints": args.hints,
+                "driver": effective_driver,
+                "agent_model": effective_model,
+                "agent_provider": effective_provider,
+                "n_trials": args.n_trials,
+                "task_filter": task_filter,
+            },
             indent=2,
         )
     )

@@ -47,6 +47,18 @@ class DuckDBConnection(Connection):
         result = self._connection.execute(f"EXPLAIN {sql}").fetchall()
         return "\n".join(str(row[1]) for row in result if row)
 
+    def attach(self, path: str, alias: str, db_type: str) -> None:
+        """ATTACH another database into this DuckDB session so cross-DB JOINs work.
+
+        ``db_type`` is the DuckDB extension name: 'sqlite', 'postgres', or 'mysql'.
+        The relevant extension must be installed/loadable. After attach, tables in
+        the attached DB are addressable as ``alias.table_name`` from this connection.
+        """
+        if not alias.replace("_", "").isalnum():
+            raise ValueError(f"alias must be alphanumeric/underscore: {alias!r}")
+        escaped_path = path.replace("'", "''")
+        self._connection.execute(f"ATTACH '{escaped_path}' AS {alias} (TYPE {db_type.upper()})")
+
     def sample_table(self, table: str, n: int = 10) -> pl.DataFrame:
         return self.execute(f"SELECT * FROM {table} USING SAMPLE {n}")
 

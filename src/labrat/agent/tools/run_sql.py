@@ -9,7 +9,7 @@ from typing import cast
 
 import polars as pl
 import sqlglot
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
@@ -84,6 +84,10 @@ class _Input(BaseModel):
     query: str
     auto_limit: int = 1000
     force: bool = False
+    database: str | None = Field(
+        default=None,
+        description="Connection name when multiple databases are available; defaults to primary.",
+    )
 
 
 class _Output(BaseModel):
@@ -158,7 +162,7 @@ class RunSqlTool(Tool[_Input]):
         if self._on_draft is not None:
             self._on_draft(sql)
 
-        conn = cast(Connection, ctx.connection)
+        conn = cast(Connection, ctx.connections[args.database or ctx.primary])
         t0 = time.monotonic()
         try:
             df = conn.execute(sql)
