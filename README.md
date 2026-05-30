@@ -62,7 +62,7 @@ On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 8
 | Phase 1a baseline | 5 (DuckDB+SQLite) | 17 | **43%** | n_trials=1 |
 | Phase 1b | 5 (DuckDB+SQLite) | 17 | **48.5%** | pass@5, ATTACH preamble |
 
-Phase 1b is the raw Claude + prompt engineering baseline (no LabRat tools). Phase 1b adds DuckDB ATTACH cross-DB join guidance and pass@5 scoring for stable estimates. Full write-up: [docs/dab_phase1a_results.md](docs/dab_phase1a_results.md).
+Phase 1b is the raw Claude + prompt engineering baseline (no LabRat tools). Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 ## Install
 
@@ -188,6 +188,7 @@ uv run python scripts/take_screenshots.py
 v0 alpha is feature-complete. Post-v0 priorities:
 
 - **ADE-bench improvements**: 80% overall — next target is `compare_schema` and `trace_column_lineage` tools (Tier 2) to close the remaining output-schema and dependency-discovery gaps
+- **DataAgentBench Phase 1c**: prompt iteration on music_brainz_20k (7%) and deps_dev_v1 (10%); then Phase 2 (PostgreSQL) and Phase 3 (MongoDB) for full 54-query submission
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 

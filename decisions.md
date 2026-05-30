@@ -85,4 +85,4 @@ Added `src/labrat/eval/types.py` with `BenchmarkSuite` protocol, `BenchmarkTask`
 
 **Why not a tool:** the DAB harness uses raw Bash, not LabRat tools. An `attach_database` LabRat tool will be built for the TUI product independently.
 
-**Impact:** fixes all `deps_dev_v1` (cross-DB join) and improves `music_brainz_20k` (tracks in SQLite, sales in DuckDB — same issue). Phase 1b run will quantify.
+**Phase 1b result:** marginal help — deps_dev_v1:2 improved from 0% to 20% (1/5 passes); deps_dev_v1:1 still 0/5 (more complex traversal required). music_brainz_20k unchanged at 7% — root cause is the model answering from context without querying (sub-10s response times), not a federation gap. Overall Phase 1b score: 48.5% on 5 DuckDB+SQLite datasets.
