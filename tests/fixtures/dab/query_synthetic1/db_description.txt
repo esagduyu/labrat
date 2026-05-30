@@ -1,0 +1,1 @@
+Synthetic dataset with one DuckDB. Tables: t1 (id, value).

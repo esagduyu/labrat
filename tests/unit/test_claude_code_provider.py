@@ -104,7 +104,7 @@ def test_parse_response_plain_text() -> None:
 
 
 def test_parse_response_tool_use_json() -> None:
-    line = json.dumps({"type": "tool_use", "name": "list_tables", "input": {}})
+    line = json.dumps({"call": "list_tables", "input": {}})
     blocks = _parse_response(line)
     assert len(blocks) == 1
     assert isinstance(blocks[0], ToolUseBlock)
@@ -113,14 +113,14 @@ def test_parse_response_tool_use_json() -> None:
 
 
 def test_parse_response_tool_use_with_input() -> None:
-    payload = {"type": "tool_use", "name": "run_sql", "input": {"sql": "SELECT 1"}}
+    payload = {"call": "run_sql", "input": {"sql": "SELECT 1"}}
     blocks = _parse_response(json.dumps(payload))
     assert isinstance(blocks[0], ToolUseBlock)
     assert blocks[0].input == {"sql": "SELECT 1"}
 
 
 def test_parse_response_tool_use_id_generated() -> None:
-    line = json.dumps({"type": "tool_use", "name": "list_tables", "input": {}})
+    line = json.dumps({"call": "list_tables", "input": {}})
     blocks = _parse_response(line)
     assert isinstance(blocks[0], ToolUseBlock)
     assert blocks[0].id.startswith("tu_")
@@ -128,14 +128,14 @@ def test_parse_response_tool_use_id_generated() -> None:
 
 def test_parse_response_tool_use_embedded_in_text() -> None:
     """Tool call JSON on its own line amid surrounding text."""
-    tool_line = json.dumps({"type": "tool_use", "name": "list_tables", "input": {}})
+    tool_line = json.dumps({"call": "list_tables", "input": {}})
     text = f"I'll look up the tables.\n{tool_line}\nProceeding..."
     blocks = _parse_response(text)
     assert any(isinstance(b, ToolUseBlock) for b in blocks)
 
 
 def test_parse_response_invalid_json_falls_back_to_text() -> None:
-    blocks = _parse_response('{"type": "tool_use", bad json}')
+    blocks = _parse_response('{"call": bad json}')
     assert isinstance(blocks[0], TextBlock)
 
 
@@ -189,7 +189,7 @@ async def test_claude_code_provider_text_response() -> None:
 
 async def test_claude_code_provider_tool_use_response() -> None:
     """Provider yields ToolUseBlock when claude outputs tool-call JSON."""
-    tool_json = json.dumps({"type": "tool_use", "name": "list_tables", "input": {}})
+    tool_json = json.dumps({"call": "list_tables", "input": {}})
     fake_json = json.dumps({"type": "result", "subtype": "success", "result": tool_json})
 
     mock_result = MagicMock()

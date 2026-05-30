@@ -1,0 +1,4 @@
+db_clients:
+  main_database:
+    db_type: duckdb
+    db_path: query_dataset/main.duckdb

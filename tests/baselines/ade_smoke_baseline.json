@@ -1,0 +1,38 @@
+{
+  "airbnb013": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "analytics_engineering001": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "analytics_engineering006": {
+    "attempts": 9,
+    "passes": 0
+  },
+  "asana001": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "f1001": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "f1004": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "helixops_saas005": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "helixops_saas016": {
+    "attempts": 9,
+    "passes": 3
+  },
+  "intercom001": {
+    "attempts": 9,
+    "passes": 0
+  }
+}

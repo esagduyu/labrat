@@ -9,13 +9,48 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 
-@dataclass
 class ToolContext:
-    """Runtime context passed to every tool during execution."""
+    """Runtime context passed to every tool during execution.
 
-    connection: object  # labrat.db.base.Connection — generic to avoid circular import
-    catalog: object  # labrat.db.catalog.Catalog
-    profile_name: str = "default"
+    Supports both single-DB (legacy) and multi-DB construction:
+
+      # Legacy — ctx.connection / ctx.catalog work as before:
+      ToolContext(connection=conn, catalog=cat)
+
+      # Multi-DB — agent can reach each DB by name:
+      ToolContext(connections={"main": conn1, "aux": conn2}, catalogs={...}, primary="main")
+    """
+
+    def __init__(
+        self,
+        connection: object = None,
+        catalog: object = None,
+        *,
+        connections: dict[str, object] | None = None,
+        catalogs: dict[str, object] | None = None,
+        primary: str = "primary",
+        profile_name: str = "default",
+    ) -> None:
+        if connection is not None:
+            self.connections: dict[str, object] = {primary: connection}
+        else:
+            self.connections = dict(connections) if connections is not None else {}
+
+        if catalog is not None:
+            self.catalogs: dict[str, object] = {primary: catalog}
+        else:
+            self.catalogs = dict(catalogs) if catalogs is not None else {}
+
+        self.primary = primary
+        self.profile_name = profile_name
+
+    @property
+    def connection(self) -> object:
+        return self.connections[self.primary]
+
+    @property
+    def catalog(self) -> object:
+        return self.catalogs[self.primary]
 
 
 @dataclass

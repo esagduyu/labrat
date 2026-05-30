@@ -171,4 +171,5 @@ autoresearch_output/
 # ─── Eval output ─────────────────────────────────────────────────────────────
 eval_output/
 test_output/
+runs/
 # screenshots/ is tracked — milestone SVGs live in screenshots/

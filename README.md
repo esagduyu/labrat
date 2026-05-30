@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: feature-complete v0 alpha. 443 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Full write-up: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
+> Status: feature-complete v0 alpha. 491 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Also evaluated on [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley): **48.5% Phase 1b** on 5 DuckDB+SQLite datasets (pass@5, raw Claude + prompt engineering baseline). Full write-up: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -36,14 +36,15 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 | MCP catalog integration | ✅ | generic async client for any MCP-compatible catalog |
 | Self-healing memory | ✅ | edit-derived + chat-correction memories, retrieval |
 | Custom validations | ✅ | natural-language rules, warn/block severity |
-| Eval framework | ✅ | [ADE-bench](https://github.com/dbt-labs/ade-bench) 60 tasks: **80% overall** (100% easy · 80% medium · 60% hard, DuckDB+dbt, Sonnet 4.6, best-of-3) |
+| Eval framework | ✅ | [ADE-bench](https://github.com/dbt-labs/ade-bench) 60 tasks: **80% overall** (100% easy · 80% medium · 60% hard, DuckDB+dbt, Sonnet 4.6, best-of-3). [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) Phase 1b: **48.5%** (17 queries, 5 DuckDB+SQLite datasets, pass@5, raw Claude + prompt engineering baseline). |
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts | ✅ | unicode (plotext) + image protocol (matplotlib/kitty) |
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
-**Test coverage:** 443 passing, 7 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).  
-**Benchmarks ([ADE-bench](https://github.com/dbt-labs/ade-bench), DuckDB+dbt, claude-sonnet-4-6, best-of-3, via `LabratLocalAgent`):**
+**Test coverage:** 491 passing, 10 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
+
+**[ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs, DuckDB+dbt, claude-sonnet-4-6, best-of-3, via `LabratLocalAgent`):**
 
 | Tier | Tasks | Score |
 |------|-------|-------|
@@ -52,7 +53,16 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 | Hard | 15 | **60%** (~9/15) |
 | **Overall** | **60** | **80% (48/60)** |
 
-On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 82% (32/39) vs. Altimate 77% (30/39)**, same model (Sonnet 4.6), same best-of-3 methodology. Altimate's suite is an older snapshot; our 60-task set includes 18 additional `helixops_saas` tasks added in March 2026. Full write-up with per-task comparison: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
+On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 82% (32/39) vs. Altimate 77% (30/39)**, same model (Sonnet 4.6), same best-of-3 methodology. Full write-up: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
+
+**[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley, multi-DB query answering, claude-sonnet-4-6):**
+
+| Phase | Datasets | Tasks | Score | Notes |
+|-------|----------|-------|-------|-------|
+| Phase 1a baseline | 5 (DuckDB+SQLite) | 17 | **43%** | n_trials=1 |
+| Phase 1b | 5 (DuckDB+SQLite) | 17 | **48.5%** | pass@5, ATTACH preamble |
+
+Phase 1b is the raw Claude + prompt engineering baseline (no LabRat tools). Phase 1b adds DuckDB ATTACH cross-DB join guidance and pass@5 scoring for stable estimates. Full write-up: [docs/dab_phase1a_results.md](docs/dab_phase1a_results.md).
 
 ## Install
 
@@ -162,6 +172,12 @@ uv run python scripts/eval_duckdb.py
 # ADE-bench evaluation (requires Docker + ade-bench repo at ~/repos/ade-bench)
 # Uses local Claude Code via Mac OAuth — no API credits needed
 cd ~/repos/ade-bench && uv run ade run helixops_saas001 airbnb001 --db duckdb --project-type dbt --agent labrat_local --no-diffs
+
+# DataAgentBench evaluation (requires DataAgentBench repo at ~/repos/DataAgentBench)
+# Phase 1b: pass@5 by default; --n-trials 1 for a quick single-trial run
+uv run python scripts/eval_dab.py --datasets deps_dev_v1,github_repos,music_brainz_20k,stockindex,stockmarket
+# Resume a crashed run:
+uv run python scripts/eval_dab.py --output-dir runs/dab/dab-<id>
 
 # Generate UI screenshots (no API key needed)
 uv run python scripts/take_screenshots.py
