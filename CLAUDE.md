@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Test
-uv run pytest                                    # full suite (~450 tests)
+uv run pytest                                    # full suite (~490 tests)
 uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
@@ -23,6 +23,11 @@ uv run labrat
 uv run python scripts/eval_duckdb.py             # no API key needed
 uv run scripts/eval_ade_bench.py --tasks helixops_saas001   # wrapper; needs ADE_BENCH_DIR + Docker
 cd ~/repos/ade-bench && uv run ade run helixops_saas001 --db duckdb --project-type dbt --agent labrat_local --no-diffs
+
+# DAB eval (needs DataAgentBench at ~/repos/DataAgentBench)
+uv run python scripts/eval_dab.py --datasets deps_dev_v1,github_repos,music_brainz_20k,stockindex,stockmarket
+uv run python scripts/eval_dab.py --n-trials 1  # quick single-trial run (default is 5)
+uv run python scripts/eval_dab.py --output-dir runs/dab/dab-<id>  # resume a crashed run
 ```
 
 `asyncio_mode = "auto"` is set globally — no `@pytest.mark.asyncio` needed.
@@ -89,6 +94,30 @@ uv run scripts/analyze_ade_failures.py ~/repos/ade-bench/experiments/<run_id>/
 Current score (2026-05-27, claude-sonnet-4-6): **80% overall** (48/60 tasks) — 100% easy, 80% medium, 60% hard.
 Roadmap and remaining failures: `docs/ade_bench_failure_analysis.md`
 
+### DAB integration (`src/labrat/eval/benchmarks/dab/`)
+
+[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 17 datasets, 121 queries, multi-DB (DuckDB, SQLite, PostgreSQL, MongoDB).
+
+LabRat-side integration lives at `src/labrat/eval/benchmarks/dab/`:
+- `suite.py` — `DabSuite` implements `BenchmarkSuite`; `run_trial` builds a db-access preamble (per-DB connection examples + DuckDB ATTACH idiom for cross-DB joins) and calls `claude --print` directly with Bash tool
+- `scorer.py` — imports each query's `validate.py`, adds DAB repo root to `sys.path` for `common_scaffold`
+- `reporter.py` — writes `submission.json` in DAB leaderboard format
+
+**DAB agent design:** uses `claude --print --disable-slash-commands --dangerously-skip-permissions --max-turns 15` with native Bash tool + Python+DuckDB. Does **not** use `AgentLoop`/`ClaudeCodeProvider` — the text-protocol conflicted with claude CLI's built-in tool handling.
+
+**Cross-DB ATTACH:** when a dataset has both DuckDB and SQLite connections, `run_trial` injects the ATTACH idiom into the prompt:
+```python
+conn.execute("ATTACH '/path/to/other.db' AS alias (TYPE SQLITE)")
+# then: SELECT ... FROM duck_table JOIN alias.sqlite_table ON ...
+```
+This enables cross-DB JOINs in a single DuckDB session (needed for `deps_dev_v1`, `music_brainz_20k`, `stockindex`, `stockmarket`).
+
+**Scoring:** stratified — mean of per-dataset pass rates. Each dataset contributes equally regardless of query count.
+
+**Phase 1a baseline (2026-05-29):** 43% overall on 5 DuckDB+SQLite datasets, n_trials=1. Details: `docs/dab_phase1a_results.md`.
+
+**Phase 1b (in progress):** pass@5 (default n_trials=5), JSONL resumability. See `scripts/eval_dab.py`.
+
 ### Smoke regression (`scripts/run_smoke_regression.py`)
 
 Fixed 9-task ADE subset (`src/labrat/eval/smoke.py::ADE_SMOKE_TASK_IDS`, frozen — see `docs/superpowers/notes/2026-05-29-ade-smoke-selection.md`). Run at every DAB phase boundary:
@@ -121,6 +150,10 @@ for d in sorted(Path('tasks').iterdir()):
 ```
 
 **ADE-bench known failures** — 12 tasks currently fail consistently. `helixops_saas010` fails 9/11 tests every run (was flaky; now a consistent failure). `helixops_saas015` fails 3/4 tests; `.low` variant passes. Full list and root causes: `docs/ade_bench_failure_analysis.md`.
+
+**DAB `eval_dab.py` default n_trials is 5 (Phase 1b)** — pass `--n-trials 1` for a quick single-trial run. Resuming a crashed run: `--output-dir runs/dab/dab-<id>` reads the existing `trials.jsonl` and skips already-completed `(task_id, trial_num)` pairs.
+
+**DAB cross-DB ATTACH idiom** — datasets with DuckDB+SQLite require `ATTACH` to join them. The preamble in `run_trial` auto-injects this when both DB types are present. If adding new dataset support, check `db_config.yaml` `db_clients` keys and ensure all db types are handled in the preamble builder.
 
 **ADE experiment results file is `results.json`, not `results_metadata.jsonl`** — the file has a top-level `{"results": [...], ...}` shape. The port-acceptance spike caught a 0% pass rate when `external_runner.py` read the wrong filename. If you write new ADE-results parsing code, read `results.json` and iterate `data["results"]`.
 
