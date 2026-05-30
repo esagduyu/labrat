@@ -34,11 +34,16 @@ async def run_agent_task(
     registry: ToolRegistry,
     provider: ModelProvider,
     system_prompt: str,
+    max_turns: int | None = None,
+    max_tool_calls: int | None = None,
 ) -> AgentTaskResult:
     """Run a single agent task and return the assistant's final text + tool count.
 
     The caller owns the ToolContext, ToolRegistry, provider, and system prompt —
     this function does not assume any particular tool set or model.
+
+    ``max_turns`` and ``max_tool_calls`` are forwarded to the underlying
+    ``AgentLoop``; ``None`` means unbounded.
     """
     text_parts: list[str] = []
 
@@ -50,24 +55,15 @@ async def run_agent_task(
         registry=registry,
         ctx=ctx,
         system=system_prompt,
+        max_turns=max_turns,
+        max_tool_calls=max_tool_calls,
     )
     t0 = time.monotonic()
     await loop.run(prompt, on_text=on_text)
     latency = time.monotonic() - t0
 
-    tool_calls = 0
-    for msg in loop.history:
-        if msg.get("role") != "assistant":
-            continue
-        content: object = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
-        for blk in content:  # pyright: ignore[reportUnknownVariableType]
-            if isinstance(blk, dict) and blk.get("type") == "tool_use":  # type: ignore[unknown-arg-type]
-                tool_calls += 1
-
     return AgentTaskResult(
         final_text="".join(text_parts),
-        tool_calls=tool_calls,
+        tool_calls=loop.tool_calls_used,
         latency_seconds=latency,
     )

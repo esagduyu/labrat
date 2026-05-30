@@ -101,6 +101,8 @@ async def _main(args: argparse.Namespace) -> int:
         registry=registry,
         provider=provider,
         system_prompt=system_prompt,
+        max_turns=args.max_turns,
+        max_tool_calls=args.max_tool_calls,
     )
     json.dump(result.model_dump(), sys.stdout)
     sys.stdout.write("\n")
@@ -134,6 +136,21 @@ def _parse_args() -> argparse.Namespace:
         "--system-prompt-file",
         default=None,
         help="Optional path to a file whose contents replace the default system prompt.",
+    )
+    p.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Cap on assistant turns; default unbounded.",
+    )
+    p.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=None,
+        help=(
+            "Cap on cumulative tool dispatches. AgentLoop drops overflow within the "
+            "round and exits when reached. Default: unbounded."
+        ),
     )
     return p.parse_args()
 

@@ -60,6 +60,8 @@ class AgentLoop:
         ctx: ToolContext,
         system: str = "",
         dialect: str = "duckdb",
+        max_turns: int | None = None,
+        max_tool_calls: int | None = None,
     ) -> None:
         from labrat.agent.prompts import build_system_prompt
         from labrat.agent.providers.base import ModelProvider  # deferred import
@@ -71,7 +73,12 @@ class AgentLoop:
         self._registry = registry
         self._ctx = ctx
         self._system = system or build_system_prompt(dialect)
+        self._max_turns = max_turns
+        self._max_tool_calls = max_tool_calls
         self.history: list[dict[str, Any]] = []
+        # Counters reset by run(); exposed so callers can inspect what was used.
+        self.turns_used = 0
+        self.tool_calls_used = 0
 
     async def run(
         self,
@@ -79,10 +86,23 @@ class AgentLoop:
         *,
         on_text: Callable[[str], None] | None = None,
     ) -> None:
-        """Process a single user turn, handling any tool call round-trips."""
+        """Process a single user turn, handling any tool call round-trips.
+
+        Caps:
+          - ``max_turns`` (set on the loop) limits the number of assistant rounds.
+            When reached, the loop exits before issuing the next provider call.
+          - ``max_tool_calls`` (set on the loop) limits cumulative tool dispatches.
+            Within a round, tools are dispatched up to the remaining budget; any
+            extras emitted by the model are dropped and the loop exits.
+        """
         self.history.append({"role": "user", "content": user_message})
+        self.turns_used = 0
+        self.tool_calls_used = 0
 
         while True:
+            if self._max_turns is not None and self.turns_used >= self._max_turns:
+                break
+
             text_parts: list[str] = []
             tool_uses: list[ToolUseBlock] = []
 
@@ -99,7 +119,8 @@ class AgentLoop:
                 elif isinstance(block, ToolUseBlock):
                     tool_uses.append(block)
 
-            # Record the assistant turn in history
+            self.turns_used += 1
+
             content: list[dict[str, Any]] = []
             if text_parts:
                 content.append({"type": "text", "text": "".join(text_parts)})
@@ -112,9 +133,17 @@ class AgentLoop:
             if not tool_uses:
                 break  # no more tool calls — done
 
-            # Dispatch all tool calls and send results back
+            # Dispatch up to the remaining tool-call budget. If the model emitted
+            # more than the budget allows, drop the overflow and exit the loop.
             tool_result_content: list[dict[str, Any]] = []
+            dispatched_all = True
             for tu in tool_uses:
+                if (
+                    self._max_tool_calls is not None
+                    and self.tool_calls_used >= self._max_tool_calls
+                ):
+                    dispatched_all = False
+                    break
                 dispatch = await self._registry.dispatch(tu.name, tu.input, self._ctx)
                 tool_result_content.append(
                     {
@@ -125,4 +154,10 @@ class AgentLoop:
                         ),
                     }
                 )
-            self.history.append({"role": "user", "content": tool_result_content})
+                self.tool_calls_used += 1
+
+            if tool_result_content:
+                self.history.append({"role": "user", "content": tool_result_content})
+
+            if not dispatched_all:
+                break  # budget exhausted; stop instead of continuing partial state

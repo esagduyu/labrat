@@ -99,6 +99,63 @@ async def test_runner_handles_no_tool_calls() -> None:
     assert result.tool_calls == 0
 
 
+async def test_runner_respects_max_turns_cap() -> None:
+    """max_turns prevents further provider calls past the cap."""
+    ctx = ToolContext(connections={"primary": object()}, catalogs={"primary": object()})
+    registry = ToolRegistry()
+    registry.register(_NoopTool())
+
+    # Provider would keep asking for tools forever. Cap at 2 turns.
+    provider = _FakeProvider(
+        [
+            [ToolUseBlock(id="t1", name="noop", input={})],
+            [ToolUseBlock(id="t2", name="noop", input={})],
+            [ToolUseBlock(id="t3", name="noop", input={})],
+            [TextBlock(text="unreached")],
+        ]
+    )
+
+    result = await run_agent_task(
+        prompt="loop",
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="capped",
+        max_turns=2,
+    )
+    assert result.tool_calls == 2  # exactly 2 tool dispatches over 2 turns
+    assert result.final_text == ""  # never reached the closing text
+
+
+async def test_runner_respects_max_tool_calls_cap() -> None:
+    """max_tool_calls dispatches up to the budget and drops any overflow within a round."""
+    ctx = ToolContext(connections={"primary": object()}, catalogs={"primary": object()})
+    registry = ToolRegistry()
+    registry.register(_NoopTool())
+
+    # Model emits 3 tools in one round; cap is 2.
+    provider = _FakeProvider(
+        [
+            [
+                ToolUseBlock(id="t1", name="noop", input={}),
+                ToolUseBlock(id="t2", name="noop", input={}),
+                ToolUseBlock(id="t3", name="noop", input={}),
+            ],
+            [TextBlock(text="unreached")],
+        ]
+    )
+
+    result = await run_agent_task(
+        prompt="batch",
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="capped",
+        max_tool_calls=2,
+    )
+    assert result.tool_calls == 2
+
+
 async def test_runner_counts_multiple_tool_calls_across_turns() -> None:
     ctx = ToolContext(connections={"primary": object()}, catalogs={"primary": object()})
     registry = ToolRegistry()

@@ -168,6 +168,8 @@ class DabSuite:
         driver: Driver = "raw-bash",
         agent_model: str = "claude-sonnet-4-6",
         agent_provider: str = "anthropic",
+        agent_max_turns: int | None = None,
+        agent_max_tool_calls: int | None = None,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -176,6 +178,8 @@ class DabSuite:
         self._driver: Driver = driver
         self._agent_model = agent_model
         self._agent_provider = agent_provider
+        self._agent_max_turns = agent_max_turns
+        self._agent_max_tool_calls = agent_max_tool_calls
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -327,8 +331,14 @@ class DabSuite:
         )
         enriched_prompt = f"{db_preamble}\n\n{task.prompt}"
 
+        # Raw-bash defaults to max_turns=15 for Phase 1b reproducibility, but
+        # honour an explicit override so the user can rerun the baseline with
+        # tighter / looser budgets when comparing to other drivers.
+        raw_bash_max_turns = self._agent_max_turns if self._agent_max_turns is not None else 15
         t0 = time.monotonic()
-        agent_out = await _invoke_agent(prompt=enriched_prompt, ctx=None)
+        agent_out = await _invoke_agent(
+            prompt=enriched_prompt, ctx=None, max_turns=raw_bash_max_turns
+        )
         latency = time.monotonic() - t0
         return agent_out["final_text"], int(agent_out["tool_calls"]), latency
 
@@ -417,7 +427,18 @@ class DabSuite:
                 "When confident, respond with the final answer on the last line.",
             ]
         )
+        # max_tool_calls is advisory under claude-mcp (the CLI has no native cap);
+        # surface it in the prompt so the model self-regulates.
+        if self._agent_max_tool_calls is not None:
+            prompt_lines.append(
+                f"\nBudget: at most {self._agent_max_tool_calls} tool calls. Plan accordingly."
+            )
         prompt = "\n".join(prompt_lines)
+
+        # max_turns under claude-mcp maps to claude CLI's --max-turns. If
+        # unbounded (None), pass a high ceiling (200) so the CLI doesn't apply
+        # its own short default.
+        effective_max_turns = self._agent_max_turns if self._agent_max_turns is not None else 200
 
         cmd = [
             "claude",
@@ -430,7 +451,7 @@ class DabSuite:
             "--permission-mode",
             "bypassPermissions",
             "--max-turns",
-            "25",
+            str(effective_max_turns),
             "--output-format",
             "json",
         ]
@@ -508,6 +529,8 @@ class DabSuite:
                 registry=registry,
                 provider=provider,
                 system_prompt=system_prompt,
+                max_turns=self._agent_max_turns,
+                max_tool_calls=self._agent_max_tool_calls,
             )
         finally:
             for conn in env.ctx.connections.values():

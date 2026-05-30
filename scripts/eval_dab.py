@@ -142,6 +142,28 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help=(
+            "Cap on assistant turns per trial. Default: unbounded for labrat-agent; "
+            "200 for claude-mcp (sent to claude --max-turns); 15 for raw-bash (Phase "
+            "1b baseline value). Pass any positive int to override."
+        ),
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=None,
+        help=(
+            "Cap on cumulative tool dispatches per trial. Hard-enforced under "
+            "labrat-agent (AgentLoop drops overflow and exits). For claude-mcp it is "
+            "advisory only (surfaced in the prompt — claude CLI has no native cap). "
+            "Ignored under raw-bash (no LabRat registry in the loop). Default: "
+            "unbounded."
+        ),
+    )
+    parser.add_argument(
         "--n-trials",
         type=int,
         default=5,
@@ -180,14 +202,16 @@ def main(argv: list[str] | None = None) -> int:
         ("driver", args.driver),
         ("agent_model", args.agent_model),
         ("agent_provider", args.agent_provider),
+        ("agent_max_turns", args.max_turns),
+        ("agent_max_tool_calls", args.max_tool_calls),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
             raise SystemExit(
                 f"Resume conflict: --{field.replace('_', '-')}={cli_val!r} but "
                 f"existing config.json has {prior!r}. Refusing to mix drivers/models/"
-                f"providers in one run (would invalidate aggregate scoring). Drop the "
-                f"override to resume, or start a fresh --output-dir."
+                f"providers/caps in one run (would invalidate aggregate scoring). Drop "
+                f"the override to resume, or start a fresh --output-dir."
             )
 
     effective_driver: Driver = args.driver or existing_cfg.get("driver") or "raw-bash"
@@ -197,6 +221,14 @@ def main(argv: list[str] | None = None) -> int:
     effective_provider: str = (
         args.agent_provider or existing_cfg.get("agent_provider") or "anthropic"
     )
+    effective_max_turns: int | None = (
+        args.max_turns if args.max_turns is not None else existing_cfg.get("agent_max_turns")
+    )
+    effective_max_tool_calls: int | None = (
+        args.max_tool_calls
+        if args.max_tool_calls is not None
+        else existing_cfg.get("agent_max_tool_calls")
+    )
 
     suite = DabSuite(
         dab_dir=args.dab_dir,
@@ -204,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         driver=effective_driver,
         agent_model=effective_model,
         agent_provider=effective_provider,
+        agent_max_turns=effective_max_turns,
+        agent_max_tool_calls=effective_max_tool_calls,
     )
 
     task_filter: list[str] | None = None
@@ -229,6 +263,8 @@ def main(argv: list[str] | None = None) -> int:
                 "driver": effective_driver,
                 "agent_model": effective_model,
                 "agent_provider": effective_provider,
+                "agent_max_turns": effective_max_turns,
+                "agent_max_tool_calls": effective_max_tool_calls,
                 "n_trials": args.n_trials,
                 "task_filter": task_filter,
             },
