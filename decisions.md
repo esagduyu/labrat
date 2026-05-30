@@ -129,10 +129,95 @@ Also make the substrate harness-agnostic (MCP) and provider-agnostic (any
   *behavioral fragility*. Simple single-step queries work; harder
   multi-step / cross-DB queries push the model toward native tool_use and
   the path breaks. ClaudeCodeProvider is not a reliable Phase 4 driver.
-- The proper Max-plan + agent path is the MCP server (Layer 2 of the plan).
-  `claude --print --mcp-config` handles MCP tool calls natively — no
-  custom text protocol, no model-format dependence.
 
-**What this means for Phase 4 billing:** until MCP ships, the only fully
-reliable labrat-agent driver is `AnthropicProvider` (metered API). MCP is the
-critical path for the Max-plan version of the Phase 4 measurement.
+## LabRat MCP server + `claude-mcp` DAB driver (2026-05-30)
+
+**Goal:** ship the proper Max-plan path for the Phase 4 measurement, plus
+make LabRat's tools portable to any MCP-supporting host harness (Claude
+Code, Codex, Cursor, OpenCode, …) — addressing the two follow-on
+constraints surfaced by the user this session: harness-agnostic and
+model-agnostic.
+
+**Compatibility spike (Layer 2a):** built a 2-tool toy FastMCP server
+(`labrat.mcp.toy` with `echo` and `now`) and ran
+`claude --print --strict-mcp-config --mcp-config toy.json -p "use echo"`.
+The model called the tool natively, the toy server returned the result,
+the model relayed it. Round-trip confirmed under `claude --print`
+non-interactive mode with Max-plan OAuth (`ANTHROPIC_API_KEY` stripped).
+
+**Layer 2 (MCP server):** `src/labrat/mcp/server.py` mounts the data-tools
+registry over MCP stdio using `mcp.server.Server` (low-level API).
+`ToolContext` is constructed from `LABRAT_MCP_CONNECTIONS` (JSON env var)
++ optional `LABRAT_MCP_PRIMARY`. Each LabRat tool is exposed via the
+`anthropic_schema()` it already publishes; results are serialised via
+Pydantic `model_dump_json()` or `json.dumps` fallback. `DuckDBConnection`
+gained a public `path` property (was private `_path`) so callers can
+build mcp-configs without re-parsing `db_config.yaml`.
+
+**Layer 2b (`claude-mcp` DAB driver):** `DabSuite` gained a third driver.
+`Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]`.
+`_run_trial_claude_mcp` generates a per-trial `mcp-config.json` in the
+scratch dir, then shells
+`claude --print --strict-mcp-config --mcp-config <file> --model <agent_model>
+--permission-mode bypassPermissions --output-format json` with
+`ANTHROPIC_API_KEY` / `CLAUDECODE` stripped so the CLI falls through to
+Max-plan OAuth. SQLite secondaries from `DabTaskEnv.attachable` are
+surfaced in the prompt; the model uses the `attach_database` MCP tool to
+bring them in. `num_turns` from the CLI JSON output → `tool_calls`.
+
+**Driver matrix and billing reality (final):**
+
+| Driver | Billing | Reliability | Phase 4 fitness |
+|---|---|---|---|
+| `raw-bash` | Max | high | Phase 1b baseline (48.5%) — no LabRat tools |
+| `labrat-agent` + `anthropic` | metered API | high | works; needs API credits (~$50–300 for full run) |
+| `labrat-agent` + `claude-code` | Max | low (fragile) | breaks on cross-DB; do not use |
+| **`claude-mcp`** | **Max** | **high** | **recommended Phase 4 path** |
+
+**Smoke validations:**
+- `stockmarket:1` via `--driver=claude-mcp` → PASS, 34.8s, **7 tool calls**
+  (real multi-step LabRat tool flow), Sonnet, `cost_usd=0.0` (Max plan).
+- `music_brainz_20k:1` via the same path → returned `601.44` (same wrong
+  answer as Phase 1b raw-bash). The tool path is fully exercised; the
+  failure is semantic, not infrastructural.
+
+## Configurable agent caps (2026-05-30)
+
+Added optional `max_turns` and `max_tool_calls` parameters end-to-end so
+runs can be bounded per scenario. Both default `None` (unbounded).
+
+- `AgentLoop` enforces the caps directly. When `max_tool_calls` would be
+  exceeded mid-round, it dispatches up to the budget, appends the partial
+  `tool_result` to history, and exits — no inconsistent state left for a
+  future call.
+- `run_agent_task` (the in-process wrapper used by the `labrat-agent` DAB
+  driver and `scripts/run_task.py`) passes both through.
+- `DabSuite` exposes `agent_max_turns` / `agent_max_tool_calls`. Behaviour
+  per driver:
+  - `labrat-agent`: hard cap via `AgentLoop`.
+  - `claude-mcp`: `max_turns` → `claude --max-turns` (default 200 when
+    `None` rather than relying on the CLI's short default).
+    `max_tool_calls` is **advisory** in the prompt — the claude CLI has no
+    native tool-call cap.
+  - `raw-bash`: keeps the Phase 1b `max_turns=15` default for baseline
+    reproducibility, but honours an explicit override.
+- `scripts/eval_dab.py` and `scripts/run_task.py` both expose
+  `--max-turns` / `--max-tool-calls`. DAB persists them to `config.json`
+  and restores them on resume; conflicting overrides are rejected.
+
+## Original spec vs. shipped reality
+
+Cross-check against
+`docs/superpowers/specs/2026-05-28-unified-benchmark-suite-design.md`:
+
+| Spec'd in 2026-05-28 | Where it actually landed |
+|---|---|
+| Phase 4 `LabRatAgentDriver` at `src/labrat/eval/driver.py` | Shipped as `run_agent_task` at `src/labrat/agent/runner.py`. Functional equivalent; located under `agent/` because it generalises beyond eval (the TUI and the `run_task.py` shim use it too). |
+| `AgentRunResult` with `usage`, `cost_usd`, `files_produced`, `tool_call_log` | Shipped as `AgentTaskResult` with `final_text`, `tool_calls`, `latency_seconds`. Usage/cost accounting deferred (the spec flagged this as an open question). |
+| `BenchmarkOrchestrator` at `src/labrat/eval/orchestrator.py` | **Not extracted.** DAB's interim runner in `scripts/eval_dab.py::_run_interim` still owns concurrency / JSONL / resumability. Spec said this extraction triggers when Spider2 lands. Deferred. |
+| `LabRatAgentDriver` accessible via `AgentRunResult.tool_call_log` | Not surfaced. AgentLoop exposes `history` and `tool_calls_used`; callers can introspect there. |
+| One driver per benchmark | **Three** DAB drivers now exist (`raw-bash` / `labrat-agent` / `claude-mcp`). The spec assumed one; the substrate work introduced a driver axis that the harness now persists in `config.json`. |
+| MCP server | Not in spec. New work, motivated by the harness-agnostic / model-agnostic constraints; lives at `src/labrat/mcp/`. |
+| `--max-turns` / `--max-tool-calls` configurable | Not in spec. New work, motivated by Max-plan budget control. |
+
+Spider2-DBT remains stubbed only, as the spec intended.

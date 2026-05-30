@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: feature-complete v0 alpha. 491 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Also evaluated on [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley): **48.5% Phase 1b** on 5 DuckDB+SQLite datasets (pass@5, raw Claude + prompt engineering baseline). Full write-up: [docs/ade-bench-progress-report.md](docs/ade-bench-progress-report.md).
+> Status: feature-complete v0 alpha. 504 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Also evaluated on [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley): **48.5% Phase 1b** baseline on 5 DuckDB+SQLite datasets (pass@5, raw Claude + prompt engineering). The Phase 4 substrate (LabRat tools + AgentLoop + MCP server) ships on `feat/labrat-agent-substrate` and routes DAB through LabRat's own tool stack — the gap between Phase 1b and Phase 4 is the measured value of the tool layer. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -29,7 +29,8 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 |---|---|---|
 | 7 warehouse adapters | ✅ | DuckDB, Postgres, Snowflake, BigQuery, Redshift, Trino, MySQL |
 | 3 LLM providers | ✅ | Anthropic API, Claude Code CLI (Mac OAuth), OpenAI-compatible |
-| Agent tool loop | ✅ | schema exploration, SQL execution, safety gates |
+| Agent tool loop | ✅ | schema exploration, SQL execution, safety gates, multi-DB routing, `attach_database` for cross-DB JOINs, configurable `max_turns` / `max_tool_calls` caps |
+| MCP server | ✅ | `python -m labrat.mcp.server` mounts the LabRat tool registry over MCP stdio — drop into Claude Code, Codex, Cursor, OpenCode, or any MCP-supporting host. Reads connection spec from `LABRAT_MCP_CONNECTIONS` env var. |
 | Query history | ✅ | always-on, PII-redacted JSONL per profile |
 | Personal context engine | ✅ | table relevance scoring, LLM-generated descriptions |
 | dbt catalog integration | ✅ | manifest.json + schema.yml + catalog.json + lineage |
@@ -42,7 +43,7 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
-**Test coverage:** 491 passing, 10 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
+**Test coverage:** 504 passing, 10 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
 
 **[ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs, DuckDB+dbt, claude-sonnet-4-6, best-of-3, via `LabratLocalAgent`):**
 
@@ -59,10 +60,11 @@ On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 8
 
 | Phase | Datasets | Tasks | Score | Notes |
 |-------|----------|-------|-------|-------|
-| Phase 1a baseline | 5 (DuckDB+SQLite) | 17 | **43%** | n_trials=1 |
-| Phase 1b | 5 (DuckDB+SQLite) | 17 | **48.5%** | pass@5, ATTACH preamble |
+| Phase 1a baseline | 5 (DuckDB+SQLite) | 17 | **43%** | n_trials=1, raw-bash driver |
+| Phase 1b | 5 (DuckDB+SQLite) | 17 | **48.5%** | pass@5, ATTACH preamble, raw-bash driver — current baseline |
+| Phase 4 substrate | 5 (DuckDB+SQLite) | 17 | TBD | LabRat tools via `labrat-agent` (metered API) or `claude-mcp` (Max plan, recommended) drivers |
 
-Phase 1b is the raw Claude + prompt engineering baseline (no LabRat tools). Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
+Phase 1b is the raw Claude + prompt engineering floor — no LabRat tools. Phase 4 routes DAB through LabRat's own agent loop and tool registry. Three drivers now coexist (`raw-bash` for baseline reproducibility, `labrat-agent` for the standalone agent story, `claude-mcp` for the Max-plan tool path). The delta between Phase 1b and Phase 4 is the measured value of the tool layer. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 ## Install
 

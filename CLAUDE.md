@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Test
-uv run pytest                                    # full suite (~490 tests)
+uv run pytest                                    # full suite (~504 tests)
 uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
@@ -28,6 +28,22 @@ cd ~/repos/ade-bench && uv run ade run helixops_saas001 --db duckdb --project-ty
 uv run python scripts/eval_dab.py --datasets deps_dev_v1,github_repos,music_brainz_20k,stockindex,stockmarket
 uv run python scripts/eval_dab.py --n-trials 1  # quick single-trial run (default is 5)
 uv run python scripts/eval_dab.py --output-dir runs/dab/dab-<id>  # resume a crashed run
+
+# DAB driver selection (post-substrate, 2026-05-30):
+uv run python scripts/eval_dab.py --driver raw-bash         # Phase 1b baseline (48.5% reproducible)
+uv run python scripts/eval_dab.py --driver labrat-agent     # AgentLoop + LabRat tools (default provider: anthropic, metered API)
+uv run python scripts/eval_dab.py --driver claude-mcp       # claude --print + LabRat MCP server (Max-plan, recommended Phase 4 path)
+uv run python scripts/eval_dab.py --driver labrat-agent --agent-provider anthropic --agent-model claude-sonnet-4-6
+uv run python scripts/eval_dab.py --driver labrat-agent --max-turns 10 --max-tool-calls 30   # bound the loop
+
+# Standalone LabRat agent on any query (any provider):
+uv run python scripts/run_task.py --prompt "..." \
+    --connections '{"main":{"db_type":"duckdb","db_path":"/path.duckdb"}}' \
+    --provider anthropic --model claude-sonnet-4-6
+
+# Run the LabRat MCP server (mount inside any MCP-supporting host):
+LABRAT_MCP_CONNECTIONS='{"main":{"db_type":"duckdb","db_path":"/path.duckdb"}}' \
+    uv run python -m labrat.mcp.server
 ```
 
 `asyncio_mode = "auto"` is set globally — no `@pytest.mark.asyncio` needed.
@@ -37,11 +53,13 @@ LLM-gated tests are skipped unless `ANTHROPIC_API_KEY` or `LABRAT_RUN_LLM_TESTS=
 
 ### Agent loop (`src/labrat/agent/`)
 
-`AgentLoop` in `loop.py` drives tool-use round-trips. It accepts a `ToolRegistry` and an LLM provider, sends messages, receives `TextBlock | ToolUseBlock` responses, dispatches tools, and feeds `ToolResultBlock`s back until the model stops calling tools.
+`AgentLoop` in `loop.py` drives tool-use round-trips. It accepts a `ToolRegistry` and an LLM provider, sends messages, receives `TextBlock | ToolUseBlock` responses, dispatches tools, and feeds `ToolResultBlock`s back until the model stops calling tools. Optional `max_turns` and `max_tool_calls` cap the loop (both default `None` = unbounded). After `run()`, `loop.turns_used` and `loop.tool_calls_used` report what actually fired.
 
-Every tool subclasses `Tool[InputT]` (`tools/base.py`). It declares `name`, `description`, and `input_model` (a Pydantic model). The registry validates inputs, calls `execute(ctx, input)`, and wraps results in `DispatchResult`. `ToolContext` carries the live `Connection` and `Catalog`.
+`run_agent_task` in `runner.py` is the in-process wrapper that turns a one-shot prompt into an `AgentTaskResult(final_text, tool_calls, latency_seconds)`. Used by the DAB `labrat-agent` driver, `scripts/run_task.py`, and (eventually) the TUI chat path. The standard data tools come from `data_tools.py::build_data_tools_registry()` — `list_tables`, `describe_table`, `search_columns`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `attach_database`. TUI-callback tools (`draft_sql`, `create_chart`) and profile-keyed tools (`run_validations`, `recall_memories`, `search_query_history`) are registered separately by the TUI.
 
-Current tools: `list_tables`, `describe_table`, `sample_rows`, `search_columns`, `column_stats`, `draft_sql`, `run_sql`, `explain_sql`, `search_query_history`, `recall_memories`, `create_chart`, `run_validations`.
+Every tool subclasses `Tool[InputT]` (`tools/base.py`). It declares `name`, `description`, and `input_model` (a Pydantic model). The registry validates inputs, calls `execute(ctx, input)`, and wraps results in `DispatchResult`. `ToolContext` supports **multi-DB construction** — `connections: dict[str, Connection]` + `catalogs: dict[str, object]` + `primary: str`. Single-DB construction (`connection=`, `catalog=`) is preserved as a back-compat shim that wraps the value under the `primary` name. Tools that accept an optional `database: str | None` field (most data-access tools) route via `ctx.connections[args.database or ctx.primary]`.
+
+Current tools (13): `list_tables`, `describe_table`, `sample_rows`, `search_columns`, `column_stats`, `draft_sql`, `run_sql`, `explain_sql`, `search_query_history`, `recall_memories`, `create_chart`, `run_validations`, `attach_database`.
 
 ### Database layer (`src/labrat/db/`)
 
@@ -49,7 +67,11 @@ Current tools: `list_tables`, `describe_table`, `sample_rows`, `search_columns`,
 
 ### LLM providers (`src/labrat/agent/providers/`)
 
-`BaseProvider` ABC. `AnthropicDirectProvider` uses the Anthropic SDK. `ClaudeCodeProvider` shells out to the `claude` CLI (used when running under Mac OAuth with no API credits). `OpenAICompatibleProvider` covers Azure, LiteLLM, Ollama, etc.
+`ModelProvider` ABC. `AnthropicProvider` uses the Anthropic SDK. `ClaudeCodeProvider` shells out to the `claude` CLI (Mac OAuth, Max plan; **fragile under tool round-trips** — see DAB integration below). `OpenAICompatibleProvider` covers Azure, LiteLLM, Ollama, etc. `providers/__init__.py::build_provider(name, model)` is the shared string-to-provider factory used by the DAB harness and `scripts/run_task.py`. `PROVIDER_NAMES = ("anthropic", "claude-code", "openai")`.
+
+### MCP server (`src/labrat/mcp/`)
+
+`labrat.mcp.server` mounts the data-tools registry over MCP stdio (`mcp.server.Server` low-level API). Reads `LABRAT_MCP_CONNECTIONS` (JSON: `{name: {db_type: "duckdb", db_path: "..."}}`) + optional `LABRAT_MCP_PRIMARY`. Each LabRat tool is exposed via its `anthropic_schema()`; results are serialised via Pydantic `model_dump_json()` or `json.dumps` fallback. The DAB `claude-mcp` driver writes a per-trial mcp-config and shells `claude --print --mcp-config <file>`. The TUI product can mount the same server in Claude Code / Codex / Cursor for harness-agnostic data access. `labrat.mcp.toy` is the 2-tool spike server kept around for MCP compatibility checks.
 
 ### TUI (`src/labrat/screens/`, `src/labrat/widgets/`)
 
@@ -96,27 +118,39 @@ Roadmap and remaining failures: `docs/ade_bench_failure_analysis.md`
 
 ### DAB integration (`src/labrat/eval/benchmarks/dab/`)
 
-[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 12 official datasets, 54 queries, multi-DB (DuckDB, SQLite, PostgreSQL, MongoDB). Note: local repo (`~/repos/DataAgentBench`) has 17 directories — 5 are unofficial extras (civic_unstructured, cve, imdb, krama, usaspending) not in the official benchmark.
+[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 12 official datasets, 54 queries, multi-DB (DuckDB, SQLite, PostgreSQL, MongoDB). Local repo (`~/repos/DataAgentBench`) has 17 directories — 5 are unofficial extras (civic_unstructured, cve, imdb, krama, usaspending) not in the official benchmark.
 
-LabRat-side integration lives at `src/labrat/eval/benchmarks/dab/`:
-- `suite.py` — `DabSuite` implements `BenchmarkSuite`; `run_trial` builds a db-access preamble (per-DB connection examples + DuckDB ATTACH idiom for cross-DB joins) and calls `claude --print` directly with Bash tool
+**Files:**
+- `suite.py` — `DabSuite` implements `BenchmarkSuite`. Three drivers (see below). `Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]`
+- `env.py` — `build_dab_task_env(db_config_path) → DabTaskEnv(ctx, attachable)`. DuckDB clients become real `DuckDBConnection`s in `ctx.connections`; SQLite clients become `AttachSpec(alias, path, db_type)` entries the agent uses via the `attach_database` tool. Connections are not pre-`connect()`ed — the driver does that at trial start.
 - `scorer.py` — imports each query's `validate.py`, adds DAB repo root to `sys.path` for `common_scaffold`
 - `reporter.py` — writes `submission.json` in DAB leaderboard format
 
-**DAB agent design:** uses `claude --print --disable-slash-commands --dangerously-skip-permissions --max-turns 15` with native Bash tool + Python+DuckDB. Does **not** use `AgentLoop`/`ClaudeCodeProvider` — the text-protocol conflicted with claude CLI's built-in tool handling.
+**Three drivers (selected via `--driver` on `scripts/eval_dab.py`):**
 
-**Cross-DB ATTACH:** when a dataset has both DuckDB and SQLite connections, `run_trial` injects the ATTACH idiom into the prompt:
-```python
-conn.execute("ATTACH '/path/to/other.db' AS alias (TYPE SQLITE)")
-# then: SELECT ... FROM duck_table JOIN alias.sqlite_table ON ...
-```
-This enables cross-DB JOINs in a single DuckDB session (needed for `deps_dev_v1`, `music_brainz_20k`, `stockindex`, `stockmarket`).
+| Driver | Loop owner | Billing | Reliability | Use for |
+|---|---|---|---|---|
+| `raw-bash` (default) | claude CLI native Bash | Max plan | high | Reproducing Phase 1b 48.5% baseline |
+| `labrat-agent` | `AgentLoop` + LabRat tools | depends on `--agent-provider` | high w/ anthropic; **fragile** w/ claude-code | Phase 4 measurement on metered API; cross-provider matrix |
+| `claude-mcp` | claude CLI + LabRat MCP server | Max plan | high | **Recommended Phase 4 path** — LabRat tools, free per run |
+
+The `labrat-agent` driver builds the `DabTaskEnv`, registers `data_tools` (`list_tables`, `describe_table`, `search_columns`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `attach_database`), and routes through `run_agent_task` in-process. The `claude-mcp` driver writes a per-trial `mcp-config.json` to the scratch dir and shells `claude --print --strict-mcp-config --mcp-config <file> --model <agent_model> --permission-mode bypassPermissions`. `ANTHROPIC_API_KEY` / `CLAUDECODE` / `CLAUDE_CODE_*` are stripped from the subprocess env so the CLI falls through to Max-plan OAuth.
+
+**Cross-DB ATTACH:** under `raw-bash` the ATTACH idiom is injected into the prompt (text). Under `labrat-agent` and `claude-mcp` the model uses the `attach_database` tool against the primary DuckDB; SQLite paths are surfaced from `DabTaskEnv.attachable` so the model knows what's available.
+
+**`ClaudeCodeProvider` fragility:** the text protocol convention (`{"call":"<tool>","input":{...}}`) works when the model emits it cleanly. On harder queries the model falls back to native `{"type":"tool_use",...}` blocks and the CLI returns `error_max_turns` with `stop_reason: tool_use`. Verified 2026-05-30: stockmarket:1 PASSes via `--agent-provider claude-code`, music_brainz_20k:1 FAILs. Don't use `claude-code` as the Phase 4 provider — use `claude-mcp` instead.
+
+**Caps:** `--max-turns` and `--max-tool-calls` are configurable, both default `None` (unbounded). Under `labrat-agent` they hard-cap `AgentLoop`. Under `claude-mcp`, `max-turns` maps to `claude --max-turns` (default 200 when `None`); `max-tool-calls` is **advisory only** (surfaced in the prompt — the claude CLI has no native tool-call cap). Under `raw-bash`, `max-turns` honours explicit override but defaults to 15 (Phase 1b reproducibility); `max-tool-calls` is ignored (no LabRat registry in the loop).
+
+**Resume safety:** `config.json` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls`. Resuming via `--output-dir` restores all five; any CLI override that conflicts with the existing config is rejected to prevent mixed-driver runs from corrupting the aggregate score.
 
 **Scoring:** stratified — mean of per-dataset pass rates. Each dataset contributes equally regardless of query count. Per-query rate = `passes / n_trials` (not binary pass@5), so a query with 1/5 passes scores 0.2, not 1.0.
 
-**Phase 1a baseline (2026-05-29):** 43% overall on 5 DuckDB+SQLite datasets, n_trials=1. Details: `docs/dab_phase1a_results.md`.
+**Phase 1a baseline (2026-05-29):** 43% overall on 5 DuckDB+SQLite datasets, n_trials=1.
 
-**Phase 1b (DONE 2026-05-30):** 48.5% overall on 5 DuckDB+SQLite datasets (17 queries, pass@5, n_trials=5). Covers deps_dev_v1 (10%), github_repos (50%), music_brainz_20k (7%), stockindex (100%), stockmarket (76%). This is the raw Claude + prompt engineering floor — no LabRat tools. ADE smoke check passed at Phase 1b exit gate. See `scripts/eval_dab.py`.
+**Phase 1b (2026-05-30):** 48.5% overall on 5 DuckDB+SQLite datasets (17 queries, pass@5, n_trials=5). Covers deps_dev_v1 (10%), github_repos (50%), music_brainz_20k (7%), stockindex (100%), stockmarket (76%). Raw Claude + prompt engineering floor — no LabRat tools. Reproducible via `--driver=raw-bash`.
+
+**Phase 4 substrate (2026-05-30):** `labrat-agent` and `claude-mcp` drivers shipped on `feat/labrat-agent-substrate`. Smoke confirms both paths run end-to-end; a full pass@5 Phase 4 measurement against the 17-query suite is the next step. See `docs/dab-progress-report.md` and `decisions.md`.
 
 ### Smoke regression (`scripts/run_smoke_regression.py`)
 
@@ -159,7 +193,13 @@ for d in sorted(Path('tasks').iterdir()):
 
 **deps_dev_v1:1 persistent failure** — fails 0/5 across all Phase 1b trials (60-170s each) even with the ATTACH preamble. deps_dev_v1:2 improved marginally (1/5). Query 1 likely has a more complex cross-DB requirement than the ATTACH idiom covers.
 
-**DAB cross-DB ATTACH idiom** — datasets with DuckDB+SQLite require `ATTACH` to join them. The preamble in `run_trial` auto-injects this when both DB types are present. If adding new dataset support, check `db_config.yaml` `db_clients` keys and ensure all db types are handled in the preamble builder.
+**DAB cross-DB ATTACH idiom** — datasets with DuckDB+SQLite require `ATTACH` to join them. Under `--driver=raw-bash` the preamble in `_run_trial_raw_bash` auto-injects this when both DB types are present. Under `--driver=labrat-agent` and `--driver=claude-mcp` the model calls the `attach_database` tool against the primary DuckDB; SQLite paths come from `DabTaskEnv.attachable`. If adding new dataset support, check `db_config.yaml` `db_clients` keys and ensure all db types are handled in `env.py` (DuckDB → `ctx.connections`, SQLite → `attachable`; Postgres/Mongo still deferred).
+
+**`ClaudeCodeProvider` text protocol is fragile, not blocked** — the 2026-05-29 Phase 0 spike concluded it didn't work; the 2026-05-30 smoke proved that conclusion was too strong. Simple single-step queries (e.g. stockmarket:1) pass because the model emits the right `{"call":...}` format; harder queries (e.g. music_brainz_20k:1) push the model to native `{"type":"tool_use",...}` and the CLI returns `error_max_turns`. Don't use `--agent-provider=claude-code` as the Phase 4 driver; use `--driver=claude-mcp` (proper MCP path, same Max-plan billing, no model-format dependence).
+
+**DAB driver resume safety** — `eval_dab.py` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls` in `config.json`. On `--output-dir <existing>`, all five are restored; any explicit CLI override that disagrees with the recorded value is rejected so a resumed run can't silently swap drivers mid-stream and corrupt the aggregate.
+
+**LabRat MCP server connections are JSON env vars** — `LABRAT_MCP_CONNECTIONS` and optional `LABRAT_MCP_PRIMARY` are read at startup. Only `db_type=duckdb` is supported in the connection spec today; SQLite/Postgres/MySQL are reached via the `attach_database` tool the agent calls inside the running session. If adding Postgres/Mongo MCP support, extend `_build_context_from_env` in `src/labrat/mcp/server.py`.
 
 **ADE experiment results file is `results.json`, not `results_metadata.jsonl`** — the file has a top-level `{"results": [...], ...}` shape. The port-acceptance spike caught a 0% pass rate when `external_runner.py` read the wrong filename. If you write new ADE-results parsing code, read `results.json` and iterate `data["results"]`.
 
