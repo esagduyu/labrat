@@ -54,6 +54,85 @@ print(conn.execute('SELECT ...').fetchall())
 
 ---
 
+## The original plan and what actually changed
+
+This section documents the gap between the design spec (`docs/superpowers/specs/2026-05-27-dab-bench-integration-design.md`) and what was built. Preserving this is useful for future sessions so we don't re-litigate closed decisions.
+
+### What the spec planned
+
+The original spec (written May 27, 2026 via an Opus-level Claude brainstorm) designed a **full LabRat-tool-loop** approach:
+
+1. **Inference via `ClaudeCodeProvider`** — shell out to the `claude` CLI, but route tool calls through LabRat's own `AgentLoop` and tool registry. Zero API cost on Max plan.
+2. **Five new first-class LabRat tools:**
+   - `list_databases` — discover available connections from `ToolContext.connections`
+   - `attach_database` — DuckDB ATTACH for SQLite and PostgreSQL (LabRat's "secret weapon" per the spec)
+   - `load_mongo_collection` — materialize MongoDB → DuckDB temp table
+   - `execute_python` — subprocess sandbox for fuzzy entity resolution and unstructured text
+   - Extended `run_sql`, `list_tables`, `describe_table` with optional `database` param
+3. **Multi-DB `ToolContext`** — `connections: dict[str, Connection]` replacing the single `connection: Connection`, with backwards-compat shims for existing TUI and ADE-bench paths.
+4. Phase 0 included an explicit go/no-go gate: **`ClaudeCodeProvider` compatibility spike** — wire a 2-tool toy registry, confirm tool calls round-trip. The spec said: *"If this assumption is wrong, the entire design pivots to a Bash-tool-prompting approach (the LabratLocalAgent pattern, adapted for query-answering)."*
+
+The expected benefit: the agent would call structured tools (`list_databases → attach_database → run_sql`) rather than writing raw Python subprocesses, and those same tools would ship in the TUI product. DAB score would directly measure LabRat's tool quality.
+
+### What the Phase 0 spike found
+
+The spike was run and committed (commit `24501be`). Two failure modes surfaced:
+
+**Failure mode 1 — `--tools ""`  hangs.** When `ClaudeCodeProvider` passes `--tools ""` to suppress the claude CLI's native tools so LabRat's custom protocol takes over, the CLI intercepts any `{"type":"tool_use",...}` response from the model and waits for a permission dialog. That dialog never arrives in a non-interactive subprocess. The process hangs indefinitely.
+
+**Failure mode 2 — Without `--tools ""`, the model uses the CLI's native tools.** Without the suppression flag, claude CLI exposes its own Bash/Read/Edit tools. The model uses those instead of LabRat's custom text-protocol tool calls. `run_sql` and `list_databases` are never invoked.
+
+The two failure modes are a pincer: suppress native tools → hang; don't suppress → wrong tools used. There's no simple flag combination that threads the needle. The spec's own pivot clause was triggered.
+
+The root cause is architectural: `ClaudeCodeProvider` implements a text-protocol convention (`{"call": "<tool>", "input": {...}}`) that was designed for LabRat's TUI where the model's context has no awareness of the claude CLI's native tool infrastructure. When the same approach is used inside the claude CLI process, the CLI's tool handling layer sits between the model and the response stream, and the two protocols conflict. This is a deferred problem, not a dead end — three candidate resolutions are recorded in `decisions.md`:
+- MCP server: expose LabRat's tool registry as MCP; `claude --print` connects natively, no text-protocol needed
+- Headless `labrat run-task` CLI: wraps AgentLoop, returns JSON; DAB harness calls it as subprocess
+- `--tools` JSON schema injection: newer claude CLI versions may allow custom tool schemas directly
+
+### The pivot: raw Bash
+
+For the DAB harness, `AgentLoop` and `ClaudeCodeProvider` were bypassed entirely. The harness calls:
+
+```
+claude --print --disable-slash-commands --dangerously-skip-permissions --max-turns 15
+```
+
+with the model's native Bash tool. The model runs Python+DuckDB queries as shell subprocesses. No LabRat tools are involved. This is structurally identical to `LabratLocalAgent` (the ADE-bench harness) — the same `claude --print` + Bash pattern that already worked there.
+
+The five planned new tools (`list_databases`, `attach_database`, etc.) were **not built** for the DAB harness. They remain on the roadmap as first-class LabRat TUI tools, which is actually the right place for them — DAB using raw Bash doesn't mean the tools have no value, it means their value will be measured in Phase 4.
+
+### What was preserved from the original plan
+
+Not everything changed. These spec items shipped as designed:
+
+- **Unified `BenchmarkSuite` protocol** — `src/labrat/eval/types.py` with `BenchmarkTask`, `TrialResult`, `AggregateScore`, `BenchmarkReport`. All benchmarks implement the same protocol.
+- **`DabSuite` + `scorer.py` + `reporter.py`** — enumeration, per-trial orchestration, validator wrapping, `submission.json` generation.
+- **Multi-DB `ToolContext`** with backwards-compat shims — shipped as designed. `ctx.connections: dict[str, Connection]` + `ctx.connection` shim. Required for the DAB harness's `env.py` to build multi-DB contexts.
+- **pass@5 + JSONL resumability** — `eval_dab.py` appends per-trial records, skips completed pairs on restart.
+- **ADE smoke regression gate** — 9-task fixed set, baseline at `tests/baselines/ade_smoke_baseline.json`, `run_smoke_regression.py check` at every phase boundary.
+- **Branch isolation** — `feat/dab-integration` stayed separate from master until Phase 1b exit gates passed. Merged 2026-05-30.
+
+### Cross-DB ATTACH: tool vs. prompt
+
+The spec designed `attach_database` as a proper LabRat tool that would call `conn.execute("ATTACH ...")` under the hood. After the pivot, this became a **prompt engineering solution** instead:
+
+`DabSuite.run_trial` detects DuckDB+SQLite mixes in `db_config.yaml` and injects the ATTACH idiom directly into the preamble text, showing the model exactly how to write the Python code itself:
+
+```python
+conn.execute("ATTACH '/path/to/other.db' AS alias (TYPE SQLITE)")
+# then: SELECT ... FROM duck_table JOIN alias.sqlite_table ON ...
+```
+
+This is prompting the model to do what the tool would have done. The limitation is that the model can ignore or misuse the preamble (as music_brainz_20k demonstrates). A proper `attach_database` tool would be called explicitly by the agent and return confirmation — no ambiguity. This is one of the clearest cases where Phase 4's tool integration should improve the score.
+
+### Why the baseline is still valuable
+
+The pivot turned a potential architectural problem into a feature: Phase 1b's 48.5% score is now a clean **"what raw claude-sonnet-4-6 + good prompt engineering achieves on multi-DB queries"** number. No LabRat infrastructure noise, no tool-layer effects, no benchmark-specific scaffolding. If someone wants to know the model's ceiling without a tool stack, 48.5% on 17 DuckDB+SQLite DAB queries is the number.
+
+Phase 4's `LabRatAgentDriver` score, subtracted from this baseline, will be the measured, defensible value of LabRat's tool layer — a number no one else has published because most teams don't cleanly separate the two.
+
+---
+
 ## Phase 1a: 43% (2026-05-29)
 
 First baseline. Five DuckDB+SQLite datasets, n_trials=1, no ATTACH preamble.
