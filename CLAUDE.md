@@ -112,7 +112,7 @@ conn.execute("ATTACH '/path/to/other.db' AS alias (TYPE SQLITE)")
 ```
 This enables cross-DB JOINs in a single DuckDB session (needed for `deps_dev_v1`, `music_brainz_20k`, `stockindex`, `stockmarket`).
 
-**Scoring:** stratified — mean of per-dataset pass rates. Each dataset contributes equally regardless of query count.
+**Scoring:** stratified — mean of per-dataset pass rates. Each dataset contributes equally regardless of query count. Per-query rate = `passes / n_trials` (not binary pass@5), so a query with 1/5 passes scores 0.2, not 1.0.
 
 **Phase 1a baseline (2026-05-29):** 43% overall on 5 DuckDB+SQLite datasets, n_trials=1. Details: `docs/dab_phase1a_results.md`.
 
@@ -151,7 +151,13 @@ for d in sorted(Path('tasks').iterdir()):
 
 **ADE-bench known failures** — 12 tasks currently fail consistently. `helixops_saas010` fails 9/11 tests every run (was flaky; now a consistent failure). `helixops_saas015` fails 3/4 tests; `.low` variant passes. Full list and root causes: `docs/ade_bench_failure_analysis.md`.
 
+**DAB Phase 1b covers 17/54 official queries** — only the 5 DuckDB+SQLite-only datasets. The remaining 37 official queries (agnews, bookreview, crmarenapro, googlelocal, pancancer_atlas, patents, yelp) require PostgreSQL and/or MongoDB preamble support not yet built in `run_trial`.
+
 **DAB `eval_dab.py` default n_trials is 5 (Phase 1b)** — pass `--n-trials 1` for a quick single-trial run. Resuming a crashed run: `--output-dir runs/dab/dab-<id>` reads the existing `trials.jsonl` and skips already-completed `(task_id, trial_num)` pairs.
+
+**music_brainz_20k fast-fail pattern** — consistently returns in 7-10s with wrong answers across all trials (Phase 1b: 7%). Sub-10s times indicate the model is answering from prompt context without actually querying the DB. Root cause unknown; the ATTACH preamble did not fix it.
+
+**deps_dev_v1:1 persistent failure** — fails 0/5 across all Phase 1b trials (60-170s each) even with the ATTACH preamble. deps_dev_v1:2 improved marginally (1/5). Query 1 likely has a more complex cross-DB requirement than the ATTACH idiom covers.
 
 **DAB cross-DB ATTACH idiom** — datasets with DuckDB+SQLite require `ATTACH` to join them. The preamble in `run_trial` auto-injects this when both DB types are present. If adding new dataset support, check `db_config.yaml` `db_clients` keys and ensure all db types are handled in the preamble builder.
 
