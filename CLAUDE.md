@@ -96,7 +96,7 @@ Roadmap and remaining failures: `docs/ade_bench_failure_analysis.md`
 
 ### DAB integration (`src/labrat/eval/benchmarks/dab/`)
 
-[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 17 datasets, 121 queries, multi-DB (DuckDB, SQLite, PostgreSQL, MongoDB).
+[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 12 official datasets, 54 queries, multi-DB (DuckDB, SQLite, PostgreSQL, MongoDB). Note: local repo (`~/repos/DataAgentBench`) has 17 directories — 5 are unofficial extras (civic_unstructured, cve, imdb, krama, usaspending) not in the official benchmark.
 
 LabRat-side integration lives at `src/labrat/eval/benchmarks/dab/`:
 - `suite.py` — `DabSuite` implements `BenchmarkSuite`; `run_trial` builds a db-access preamble (per-DB connection examples + DuckDB ATTACH idiom for cross-DB joins) and calls `claude --print` directly with Bash tool
@@ -116,7 +116,7 @@ This enables cross-DB JOINs in a single DuckDB session (needed for `deps_dev_v1`
 
 **Phase 1a baseline (2026-05-29):** 43% overall on 5 DuckDB+SQLite datasets, n_trials=1. Details: `docs/dab_phase1a_results.md`.
 
-**Phase 1b (in progress):** pass@5 (default n_trials=5), JSONL resumability. See `scripts/eval_dab.py`.
+**Phase 1b (DONE 2026-05-30):** 48.5% overall on 5 DuckDB+SQLite datasets (17 queries, pass@5, n_trials=5). Covers deps_dev_v1 (10%), github_repos (50%), music_brainz_20k (7%), stockindex (100%), stockmarket (76%). This is the raw Claude + prompt engineering floor — no LabRat tools. ADE smoke check passed at Phase 1b exit gate. See `scripts/eval_dab.py`.
 
 ### Smoke regression (`scripts/run_smoke_regression.py`)
 
