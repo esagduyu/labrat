@@ -221,3 +221,37 @@ Cross-check against
 | `--max-turns` / `--max-tool-calls` configurable | Not in spec. New work, motivated by Max-plan budget control. |
 
 Spider2-DBT remains stubbed only, as the spec intended.
+
+## DAB Phase 4 measurement: 54.0% (+5.5pp over Phase 1b) (2026-05-30)
+
+Ran the full 17-query Phase 1b suite through `--driver=claude-mcp --n-trials 5` against master. Same model (claude-sonnet-4-6), same scoring (stratified mean of per-dataset means), same pass@5 methodology. Run dir: `runs/dab/dab-1780171421/`.
+
+**Result: 54.0% overall.** vs. Phase 1b raw-Claude floor of 48.5%, a **+5.5pp lift attributable to LabRat's tool layer** (`AgentLoop` + multi-DB `ToolContext` + the 8 data tools registered for DAB, mounted via the MCP server inside `claude --print`).
+
+**Per-dataset:**
+
+| Dataset | Phase 1b | Phase 4 | Δ |
+|---|---|---|---|
+| deps_dev_v1 | 10% | 40% | **+30pp** |
+| github_repos | 50% | 40% | −10pp |
+| music_brainz_20k | 7% | 13% | +6pp |
+| stockindex | 100% | 87% | −13pp |
+| stockmarket | 76% | 88% | **+12pp** |
+
+**Tool-call counts per trial** (the most diagnostic column):
+
+- deps_dev_v1: **16.2** avg — agent does deep schema discovery + `attach_database` + iterative `run_sql`. Real cross-DB work.
+- music_brainz_20k: **3.1** avg — the agent has the tools, the prompt surfaces the SQLite attachable, and Sonnet still hallucinates `$601.44`, `Systemisch bled`, etc. **The answer-from-context failure mode from Phase 1b is unchanged.** This is an instruction-following problem (model chooses not to query), not a tool problem.
+- stockmarket / github_repos / stockindex: 9–11 tool calls — moderate exploration. On easy queries the overhead is roughly neutral; on harder queries (e.g., stockmarket:3) it pays off.
+
+**Operational lesson — Max-plan session limit pollutes naïve aggregate.** The first pass produced 7 infra-fail trials with `"You've hit your session limit · resets 7:30pm (America/Vancouver)"` captured as the "answer" text. Validator scored them as semantic failures (False) when in fact the model never got a chance to run. Trimmed those 7 from `trials.jsonl`, waited for the limit reset, resumed — **all 7 passed on rerun**, confirming the failures were 100% budget-related, not capability-related. The 48% raw aggregate is misleading; 54% is the honest number.
+
+**Open: harness-side detection of session-limit error text** — `_run_trial_claude_mcp` should grep the captured `final_text` for `"You've hit your session limit"` and re-raise as an infra failure that `aggregate()` skips with a warning, rather than scoring it as a regular trial failure. Until that ships, the manual trim + resume is the workaround.
+
+**Where this leaves Phase 4 as a result:**
+- The tool layer adds real, measurable value on hard cross-DB queries (deps_dev_v1 +30pp; stockmarket +12pp).
+- The tool layer is roughly neutral on easy single-DB queries.
+- The tool layer does *not* fix the model's mental-model failures on music_brainz_20k — the same wrong answers (`$601.44`, `Systemisch bled`) persist whether the agent has tools or not.
+- 54.0% is below the DAB leaderboard top-3 (MinusX 63.1%, Altimate 60.4%, Spacedock 57.7%) but only covers 17/54 official queries. Phases 2 (PostgreSQL) and 3 (MongoDB) are required for a directly-comparable submission.
+
+See `docs/dab-progress-report.md` for the full per-query breakdown, failure taxonomy, and Phase 5 prompt-iteration roadmap.

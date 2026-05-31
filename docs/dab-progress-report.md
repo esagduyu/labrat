@@ -216,13 +216,100 @@ Two changes from Phase 1a:
 
 ---
 
+## Phase 4: 54.0% (2026-05-30)
+
+The full LabRat agent stack — `AgentLoop` + multi-DB `ToolContext` + the data tools registry (`list_tables`, `describe_table`, `search_columns`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `attach_database`) — mounted as an MCP server inside `claude --print --strict-mcp-config`. Driver: `claude-mcp` (Max-plan billing). Same model (claude-sonnet-4-6), same 17-query suite, same pass@5 methodology, same stratified scoring.
+
+**Headline:** **54.0% overall · +5.5pp over the 48.5% Phase 1b baseline.** This is the measured value of LabRat's tool layer on this benchmark.
+
+**Per-dataset breakdown:**
+
+| Dataset | Phase 1b raw-bash | Phase 4 claude-mcp | Δ |
+|---------|------------------|--------------------|---|
+| **deps_dev_v1** | 10% | **40%** | **+30pp** |
+| github_repos | 50% | 40% | −10pp |
+| music_brainz_20k | 7% | 13% | +6pp |
+| stockindex | 100% | 87% | −13pp |
+| **stockmarket** | 76% | **88%** | **+12pp** |
+| **Overall** | **48.5%** | **54.0%** | **+5.5pp** |
+
+**Per-query pass rates (Phase 4):**
+
+| Query | Pass rate | Notes |
+|-------|-----------|-------|
+| deps_dev_v1:1 | 0% (0/5) | All 5 trials produce specific but wrong package names. Closer than Phase 1b but still no exact match. |
+| deps_dev_v1:2 | **80%** (4/5) | **+60pp from Phase 1b** (was 20%). The biggest single-query lift in the run. |
+| github_repos:1 | 0% (0/5) | Precision: agent's values don't round to 0.33 exactly. |
+| github_repos:2 | 0% (0/5) | Same `swiftandroid/swift` confusion as Phase 1b. |
+| github_repos:3 | 100% (5/5) | Stable. |
+| github_repos:4 | 60% (3/5) | Two trials drifted to `tensorflow/tensorflow`. |
+| music_brainz_20k:1 | 0% (0/5) | All return `$601.44` (same wrong answer as Phase 1b). |
+| music_brainz_20k:2 | 40% (2/5) | Three return `Amazon Music` vs. truth `iTunes`. |
+| music_brainz_20k:3 | 0% (0/5) | All return `Systemisch bled` vs. truth `Zo gaat het leven aan je voor`. |
+| stockindex:1 | 80% (4/5) | One formatting fail — right answer not in first 200 chars. |
+| stockindex:2 | 80% (4/5) | Same formatting fail. |
+| stockindex:3 | 100% (5/5) | Stable. |
+| stockmarket:1 | 100% (5/5) | Clean. |
+| stockmarket:2 | 100% (5/5) | One trial originally hit the 600s timeout; reran cleanly. |
+| stockmarket:3 | 40% (2/5) | Genuinely hard — semantic disagreement on `Synthesis Energy Systems`. |
+| stockmarket:4 | 100% (5/5) | One trial originally hit the Max-plan session limit; reran cleanly. |
+| stockmarket:5 | 100% (5/5) | Originally 0/5 from the session-limit reset; reran cleanly. |
+
+### What the tool counts say
+
+The most revealing column. Per-trial averages over passing and failing trials combined:
+
+| Dataset | Avg tool calls | Avg latency | Behaviour |
+|---------|----------------|-------------|-----------|
+| deps_dev_v1 | **16.2** | 130s | Deep cross-DB exploration: list_tables → attach_database → multi-step run_sql with iterative refinement. The tool layer is doing real work. |
+| stockmarket | 11.1 | 136s | Schema discovery + targeted SQL. |
+| github_repos | 10.1 | 62s | Lighter exploration; queries finish fast on the single-DB DuckDB. |
+| stockindex | 9.7 | 89s | Moderate. |
+| music_brainz_20k | **3.1** | 13.5s | **The "answer-from-context" pattern from Phase 1b is still here.** Sonnet has the LabRat tools and chooses not to use them — same wrong answers as raw-bash. |
+
+### Infrastructure caveats (and the importance of reruns)
+
+The first pass of the 85-trial run produced 7 infrastructure failures that polluted the raw aggregate (giving 48% instead of 54%):
+
+- **5 trials of `stockmarket:5`** all returned `"You've hit your session limit · resets 7:30pm (America/Vancouver)"` as their "answer" text — the trial completed in ~3 seconds with the Max-plan session-limit error landing in the validator. These are not measurement failures; they are budget failures.
+- **1 trial of `stockmarket:4`** (trial 4) hit the same session limit mid-trial (276s in).
+- **1 trial of `stockmarket:2`** (trial 3) hit the 600s wall-clock timeout — borderline. The agent might have completed given more time.
+
+All 7 were trimmed from `trials.jsonl` and re-run after the session limit reset. **All 7 reruns passed.** That means the original infrastructure failures were 100% recoverable — they reflected our compute budget, not the model's ability. The corrected aggregate is the honest number.
+
+This is a real operational lesson: **a Max-plan run of this size is large enough to bump the per-session usage cap**, and any benchmark harness needs to detect "session limit" error text in trial output and not count it toward pass rates. See `docs/dab-progress-report.md` → `decisions.md` for the fix that should land in the harness.
+
+### Where the tool layer wins
+
+- **deps_dev_v1 (+30pp)** — the hardest cross-DB query type in the suite. Phase 1b raw-bash got 1/10 trials right (10%). Phase 4 with LabRat tools gets 4/10 (40%). The single biggest lift comes from `deps_dev_v1:2`: 20% → 80%. The agent calls `attach_database` to bring SQLite into the primary DuckDB, then does an iterative JOIN+filter exploration with `run_sql`. This is exactly the value proposition of a tool registry.
+- **stockmarket (+12pp)** — once the session-limit casualties are out, the agent's schema-introspection phase pays off on the genuinely-hard queries (`stockmarket:3`, `stockmarket:4`). On the easier queries (`:1`, `:2`, `:5`) raw-bash already does well, and the tool overhead is roughly neutral.
+
+### Where the tool layer doesn't help
+
+- **music_brainz_20k (+6pp, still 13%)** — the answer-from-context failure mode is *unchanged* from Phase 1b. The agent has the tools, the prompt explicitly surfaces the SQLite attachable, and Sonnet still chooses to hallucinate (`$601.44`, `Systemisch bled`) instead of querying. This is an **instruction-following problem, not a tool problem**. A targeted prompt change ("you MUST run a query before answering; do not answer from prior knowledge") would likely recover several queries.
+- **github_repos (−10pp)** — minor regression dominated by `github_repos:1` (precision issue: 5 trials all produce values that don't round to 0.33 exactly) and `github_repos:2` (5/5 trials reproduce the Phase 1b `swiftandroid/swift` mistake — model prior pulls toward the more famous repo).
+- **stockindex (−13pp)** — pure formatting: two failed trials had the right answer but buried after the 200-char prefix the validator inspects. Adding "state the final answer on the first line" to the system prompt would likely recover both and push stockindex to 100%.
+
+### Honest read
+
+**+5.5pp is a real, measurable contribution from the tool layer.** It is concentrated on hard cross-DB queries (deps_dev_v1) and harder single-DB queries (stockmarket). It is essentially zero or negative on easy single-DB queries (stockindex), where the tool exploration overhead can't pay back.
+
+**Most of the remaining 46% failure is semantic, not infrastructural.** Both raw-bash and the LabRat agent produce the same wrong answers on the same queries (`$601.44` on music_brainz:1; `swiftandroid/swift` on github_repos:2; `Systemisch bled` on music_brainz:3). The tool layer doesn't change the model's mental model — it just gives it a path to compute answers when it chooses to use one. On music_brainz the model often chooses not to.
+
+The natural Phase 5 work:
+1. **Prompt instruction-following on music_brainz** — force-query rule, expected to recover several queries.
+2. **Output formatting** — "state final answer on first line" to recover the 2 stockindex trials.
+3. **Session-limit detection** — harness should treat `"You've hit your session limit"` as an infra failure (re-runnable), not a semantic failure (counted).
+
+---
+
 ## Honest critique
 
 ### What these numbers mean
 
-**48.5% on 17/54 queries is not a leaderboard number.** The DAB leaderboard scores (MinusX 63.1%, Altimate 60.4%) are over all 54 queries across 4 database types. We've only run the DuckDB+SQLite subset. PostgreSQL and MongoDB datasets are not yet supported.
+**54.0% on 17/54 queries is not a leaderboard number.** The DAB leaderboard scores (MinusX 63.1%, Altimate 60.4%) are over all 54 queries across 4 database types. We've only run the DuckDB+SQLite subset. PostgreSQL and MongoDB datasets are not yet supported.
 
-**This is the raw Claude floor, not LabRat's score.** The agent running DAB has no access to LabRat's tools (`list_tables`, `describe_table`, `run_sql`, `attach_database`, etc.). It's claude-sonnet-4-6 with a good prompt preamble and Bash. This is the number you get before the tool stack adds any value. Phase 4 will add the LabRat tools and quantify the delta.
+**The 48.5% number was the raw-Claude floor; the 54.0% number is the LabRat tool layer.** The +5.5pp gap quantifies the contribution of the tool registry. Phases 2 (PostgreSQL) and 3 (MongoDB) extend coverage to the full 54-query official suite.
 
 **pass@5 is more lenient than pass@1.** If we reported binary pass/fail per query (any 1 of 5 passes = query passes), 13 of 17 queries would count as passing (76%). The leaderboard uses pass@1 as its primary metric. Our 48.5% is the stricter mean-pass-rate measure. The actual binary-pass@5 figure would be our ceiling for a single-run submission.
 

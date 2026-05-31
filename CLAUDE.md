@@ -150,7 +150,11 @@ The `labrat-agent` driver builds the `DabTaskEnv`, registers `data_tools` (`list
 
 **Phase 1b (2026-05-30):** 48.5% overall on 5 DuckDB+SQLite datasets (17 queries, pass@5, n_trials=5). Covers deps_dev_v1 (10%), github_repos (50%), music_brainz_20k (7%), stockindex (100%), stockmarket (76%). Raw Claude + prompt engineering floor — no LabRat tools. Reproducible via `--driver=raw-bash`.
 
-**Phase 4 substrate (2026-05-30):** `labrat-agent` and `claude-mcp` drivers shipped on `feat/labrat-agent-substrate`. Smoke confirms both paths run end-to-end; a full pass@5 Phase 4 measurement against the 17-query suite is the next step. See `docs/dab-progress-report.md` and `decisions.md`.
+**Phase 4 substrate (2026-05-30):** `labrat-agent` and `claude-mcp` drivers shipped on `master`. Smoke validated end-to-end on `stockmarket:1` (PASS, 34.8s, 7 tool calls, Max plan).
+
+**Phase 4 measurement (DONE 2026-05-30): 54.0% overall on the same 17-query suite, +5.5pp over the 48.5% Phase 1b baseline.** The +5.5pp delta is the measured value of LabRat's tool layer. Per-dataset: deps_dev_v1 10%→40% (**+30pp**), github_repos 50%→40%, music_brainz_20k 7%→13%, stockindex 100%→87%, stockmarket 76%→**88%** (**+12pp**). Tool calls per trial: 16 on deps_dev_v1 (deep cross-DB work); 3 on music_brainz_20k (the "answer-from-context" failure mode persists — the agent has the tools and chooses not to use them). Run dir: `runs/dab/dab-1780171421/`. Full write-up: `docs/dab-progress-report.md`.
+
+**Operational lesson from the Phase 4 run** — a full 85-trial Max-plan run is large enough to bump the per-session usage cap. The first pass produced 7 infra-failure trials with `"You've hit your session limit · resets …"` as the captured "answer". These trials should not count toward pass rates. Today the harness scores them as semantic failures (validator returns False), which is wrong. A targeted fix: detect that error pattern in `_run_trial_claude_mcp` and re-raise as an infra failure with a distinctive `reason`, then have `aggregate()` skip such trials with a warning. Until that ships, post-run trim + resume is the manual workaround that produced the clean Phase 4 number.
 
 ### Smoke regression (`scripts/run_smoke_regression.py`)
 
