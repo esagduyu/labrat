@@ -28,7 +28,13 @@ from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
 
 
 def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
-    """Return set of (task_id, trial_num) pairs already recorded in trials.jsonl."""
+    """Return set of (task_id, trial_num) pairs already recorded in trials.jsonl.
+
+    Infra failures (``reason`` starts with ``"infra:"``) are NOT considered
+    completed — they never got a fair shot at the query, so a resume rerun
+    should attempt them again. The harness rewrites those lines in place when
+    they succeed on rerun.
+    """
     completed: set[tuple[str, int]] = set()
     if not trials_jsonl.exists():
         return completed
@@ -38,6 +44,9 @@ def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
             continue
         try:
             obj = json.loads(line)
+            reason = obj.get("reason") or ""
+            if isinstance(reason, str) and reason.startswith("infra:"):
+                continue
             completed.add((obj["task_id"], obj["trial_num"]))
         except (json.JSONDecodeError, KeyError):
             pass
@@ -54,18 +63,31 @@ async def _run_interim(
     output_dir.mkdir(parents=True, exist_ok=True)
     trials_jsonl = output_dir / "trials.jsonl"
 
-    # Load any previously completed trials (resumability).
+    # Load any previously completed trials (resumability). Infra-failed trials
+    # are intentionally NOT counted as completed (see _load_completed_trials).
     completed = _load_completed_trials(trials_jsonl)
     all_trials: list[TrialResult] = []
-    if completed:
+    infra_keys_to_rewrite: set[tuple[str, int]] = set()
+    if trials_jsonl.exists():
         for line in trials_jsonl.read_text().splitlines():
             line = line.strip()
             if line:
                 try:
-                    all_trials.append(TrialResult.model_validate_json(line))
+                    tr = TrialResult.model_validate_json(line)
                 except Exception:
-                    pass
-        print(f"Resuming: {len(completed)} trials already complete, skipping.", flush=True)
+                    continue
+                reason = tr.reason or ""
+                if reason.startswith("infra:"):
+                    # Skip — we'll re-run this and the new line will be appended.
+                    infra_keys_to_rewrite.add((tr.task_id, tr.trial_num))
+                else:
+                    all_trials.append(tr)
+        if completed or infra_keys_to_rewrite:
+            print(
+                f"Resuming: {len(completed)} trials already complete (skipping); "
+                f"{len(infra_keys_to_rewrite)} infra trials will be re-attempted.",
+                flush=True,
+            )
 
     tasks = list(suite.tasks())
     if task_filter:
