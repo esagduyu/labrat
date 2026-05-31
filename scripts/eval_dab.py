@@ -83,10 +83,13 @@ async def _run_interim(
                 f.write(result.model_dump_json() + "\n")
                 f.flush()
                 all_trials.append(result)
+                reason = result.reason or ""
+                if reason.startswith("infra:"):
+                    status = f"INFRA: {reason[len('infra:') :]}"
+                else:
+                    status = "PASS" if result.passed else "FAIL"
                 print(
-                    f"[{task.id} trial {trial_num}] "
-                    f"{'PASS' if result.passed else 'FAIL'} "
-                    f"({result.latency_seconds:.1f}s)",
+                    f"[{task.id} trial {trial_num}] {status} ({result.latency_seconds:.1f}s)",
                     flush=True,
                 )
 

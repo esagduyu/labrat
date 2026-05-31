@@ -46,6 +46,28 @@ _DAB_SYSTEM_PROMPT = (
 _DAB_TIMEOUT = 600  # per-trial wall-clock timeout for the claude subprocess
 
 
+# Substrings in a trial's final_text that mark it as an infrastructure failure
+# (not a model semantic failure). Trials with these markers get reason="infra:..."
+# and are excluded from aggregate scoring.
+#
+# Detection happens once at the run_trial seam — drivers don't need to know about
+# infra patterns individually.
+_INFRA_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("You've hit your session limit", "session_limit"),
+    ("Credit balance is too low", "no_api_credit"),
+    ("[trial exceeded ", "timeout"),
+)
+
+
+def _detect_infra_failure(final_text: str) -> str | None:
+    """Return an infra reason tag (e.g. 'session_limit') if the trial output looks
+    like an infrastructure failure rather than a real attempt; otherwise None."""
+    for needle, tag in _INFRA_PATTERNS:
+        if needle in final_text:
+            return tag
+    return None
+
+
 def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
     parts = [
         "You are a data analyst. Answer the question by querying the available databases "
@@ -269,6 +291,22 @@ class DabSuite:
             )
         else:
             final_text, tool_calls, latency = await self._run_trial_raw_bash(task, db_config_path)
+
+        # Infra failures (Max-plan session limit, API credit, wall-clock timeout)
+        # don't reflect the agent's ability and shouldn't pollute aggregate scoring.
+        # Mark them with reason="infra:<tag>" so aggregate() can skip them and
+        # eval_dab.py can print INFRA instead of FAIL.
+        infra_tag = _detect_infra_failure(final_text)
+        if infra_tag is not None:
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason=f"infra:{infra_tag}",
+                latency_seconds=latency,
+                tool_calls=tool_calls,
+                artifact={"type": "text", "payload": final_text},
+            )
 
         passed, reason = score_with_validator(validator_path, final_text)
 
@@ -550,8 +588,14 @@ class DabSuite:
         if not results:
             return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
 
+        # Drop infra failures so they don't depress the pass rate on queries that
+        # never got a fair shot (Max-plan session limit, API credit, timeout).
+        semantic_results = [r for r in results if not (r.reason or "").startswith("infra:")]
+        if not semantic_results:
+            return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
+
         per_task: dict[str, list[bool]] = {}
-        for r in results:
+        for r in semantic_results:
             per_task.setdefault(r.task_id, []).append(r.passed)
         per_task_pass_rate = {tid: sum(passes) / len(passes) for tid, passes in per_task.items()}
 
