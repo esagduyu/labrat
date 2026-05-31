@@ -50,7 +50,7 @@ def test_build_task_env_sqlite_is_attachable_not_connection(tmp_path: Path) -> N
     assert spec.path.endswith("aux.db")
 
 
-def test_build_task_env_skips_postgres_entries(tmp_path: Path) -> None:
+def test_build_task_env_postgres_is_attachable_not_connection(tmp_path: Path) -> None:
     (tmp_path / "main.duckdb").touch()
     config = tmp_path / "db_config.yaml"
     _write_config(
@@ -63,7 +63,11 @@ def test_build_task_env_skips_postgres_entries(tmp_path: Path) -> None:
     env = build_dab_task_env(config)
     assert "pg_db" not in env.ctx.connections
     assert env.ctx.primary == "duckdb"
-    assert env.attachable == []
+    assert len(env.attachable) == 1
+    spec = env.attachable[0]
+    assert spec.alias == "pg_db"
+    assert spec.db_type == "postgres"
+    assert spec.path == "host=localhost dbname=some_pg"
 
 
 def test_build_task_env_catalogs_match_connections(tmp_path: Path) -> None:

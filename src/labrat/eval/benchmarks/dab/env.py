@@ -31,7 +31,12 @@ from labrat.db.duckdb_engine import DuckDBConnection
 
 
 class AttachSpec(BaseModel):
-    """A non-DuckDB database the agent can pull into the primary session via attach_database."""
+    """A non-DuckDB database the agent can pull into the primary session via attach_database.
+
+    ``path`` is the argument the ``attach_database`` tool will pass to DuckDB's
+    ATTACH — a filesystem path for sqlite, a libpq connection string for postgres
+    (e.g. ``host=localhost dbname=foo``), etc.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -77,7 +82,17 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
                     db_type="sqlite",
                 )
             )
-        # postgres / mongodb — deferred
+        elif db_type == "postgres":
+            # DAB local setup (docs/dab_local_setup.md) runs Postgres on the
+            # default socket; auth falls through to the current OS user.
+            attachable.append(
+                AttachSpec(
+                    alias=name,
+                    path=f"host=localhost dbname={spec['db_name']}",
+                    db_type="postgres",
+                )
+            )
+        # mongodb — handled separately via MongoSpec (see below)
 
     # If no DuckDB primary, synthesize an in-memory one so the agent can still ATTACH.
     primary = file_backed_duckdb[0] if file_backed_duckdb else "__federation"
