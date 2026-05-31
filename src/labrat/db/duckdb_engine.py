@@ -64,6 +64,24 @@ class DuckDBConnection(Connection):
         escaped_path = path.replace("'", "''")
         self._connection.execute(f"ATTACH '{escaped_path}' AS {alias} (TYPE {db_type.upper()})")
 
+    def materialize_table(self, table_name: str, arrow_table: object) -> None:
+        """Create or replace a DuckDB table from an Apache Arrow Table.
+
+        Used by ``load_mongo_collection`` to ingest a MongoDB find() result (converted
+        via polars/pyarrow) into a table the agent can query with ``run_sql``.
+        ``table_name`` is validated as a SQL identifier to avoid injection.
+        """
+        if not table_name.replace("_", "").isalnum():
+            raise ValueError(f"table_name must be alphanumeric/underscore: {table_name!r}")
+        tmp_view = f"__labrat_tmp_{table_name}"
+        self._connection.register(tmp_view, arrow_table)  # pyright: ignore[reportArgumentType]
+        try:
+            self._connection.execute(
+                f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {tmp_view}"
+            )
+        finally:
+            self._connection.unregister(tmp_view)
+
     def sample_table(self, table: str, n: int = 10) -> pl.DataFrame:
         return self.execute(f"SELECT * FROM {table} USING SAMPLE {n}")
 

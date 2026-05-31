@@ -38,6 +38,7 @@ dependencies = [
     "trino>=0.337.0",
     "typer>=0.13",
     "watchdog>=4",
+    "pymongo>=4.17.0",
 ]
 
 [project.scripts]

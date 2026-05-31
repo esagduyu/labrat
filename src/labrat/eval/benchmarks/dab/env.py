@@ -45,13 +45,27 @@ class AttachSpec(BaseModel):
     db_type: Literal["sqlite", "postgres", "mysql"]
 
 
+class MongoSpec(BaseModel):
+    """A MongoDB database the agent reaches via ``load_mongo_collection``.
+
+    Mongo can't be ATTACH'd into DuckDB natively; the agent materializes individual
+    collections into temp DuckDB tables and then queries them with ``run_sql``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str
+    database: str  # mongo database name (e.g. 'articles_db')
+
+
 class DabTaskEnv(BaseModel):
-    """Per-trial environment: primary DuckDB context + attachable secondaries."""
+    """Per-trial environment: primary DuckDB context + attachable secondaries + mongo dbs."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     ctx: ToolContext
     attachable: list[AttachSpec]
+    mongo: list[MongoSpec] = []
 
 
 def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
@@ -67,6 +81,7 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
     connections: dict[str, object] = {}
     file_backed_duckdb: list[str] = []
     attachable: list[AttachSpec] = []
+    mongo: list[MongoSpec] = []
 
     for name, spec in clients.items():
         db_type = str(spec.get("db_type", "")).lower()
@@ -92,7 +107,10 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
                     db_type="postgres",
                 )
             )
-        # mongodb — handled separately via MongoSpec (see below)
+        elif db_type == "mongo":
+            # Mongo isn't ATTACH-able by DuckDB; the agent calls
+            # load_mongo_collection to materialize collections into temp tables.
+            mongo.append(MongoSpec(alias=name, database=str(spec["db_name"])))
 
     # If no DuckDB primary, synthesize an in-memory one so the agent can still ATTACH.
     primary = file_backed_duckdb[0] if file_backed_duckdb else "__federation"
@@ -108,4 +126,4 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
         catalogs=catalogs,
         primary=primary,
     )
-    return DabTaskEnv(ctx=ctx, attachable=attachable)
+    return DabTaskEnv(ctx=ctx, attachable=attachable, mongo=mongo)

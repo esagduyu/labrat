@@ -78,6 +78,24 @@ def test_build_task_env_catalogs_match_connections(tmp_path: Path) -> None:
     assert set(env.ctx.catalogs.keys()) == set(env.ctx.connections.keys())
 
 
+def test_build_task_env_mongo_becomes_mongo_spec_not_attachable(tmp_path: Path) -> None:
+    (tmp_path / "main.duckdb").touch()
+    config = tmp_path / "db_config.yaml"
+    _write_config(
+        config,
+        {
+            "articles": {"db_type": "mongo", "db_name": "articles_db"},
+            "main": {"db_type": "duckdb", "db_path": "main.duckdb"},
+        },
+    )
+    env = build_dab_task_env(config)
+    assert env.attachable == []
+    assert len(env.mongo) == 1
+    assert env.mongo[0].alias == "articles"
+    assert env.mongo[0].database == "articles_db"
+    assert env.ctx.primary == "main"
+
+
 def test_build_task_env_federation_host_when_no_duckdb(tmp_path: Path) -> None:
     (tmp_path / "aux.db").touch()
     config = tmp_path / "db_config.yaml"

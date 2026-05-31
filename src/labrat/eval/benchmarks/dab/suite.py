@@ -80,6 +80,8 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         "  explain_sql — show the query plan without executing",
         "  attach_database — pull a SQLite/Postgres/MySQL file into the primary DuckDB "
         "session for cross-database JOINs",
+        "  load_mongo_collection — materialize a MongoDB collection into a DuckDB "
+        "table on the primary connection (nested fields become STRUCTs; address with dot)",
     ]
     if env.attachable:
         parts.append("")
@@ -87,6 +89,12 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         for spec in env.attachable:
             parts.append(f"  alias={spec.alias} path={spec.path} db_type={spec.db_type}")
         parts.append("Once attached, refer to its tables as <alias>.<table_name> in run_sql.")
+    if env.mongo:
+        parts.append("")
+        parts.append("MongoDB databases you may load (call load_mongo_collection per collection):")
+        for mspec in env.mongo:
+            parts.append(f"  alias={mspec.alias} database={mspec.database}")
+        parts.append("Materialized collections become DuckDB tables you query with run_sql.")
     parts.extend(
         [
             "",
@@ -460,6 +468,17 @@ class DabSuite:
             for spec in env_spec.attachable:
                 prompt_lines.append(f"  {spec.alias} / {spec.path} / {spec.db_type}")
             prompt_lines.append("After attach, query tables as <alias>.<table_name> in run_sql.")
+        if env_spec.mongo:
+            prompt_lines.append("")
+            prompt_lines.append(
+                "MongoDB databases you can pull into DuckDB via load_mongo_collection "
+                "(alias / database):"
+            )
+            for mspec in env_spec.mongo:
+                prompt_lines.append(f"  {mspec.alias} / {mspec.database}")
+            prompt_lines.append(
+                "Each call materializes one collection into a DuckDB table you query with run_sql."
+            )
         prompt_lines.extend(
             [
                 "",
