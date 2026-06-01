@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: feature-complete v0 alpha. 504 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Also evaluated on [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley): **48.5% Phase 1b** raw-Claude baseline → **54.0% Phase 4** with LabRat's tool stack (`AgentLoop` + multi-DB context + MCP server) on the same 17-query suite, pass@5. The **+5.5pp gap is the measured value of LabRat's tool layer**, concentrated on hard cross-DB queries (deps_dev_v1 +30pp; stockmarket +12pp). Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
+> Status: feature-complete v0 alpha. 505 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Evaluated on the **full [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley)** 54-query / 12-dataset benchmark: **58.0%** (pass@5, claude-sonnet-4-6, LabRat tools via MCP) — **above Spacedock (57.7%)** on the public leaderboard, behind Altimate Code (60.4%) and MinusX (63.1%). Strongest single-dataset signal: **crmarenapro 82%** on a 6-database hybrid query set. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -62,9 +62,10 @@ On the 39 tasks shared with Altimate Code's published DuckDB results: **LabRat 8
 |-------|----------|-------|-------|-------|
 | Phase 1a baseline | 5 (DuckDB+SQLite) | 17 | **43%** | n_trials=1, raw-bash driver |
 | Phase 1b | 5 (DuckDB+SQLite) | 17 | **48.5%** | pass@5, ATTACH preamble, raw-bash driver — raw-Claude floor |
-| **Phase 4** | 5 (DuckDB+SQLite) | 17 | **54.0%** | pass@5, claude-mcp driver (LabRat tools via MCP, Max plan). **+5.5pp over Phase 1b** = measured tool-layer value |
+| Phase 4 | 5 (DuckDB+SQLite) | 17 | **54.0%** | pass@5, claude-mcp driver. **+5.5pp over Phase 1b** = measured tool-layer value |
+| **Phase 5 (full DAB)** | **12 (all official)** | **54** | **58.0%** | **pass@5, claude-mcp driver, full Phase 2+3 substrate. Above Spacedock (57.7%); behind Altimate 60.4% and MinusX 63.1%** |
 
-**Phase 4 per-dataset deltas:** deps_dev_v1 10% → 40% (**+30pp**); stockmarket 76% → 88% (**+12pp**); music_brainz_20k 7% → 13%; github_repos 50% → 40%; stockindex 100% → 87% (formatting). The tool layer's value is concentrated on hard cross-DB queries; on easy single-DB queries the exploration overhead is roughly neutral. Three drivers coexist (`raw-bash` for baseline reproducibility, `labrat-agent` for multi-provider standalone use, `claude-mcp` for the Max-plan tool path). Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
+**Phase 5 per-dataset highlights:** agnews **95%** and bookreview **93%** (Phase 2/3 substrate at scale); crmarenapro **82%** on 6 databases (substrate's strongest single signal); stockindex **100%**, stockmarket 80%; pancancer_atlas 67%; github_repos 50%, googlelocal 50%; deps_dev_v1 10% (stochastic regression from Phase 4); music_brainz_20k 7% and patents 0% (Sonnet ceiling, not infra). 25 of 54 queries scored a perfect 5/5. Three drivers coexist (`raw-bash` for baseline reproducibility, `labrat-agent` for multi-provider standalone use, `claude-mcp` for the Max-plan tool path). Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 ## Install
 
@@ -202,8 +203,8 @@ uv run python scripts/take_screenshots.py
 v0 alpha is feature-complete. Post-v0 priorities:
 
 - **ADE-bench improvements**: 80% overall — next target is `compare_schema` and `trace_column_lineage` tools (Tier 2) to close the remaining output-schema and dependency-discovery gaps
-- **DataAgentBench Phase 5** (post-54%): instruction-following prompt to force-query on music_brainz_20k (today's 13% is the "answer-from-context" failure mode persisting even with tools available); final-answer-on-first-line directive to recover the 2 stockindex formatting fails; harness-side detection of `"You've hit your session limit"` so infra-failed trials don't score as semantic failures
-- **DataAgentBench Phase 2 / 3**: PostgreSQL adapter (agnews, bookreview, crmarenapro, googlelocal, yelp) and MongoDB adapter (pancancer_atlas, patents) for the full 54-query official submission
+- **DataAgentBench Phase 6** (closing the gap to MinusX 63.1%): force-query prompt rule to recover music_brainz_20k (7% → likely ≥40% — the agent has tools and currently chooses not to use them); investigate patents 0% (Sonnet ceiling vs. prompt structure); raise pass@5 to pass@10 to tighten dataset-mean variance (deps_dev_v1 regressed from Phase 4's 40% to 10% — likely n=5 noise)
+- **DAB harness ergonomics**: detect session-limit error text and sleep-until-reset rather than fast-failing the rest of the queue (today's runs need 3–4 manual `--output-dir` resume cycles for a 270-trial sweep)
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 

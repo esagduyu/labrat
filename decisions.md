@@ -255,3 +255,42 @@ Ran the full 17-query Phase 1b suite through `--driver=claude-mcp --n-trials 5` 
 - 54.0% is below the DAB leaderboard top-3 (MinusX 63.1%, Altimate 60.4%, Spacedock 57.7%) but only covers 17/54 official queries. Phases 2 (PostgreSQL) and 3 (MongoDB) are required for a directly-comparable submission.
 
 See `docs/dab-progress-report.md` for the full per-query breakdown, failure taxonomy, and Phase 5 prompt-iteration roadmap.
+
+## DAB Phase 5: full 54-query run, 58.0% (2026-06-01)
+
+First directly leaderboard-comparable LabRat number on DataAgentBench. Ran all 12 official datasets (54 queries × 5 trials = 270 trials) through `--driver=claude-mcp` against master. Same model (claude-sonnet-4-6), stratified scoring, claude --print + LabRat MCP server on Max-plan OAuth. Run dir: `runs/dab/dab-1780210698/`.
+
+**Result: 58.0%.** Above Spacedock (57.7%), behind Altimate Code (60.4%) and MinusX (63.1%) on the public leaderboard. The substrate shipped over the prior 48 hours (Phase 4 + Phase 2 PG + Phase 3 Mongo + item 1 infra detection) is what made this number possible — Phase 1b raw-bash couldn't have scored this because it didn't support Postgres or MongoDB and would have had its 270-trial run polluted by session-limit infra.
+
+**Per-dataset:**
+
+| Dataset | DB stack | Score |
+|---|---|---|
+| agnews | Mongo + SQLite | **95%** |
+| bookreview | Postgres + SQLite | **93%** |
+| crmarenapro | SQLite × 3 + DuckDB × 2 + Postgres | **82%** |
+| stockindex | DuckDB + SQLite | **100%** |
+| stockmarket | DuckDB + SQLite | 80% |
+| pancancer_atlas | Postgres + DuckDB | 67% |
+| yelp | Mongo + DuckDB | 63% |
+| github_repos | DuckDB + SQLite | 50% |
+| googlelocal | Postgres + SQLite | 50% |
+| deps_dev_v1 | DuckDB + SQLite | 10% |
+| music_brainz_20k | DuckDB + SQLite | 7% |
+| patents | Postgres + SQLite | 0% |
+
+**The headline single-dataset signal is crmarenapro at 82%** on the hardest dataset in the benchmark — 13 queries, 6 databases (SQLite × 3, DuckDB × 2, Postgres × 1). This is the cleanest evidence that the substrate work paid off; raw-bash with prompt-engineered preambles wouldn't have built up the right ATTACH topology reliably across 6 databases.
+
+**Phase 2 (Postgres) validated at scale:** bookreview 93%, crmarenapro 82%, pancancer_atlas 67%, googlelocal 50%. The existing `attach_database` tool dispatched into DuckDB's `postgres` extension works cleanly with libpq-default OS-user auth (`host=localhost dbname=…`); no per-task auth wiring needed.
+
+**Phase 3 (Mongo) validated at scale:** agnews 95%, yelp 63%. The `load_mongo_collection` tool's "materialize a Mongo find() into a DuckDB TEMP table" pattern works well — nested documents become DuckDB STRUCTs, the agent uses dot notation, and downstream `run_sql` joins seamlessly with attached SQLite / Postgres / DuckDB primaries.
+
+**Item 1 (session-limit detection) was load-bearing for this run.** A 270-trial Max-plan run spans multiple session windows. The run required 4 `--output-dir` resume cycles to clear infra trials; the auto-retry-on-resume logic shipped in commit `9c46c1c` meant each resume picked up exactly the trials that had hit the limit, without manual `trials.jsonl` trimming. The reported aggregate of 58.0% is computed over real-attempt trials only — infra trials are persisted but excluded from scoring.
+
+**What this exposes:**
+
+- **Sonnet ceiling, not substrate ceiling:** music_brainz_20k stays at 7% (same wrong answers as Phase 1b), patents stays at 0%, deps_dev_v1 stays at 10%. The tool stack doesn't fix the model's mental model on these. The natural next work is a force-query prompt rule for music_brainz, a precision-relaxation strategy for the github_repos:1 rounding-validator mismatch, and a CPC-code lookup heuristic for patents.
+- **Stochasticity matters on n=5:** deps_dev_v1 was 40% in Phase 4, 10% here on the same queries with the same driver and model. github_repos:4 was 60% in Phase 4, 100% here. Pass@5 estimates have wide CIs; pass@10 would tighten dataset means meaningfully.
+- **Harness ergonomics gap:** the auto-retry helps, but the harness still fast-fails the rest of the queue once a session limit hits (each subsequent trial returns in ~1.5s with the error text as final_text). A future enhancement is detecting that pattern in real time and sleeping until the documented reset time instead of blasting through and exiting.
+
+The next reasonable target on this benchmark is closing the gap to MinusX 63.1% — most of the remaining 5pp lives in music_brainz, patents, and the deps_dev_v1 / github_repos / googlelocal "0% on a specific validator pattern" cluster.

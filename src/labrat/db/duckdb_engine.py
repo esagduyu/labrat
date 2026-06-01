@@ -42,10 +42,7 @@ class DuckDBConnection(Connection):
 
     def execute(self, sql: str) -> pl.DataFrame:
         """Execute SQL and return a Polars DataFrame."""
-        result: pl.DataFrame = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
-            sql, connection=self._connection
-        )
-        return result
+        return self._connection.execute(sql).pl()
 
     def explain(self, sql: str) -> str:
         """Return the DuckDB EXPLAIN output for the query."""
@@ -77,7 +74,7 @@ class DuckDBConnection(Connection):
         self._connection.register(tmp_view, arrow_table)  # pyright: ignore[reportArgumentType]
         try:
             self._connection.execute(
-                f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {tmp_view}"
+                f"CREATE OR REPLACE TEMP TABLE {table_name} AS SELECT * FROM {tmp_view}"
             )
         finally:
             self._connection.unregister(tmp_view)

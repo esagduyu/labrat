@@ -39,6 +39,7 @@ dependencies = [
     "typer>=0.13",
     "watchdog>=4",
     "pymongo>=4.17.0",
+    "pyarrow>=24.0.0",
 ]
 
 [project.scripts]
