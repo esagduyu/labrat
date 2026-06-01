@@ -158,6 +158,8 @@ The `labrat-agent` driver builds the `DabTaskEnv`, registers `data_tools` (`list
 
 **Operational lesson from the Phase 5 run** — a 270-trial Max-plan run spans multiple session windows. Item 1 (`reason="infra:session_limit"` detection + aggregate skip + resume auto-retry, shipped in commit `404af15` / `9c46c1c`) is what makes this practical. The harness still fast-fails the rest of the queue once a session limit hits (each subsequent trial returns in ~1.5s with the error text as final_text). A future enhancement: detect session-limit in real time and sleep-until-reset so a single invocation can run to completion unattended.
 
+**`claude-mcp` driver produces summary-only traces today** — `--output-format json` gives one bundled result; we get per-trial `passed` / `tool_calls` (count) / `latency` / `final_text` but not per-call SQL or LLM messages. For audit-grade traces (e.g., if DAB maintainers ask), switch `_run_trial_claude_mcp` to `--output-format stream-json` and persist the stream to `scratch/<task>__trial<n>/claude_stream.jsonl`, plus add server-side tool-call logging in `src/labrat/mcp/server.py` (one `{"tool", "input", "output", "ok", "latency_ms"}` line per dispatch, gated on a `LABRAT_MCP_LOG_DIR` env var). ~1 hour total; same compute as the original run.
+
 ### Smoke regression (`scripts/run_smoke_regression.py`)
 
 Fixed 9-task ADE subset (`src/labrat/eval/smoke.py::ADE_SMOKE_TASK_IDS`, frozen — see `docs/superpowers/notes/2026-05-29-ade-smoke-selection.md`). Run at every DAB phase boundary:
@@ -216,6 +218,14 @@ for d in sorted(Path('tasks').iterdir()):
 **DAB driver resume safety** — `eval_dab.py` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls` in `config.json`. On `--output-dir <existing>`, all five are restored; any explicit CLI override that disagrees with the recorded value is rejected so a resumed run can't silently swap drivers mid-stream and corrupt the aggregate.
 
 **LabRat MCP server connections are JSON env vars** — `LABRAT_MCP_CONNECTIONS` and optional `LABRAT_MCP_PRIMARY` are read at startup. Only `db_type=duckdb` is supported in the connection spec today; SQLite/Postgres/MySQL are reached via the `attach_database` tool the agent calls inside the running session. If adding Postgres/Mongo MCP support, extend `_build_context_from_env` in `src/labrat/mcp/server.py`.
+
+**DAB "Pass@1" is a stratified mean, not ML-style pass@1** — the DAB leaderboard column labeled `Pass@1` is `DabSuite.aggregate().overall`: the mean of per-dataset means of per-query (passes / n_trials). It is NOT "did any one of 5 attempts pass?". Don't reconcile our `report.md` against the leaderboard expecting different metrics — they're the same.
+
+**Probe Max-plan availability before resuming a benchmark run** — after an `infra:session_limit` hit, fire `env -u ANTHROPIC_API_KEY -u CLAUDECODE claude --print --model claude-sonnet-4-6 --max-turns 1 -p "ping"` first. Real response → safe to fire `eval_dab.py --output-dir <id>`. Session-limit text → wait. Without the probe, a premature resume blasts ~170 fast-fail infra trials into `trials.jsonl` in ~4 minutes.
+
+**DAB leaderboard submission files go in `leaderboard_submissions/`** — not `submissions/`. The latter holds older PromptQL/react-style runs; new leaderboard PRs go in the former. Naming convention: `<agent>_<model>_n5.json` (e.g., `altimate-code_claude-sonnet-46_n5.json`). PR commits only the JSON; maintainers update the README leaderboard table on merge.
+
+**DAB dataset directory casing is mixed** — `DEPS_DEV_V1`, `GITHUB_REPOS`, `PANCANCER_ATLAS`, `PATENTS` are uppercase; the rest (`agnews`, `bookreview`, `crmarenapro`, `googlelocal`, `music_brainz_20k`, `stockindex`, `stockmarket`, `yelp`) are lowercase. Our `DabSuite` lowercases all task_ids; **submission JSON entries must be re-cased to match directory names** or DAB's official scorer won't find them. See the build script in `runs/dab/dab-1780210698/` for the lowercase→DAB-case mapping.
 
 **ADE experiment results file is `results.json`, not `results_metadata.jsonl`** — the file has a top-level `{"results": [...], ...}` shape. The port-acceptance spike caught a 0% pass rate when `external_runner.py` read the wrong filename. If you write new ADE-results parsing code, read `results.json` and iterate `data["results"]`.
 
