@@ -204,6 +204,7 @@ class DabSuite:
         agent_provider: str = "anthropic",
         agent_max_turns: int | None = None,
         agent_max_tool_calls: int | None = None,
+        agent_verify: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -214,6 +215,9 @@ class DabSuite:
         self._agent_provider = agent_provider
         self._agent_max_turns = agent_max_turns
         self._agent_max_tool_calls = agent_max_tool_calls
+        # Opt-in LLM-as-judge verifier for the labrat-agent driver (loop-level, so it
+        # has no effect under raw-bash / claude-mcp, whose loops live elsewhere).
+        self._agent_verify = agent_verify
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -602,6 +606,7 @@ class DabSuite:
                 system_prompt=system_prompt,
                 max_turns=self._agent_max_turns,
                 max_tool_calls=self._agent_max_tool_calls,
+                verify=self._agent_verify,
             )
         finally:
             for conn in env.ctx.connections.values():

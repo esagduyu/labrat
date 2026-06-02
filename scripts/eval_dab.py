@@ -189,6 +189,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-verify",
+        action="store_true",
+        default=None,
+        help=(
+            "Enable the LLM-as-judge verifier loop for the labrat-agent driver "
+            "(opt-in; an extra LLM call gates each would-be-final answer). No effect "
+            "under raw-bash / claude-mcp, whose loops live outside AgentLoop."
+        ),
+    )
+    parser.add_argument(
         "--n-trials",
         type=int,
         default=5,
@@ -229,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_provider", args.agent_provider),
         ("agent_max_turns", args.max_turns),
         ("agent_max_tool_calls", args.max_tool_calls),
+        ("agent_verify", args.agent_verify),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -254,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_tool_calls is not None
         else existing_cfg.get("agent_max_tool_calls")
     )
+    effective_verify: bool = bool(
+        args.agent_verify
+        if args.agent_verify is not None
+        else existing_cfg.get("agent_verify", False)
+    )
 
     suite = DabSuite(
         dab_dir=args.dab_dir,
@@ -263,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_provider=effective_provider,
         agent_max_turns=effective_max_turns,
         agent_max_tool_calls=effective_max_tool_calls,
+        agent_verify=effective_verify,
     )
 
     task_filter: list[str] | None = None
@@ -290,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_provider": effective_provider,
                 "agent_max_turns": effective_max_turns,
                 "agent_max_tool_calls": effective_max_tool_calls,
+                "agent_verify": effective_verify,
                 "n_trials": args.n_trials,
                 "task_filter": task_filter,
             },
