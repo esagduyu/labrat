@@ -29,6 +29,21 @@ def _unwrap_with(node: object) -> object:
     return node
 
 
+def _statement_count(sql: str) -> int:
+    """Count top-level SQL statements.
+
+    ``_is_mutation`` / ``_has_limit`` use ``parse_one``, which only sees the FIRST
+    statement — so ``SELECT 1; DROP TABLE t`` would slip past the mutation check.
+    This counts every statement so the caller can refuse statement-stacking. Returns
+    1 on parse error (fail-open: let the DB reject genuinely malformed SQL).
+    """
+    try:
+        parsed = sqlglot.parse(sql.strip())
+    except ParseError:
+        return 1
+    return sum(1 for stmt in parsed if stmt is not None)
+
+
 def _is_mutation(sql: str) -> bool:
     """Return True if *sql* is a data-mutating or DDL statement."""
     try:
@@ -105,9 +120,11 @@ class RunSqlTool(Tool[_Input]):
     """Execute a SQL query.
 
     Safety layers applied in order:
-    1. Mutation refusal — DDL/DML statements return ok=False unless force=True.
-    2. Auto-limit — LIMIT is appended when the query has none (default 1000 rows).
-    3. Every execution (success or failure) is written to the query history log.
+    1. Single-statement guard — statement-stacking (e.g. "SELECT 1; DROP TABLE t")
+       is refused outright (not force-bypassable); closes the parse_one blind spot.
+    2. Mutation refusal — DDL/DML statements return ok=False unless force=True.
+    3. Auto-limit — LIMIT is appended when the query has none (default 1000 rows).
+    4. Every execution (success or failure) is written to the query history log.
     """
 
     def __init__(
@@ -126,6 +143,7 @@ class RunSqlTool(Tool[_Input]):
     def description(self) -> str:
         return (
             "Execute a SELECT query and return the results. "
+            "Submit ONE statement per call (statement-stacking is refused). "
             "DDL and DML statements (INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE) "
             "are refused unless force=True. A LIMIT is automatically applied when missing."
         )
@@ -137,6 +155,28 @@ class RunSqlTool(Tool[_Input]):
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
         thread_id = getattr(ctx, "thread_id", "unknown")
         version_id = getattr(ctx, "version_id", "unknown")
+
+        # Structural guard: refuse statement-stacking (e.g. "SELECT 1; DROP TABLE t").
+        # This is not force-bypassable — it's a single-statement contract, distinct
+        # from the mutation force-override, and closes the parse_one blind spot.
+        if _statement_count(args.query) > 1:
+            _log(
+                profile=ctx.profile_name,
+                thread_id=thread_id,
+                version_id=version_id,
+                sql=args.query,
+                executed=False,
+                success=False,
+                error_message="multiple statements refused",
+            )
+            return _Output(
+                ok=False,
+                query=args.query,
+                refused=True,
+                error=(
+                    "Multiple SQL statements are not allowed; submit a single statement per call."
+                ),
+            )
 
         if _is_mutation(args.query) and not args.force:
             _log(
