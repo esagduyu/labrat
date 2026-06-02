@@ -176,3 +176,4 @@ eval_output/
 test_output/
 runs/
 # screenshots/ is tracked — milestone SVGs live in screenshots/
+docs/superpowers/specs/2026-06-01-codex-subscription-provider-design.md
