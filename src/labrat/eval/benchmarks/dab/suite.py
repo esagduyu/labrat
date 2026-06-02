@@ -576,13 +576,20 @@ class DabSuite:
         from labrat.agent.data_tools import build_data_tools_registry
         from labrat.agent.providers import build_provider
         from labrat.agent.runner import run_agent_task
-        from labrat.eval.benchmarks.dab.env import build_dab_task_env
+        from labrat.eval.benchmarks.dab.env import (
+            build_dab_task_env,
+            introspect_env_catalogs,
+        )
 
         env = build_dab_task_env(db_config_path)
         for conn in env.ctx.connections.values():
             connect = getattr(conn, "connect", None)
             if callable(connect):
                 connect()
+        # Connections aren't connect()-ed in build_dab_task_env, so the catalogs it
+        # builds are empty; introspect now (post-connect) so the catalog-backed tools
+        # (list_tables / describe_table / column_stats / search_columns) actually work.
+        introspect_env_catalogs(env.ctx)
         try:
             registry = build_data_tools_registry()
             provider = build_provider(self._agent_provider, self._agent_model)
