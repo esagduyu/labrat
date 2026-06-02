@@ -207,7 +207,7 @@ v0 alpha is feature-complete. Post-v0 priorities:
 
 - **ADE-bench improvements**: 80% overall — next target is `compare_schema` and `trace_column_lineage` tools (Tier 2) to close the remaining output-schema and dependency-discovery gaps
 - **DataAgentBench Phase 6** (closing the gap to MinusX 63.1%): force-query prompt rule to recover music_brainz_20k (7% → likely ≥40% — the agent has tools and currently chooses not to use them); investigate patents 0% (Sonnet ceiling vs. prompt structure); raise pass@5 to pass@10 to tighten dataset-mean variance (deps_dev_v1 regressed from Phase 4's 40% to 10% — likely n=5 noise)
-- **DAB harness ergonomics**: detect session-limit error text and sleep-until-reset rather than fast-failing the rest of the queue (today's runs need 3–4 manual `--output-dir` resume cycles for a 270-trial sweep)
+- **DAB harness ergonomics**: per-trial exception isolation now records provider failures as `infra:timeout`/`infra:agent_error` (so one error can't crash a run); remaining work is detecting session-limit text and sleep-until-reset rather than fast-failing the rest of the queue (today's runs still need a few manual `--output-dir` resume cycles for a 270-trial sweep)
 - **testcontainers integration tests**: full Postgres/MySQL/Trino adapters against live containers
 - **v1 GA**: dogfooded for one week, P0 bug-free, README demo gif
 

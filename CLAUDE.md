@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Test
-uv run pytest                                    # full suite (~504 tests)
+uv run pytest                                    # full suite (~542 tests)
 uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
