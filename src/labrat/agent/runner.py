@@ -36,6 +36,8 @@ async def run_agent_task(
     system_prompt: str,
     max_turns: int | None = None,
     max_tool_calls: int | None = None,
+    verify: bool = False,
+    max_verify_rounds: int = 2,
 ) -> AgentTaskResult:
     """Run a single agent task and return the assistant's final text + tool count.
 
@@ -43,12 +45,21 @@ async def run_agent_task(
     this function does not assume any particular tool set or model.
 
     ``max_turns`` and ``max_tool_calls`` are forwarded to the underlying
-    ``AgentLoop``; ``None`` means unbounded.
+    ``AgentLoop``; ``None`` means unbounded. When ``verify`` is set, an
+    ``LLMVerifier`` backed by the same provider gates the final answer for up to
+    ``max_verify_rounds`` rounds (off by default — it costs an extra LLM call per
+    would-be-final answer).
     """
     text_parts: list[str] = []
 
     def on_text(text: str) -> None:
         text_parts.append(text)
+
+    verifier = None
+    if verify:
+        from labrat.agent.verifier import LLMVerifier, provider_llm_fn
+
+        verifier = LLMVerifier(provider_llm_fn(provider))
 
     loop = AgentLoop(
         provider=provider,
@@ -57,6 +68,8 @@ async def run_agent_task(
         system=system_prompt,
         max_turns=max_turns,
         max_tool_calls=max_tool_calls,
+        verifier=verifier,
+        max_verify_rounds=max_verify_rounds,
     )
     t0 = time.monotonic()
     await loop.run(prompt, on_text=on_text)
