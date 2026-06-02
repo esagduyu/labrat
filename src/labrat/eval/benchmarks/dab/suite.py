@@ -74,12 +74,15 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         "using the provided tools.",
         "",
         "Tools available:",
+        "  profile_dataset — one call returns every table's columns, row counts, foreign "
+        "keys, and sample rows (call this FIRST to ground yourself before planning)",
         "  list_tables / describe_table / search_columns — discover schema",
         "  sample_rows / column_stats — inspect actual values",
-        "  run_sql — execute SQL (DuckDB dialect; primary connection by default)",
+        "  run_sql — execute one SQL statement (DuckDB dialect; primary connection by default)",
         "  explain_sql — show the query plan without executing",
         "  attach_database — pull a SQLite/Postgres/MySQL file into the primary DuckDB "
         "session for cross-database JOINs",
+        "  load_file — load a CSV/TSV/JSON/Parquet file into the session as a table",
         "  load_mongo_collection — materialize a MongoDB collection into a DuckDB "
         "table on the primary connection (nested fields become STRUCTs; address with dot)",
     ]
@@ -97,6 +100,14 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         parts.append("Materialized collections become DuckDB tables you query with run_sql.")
     parts.extend(
         [
+            "",
+            "Approach:",
+            "  1. Call profile_dataset first to ground yourself in the real schema, row "
+            "counts, and sample values before planning.",
+            "  2. Plan the steps, then run them one at a time, reading each result before "
+            "the next.",
+            "  3. Before answering, re-read the question and confirm your result actually "
+            "answers it (check magnitudes, units, and that joins didn't drop or fan out rows).",
             "",
             "Run queries until you are confident, then respond with a single plain answer "
             "on the last line.",
@@ -205,6 +216,7 @@ class DabSuite:
         agent_max_turns: int | None = None,
         agent_max_tool_calls: int | None = None,
         agent_verify: bool = False,
+        agent_timeout: int | None = None,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -218,6 +230,9 @@ class DabSuite:
         # Opt-in LLM-as-judge verifier for the labrat-agent driver (loop-level, so it
         # has no effect under raw-bash / claude-mcp, whose loops live elsewhere).
         self._agent_verify = agent_verify
+        # Per-call provider timeout override (seconds); only the claude-code provider
+        # honours it. None = provider default (120s for claude-code).
+        self._agent_timeout = agent_timeout
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -293,16 +308,33 @@ class DabSuite:
         db_config_path = Path(task.config["db_config_path"])
         validator_path = Path(task.config["validator_path"])
 
-        if self._driver == "labrat-agent":
-            final_text, tool_calls, latency = await self._run_trial_labrat_agent(
-                task, db_config_path
+        try:
+            if self._driver == "labrat-agent":
+                final_text, tool_calls, latency = await self._run_trial_labrat_agent(
+                    task, db_config_path
+                )
+            elif self._driver == "claude-mcp":
+                final_text, tool_calls, latency = await self._run_trial_claude_mcp(
+                    task, db_config_path, scratch_dir
+                )
+            else:
+                final_text, tool_calls, latency = await self._run_trial_raw_bash(
+                    task, db_config_path
+                )
+        except Exception as exc:
+            # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
+            # fail only THIS trial, not crash the whole run. Record it as an infra failure
+            # so aggregate() skips it and a --output-dir resume auto-retries it.
+            tag = "timeout" if isinstance(exc, TimeoutError) else "agent_error"
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason=f"infra:{tag}",
+                latency_seconds=0.0,
+                tool_calls=0,
+                artifact={"type": "text", "payload": f"{type(exc).__name__}: {exc}"},
             )
-        elif self._driver == "claude-mcp":
-            final_text, tool_calls, latency = await self._run_trial_claude_mcp(
-                task, db_config_path, scratch_dir
-            )
-        else:
-            final_text, tool_calls, latency = await self._run_trial_raw_bash(task, db_config_path)
 
         # Infra failures (Max-plan session limit, API credit, wall-clock timeout)
         # don't reflect the agent's ability and shouldn't pollute aggregate scoring.
@@ -596,7 +628,9 @@ class DabSuite:
         introspect_env_catalogs(env.ctx)
         try:
             registry = build_data_tools_registry()
-            provider = build_provider(self._agent_provider, self._agent_model)
+            provider = build_provider(
+                self._agent_provider, self._agent_model, timeout=self._agent_timeout
+            )
             system_prompt = _build_labrat_agent_system_prompt(env)
             result = await run_agent_task(
                 prompt=task.prompt,

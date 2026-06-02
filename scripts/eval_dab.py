@@ -199,6 +199,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-timeout",
+        type=int,
+        default=None,
+        help=(
+            "Per-call provider timeout in seconds for the labrat-agent driver. Only the "
+            "claude-code provider honours it (default 120s); useful to absorb slow turns "
+            "when --agent-verify adds round-trips. None = provider default."
+        ),
+    )
+    parser.add_argument(
         "--n-trials",
         type=int,
         default=5,
@@ -240,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_max_turns", args.max_turns),
         ("agent_max_tool_calls", args.max_tool_calls),
         ("agent_verify", args.agent_verify),
+        ("agent_timeout", args.agent_timeout),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -270,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_verify is not None
         else existing_cfg.get("agent_verify", False)
     )
+    effective_timeout: int | None = (
+        args.agent_timeout if args.agent_timeout is not None else existing_cfg.get("agent_timeout")
+    )
 
     suite = DabSuite(
         dab_dir=args.dab_dir,
@@ -280,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_max_turns=effective_max_turns,
         agent_max_tool_calls=effective_max_tool_calls,
         agent_verify=effective_verify,
+        agent_timeout=effective_timeout,
     )
 
     task_filter: list[str] | None = None
@@ -308,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_max_turns": effective_max_turns,
                 "agent_max_tool_calls": effective_max_tool_calls,
                 "agent_verify": effective_verify,
+                "agent_timeout": effective_timeout,
                 "n_trials": args.n_trials,
                 "task_filter": task_filter,
             },
