@@ -310,3 +310,21 @@ Work on `feat/rat-maze-pillar1`. Six technical changes to the agent substrate:
 5. **DAB `labrat-agent` empty-catalog fix** (`src/labrat/eval/benchmarks/dab/env.py`) — `build_dab_task_env` builds `Catalog(schemas=[])` because connections aren't `connect()`-ed at build time, so the catalog-backed tools (`list_tables` / `describe_table` / `column_stats` / `search_columns` / `profile_dataset`) were dead under the `labrat-agent` driver. New `introspect_env_catalogs(ctx)` populates the catalogs post-connect; `_run_trial_labrat_agent` (`suite.py`) calls it after connecting. The `claude-mcp` driver was unaffected (it introspects via the MCP server).
 
 6. **Prescriptive system prompt** (`src/labrat/agent/prompts/system_base.md`) — rewritten from exploratory to prescriptive: profile first (`profile_dataset`) → numbered plan → step-by-step execution → verify the answer addresses the question before finishing. Tool-usage section now lists `profile_dataset` and `load_file`.
+
+## DAB resilience, verifier wiring, SQL governance, prompt refresh (2026-06-01)
+
+Follow-ups to the Pillar 1 sprint (on `master` after merges `3ff4d10`, `6a78914`):
+
+1. **`run_sql` single-statement guard** (`src/labrat/agent/tools/run_sql.py`) — `run_sql` already did AST-based DDL/DML refusal + auto-limit via sqlglot, but `_is_mutation`/`_has_limit` use `parse_one`, which only sees the *first* statement, so `SELECT 1; DROP TABLE t` slipped through (and got a `LIMIT` appended after the `DROP`). New `_statement_count` (`sqlglot.parse`, fail-open on ParseError) refuses any input with >1 top-level statement. **Not** force-bypassable — a single-statement contract distinct from the mutation force-override.
+
+2. **`--agent-verify` wired into the DAB labrat-agent driver** — `DabSuite(agent_verify=…)` → `run_agent_task(verify=…)`, plus a `--agent-verify` CLI flag with the same resume-safety as the other `agent_*` options. Default off (an extra LLM call per would-be-final answer — latency + usage cost). No effect under raw-bash / claude-mcp (their loops live outside `AgentLoop`).
+
+3. **Per-trial exception isolation** (`DabSuite.run_trial`) — the driver dispatch is wrapped in try/except; a provider/agent exception is recorded as `reason="infra:timeout"` (TimeoutError) or `"infra:agent_error"` instead of crashing the whole run. Reuses the existing `aggregate()`-skip + resume auto-retry. Surfaced by a claude-code partial read whose first-query `claude --print` 120 s timeout took down the entire eval.
+
+4. **Configurable claude-code timeout** — `build_provider` gains an optional `timeout` (claude-code only; the others manage their own HTTP timeouts), threaded via `DabSuite(agent_timeout=…)` and a `--agent-timeout` flag (resume-safe). Absorbs slow turns when the verifier adds round-trips.
+
+5. **DAB labrat-agent prompt refresh** (`_build_labrat_agent_system_prompt`) — now surfaces `profile_dataset` (call first) + `load_file` and the profile→plan→verify discipline, keeping the DAB `single plain answer on the last line` scoring contract, so a labrat-agent run actually exercises the new Pillar 1 grounding/tools.
+
+`config.json` now records **seven** agent fields (added `agent_verify`, `agent_timeout`); all restored on `--output-dir` resume with conflicting overrides rejected. 542 tests pass, pyright/ruff clean.
+
+**Measurement note:** the verifier only runs on the labrat-agent driver, which needs a metered `ANTHROPIC_API_KEY` (not set) for a clean run; claude-mcp (Max-plan) bypasses it. A claude-code partial read is the fallback but is fragile under the verifier's extra round-trips — per-trial isolation + a larger `--agent-timeout` make it *survivable* but not reliable.

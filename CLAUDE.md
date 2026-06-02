@@ -35,6 +35,8 @@ uv run python scripts/eval_dab.py --driver labrat-agent     # AgentLoop + LabRat
 uv run python scripts/eval_dab.py --driver claude-mcp       # claude --print + LabRat MCP server (Max-plan, recommended Phase 4 path)
 uv run python scripts/eval_dab.py --driver labrat-agent --agent-provider anthropic --agent-model claude-sonnet-4-6
 uv run python scripts/eval_dab.py --driver labrat-agent --max-turns 10 --max-tool-calls 30   # bound the loop
+uv run python scripts/eval_dab.py --driver labrat-agent --agent-verify   # opt-in LLM-as-judge verifier (default off; extra LLM call/answer)
+uv run python scripts/eval_dab.py --driver labrat-agent --agent-provider claude-code --agent-timeout 300   # raise claude-code per-call timeout
 
 # Standalone LabRat agent on any query (any provider):
 uv run python scripts/run_task.py --prompt "..." \
@@ -142,7 +144,7 @@ Roadmap and remaining failures: `docs/ade_bench_failure_analysis.md`
 | `labrat-agent` | `AgentLoop` + LabRat tools | depends on `--agent-provider` | high w/ anthropic; **fragile** w/ claude-code | Phase 4 measurement on metered API; cross-provider matrix |
 | `claude-mcp` | claude CLI + LabRat MCP server | Max plan | high | **Recommended Phase 4 path** — LabRat tools, free per run |
 
-The `labrat-agent` driver builds the `DabTaskEnv`, registers `data_tools` (`list_tables`, `describe_table`, `search_columns`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `attach_database`), and routes through `run_agent_task` in-process. The `claude-mcp` driver writes a per-trial `mcp-config.json` to the scratch dir and shells `claude --print --strict-mcp-config --mcp-config <file> --model <agent_model> --permission-mode bypassPermissions`. `ANTHROPIC_API_KEY` / `CLAUDECODE` / `CLAUDE_CODE_*` are stripped from the subprocess env so the CLI falls through to Max-plan OAuth.
+The `labrat-agent` driver builds the `DabTaskEnv`, registers `data_tools` (`profile_dataset`, `list_tables`, `describe_table`, `search_columns`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `attach_database`, `load_file`, `load_mongo_collection`), and routes through `run_agent_task` in-process. Its system prompt (`_build_labrat_agent_system_prompt`) surfaces `profile_dataset`/`load_file` and a profile→plan→verify discipline. Opt-in `--agent-verify` enables the LLM-as-judge verifier loop on this driver only (default off); `--agent-timeout` overrides the claude-code per-call subprocess timeout. The `claude-mcp` driver writes a per-trial `mcp-config.json` to the scratch dir and shells `claude --print --strict-mcp-config --mcp-config <file> --model <agent_model> --permission-mode bypassPermissions`. `ANTHROPIC_API_KEY` / `CLAUDECODE` / `CLAUDE_CODE_*` are stripped from the subprocess env so the CLI falls through to Max-plan OAuth.
 
 **Cross-DB ATTACH:** under `raw-bash` the ATTACH idiom is injected into the prompt (text). Under `labrat-agent` and `claude-mcp` the model uses the `attach_database` tool against the primary DuckDB; SQLite paths are surfaced from `DabTaskEnv.attachable` so the model knows what's available.
 
@@ -150,7 +152,9 @@ The `labrat-agent` driver builds the `DabTaskEnv`, registers `data_tools` (`list
 
 **Caps:** `--max-turns` and `--max-tool-calls` are configurable, both default `None` (unbounded). Under `labrat-agent` they hard-cap `AgentLoop`. Under `claude-mcp`, `max-turns` maps to `claude --max-turns` (default 200 when `None`); `max-tool-calls` is **advisory only** (surfaced in the prompt — the claude CLI has no native tool-call cap). Under `raw-bash`, `max-turns` honours explicit override but defaults to 15 (Phase 1b reproducibility); `max-tool-calls` is ignored (no LabRat registry in the loop).
 
-**Resume safety:** `config.json` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls`. Resuming via `--output-dir` restores all five; any CLI override that conflicts with the existing config is rejected to prevent mixed-driver runs from corrupting the aggregate score.
+**Resume safety:** `config.json` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls`, `agent_verify`, `agent_timeout`. Resuming via `--output-dir` restores all seven; any CLI override that conflicts with the existing config is rejected to prevent mixed-driver runs from corrupting the aggregate score.
+
+**Per-trial isolation:** `DabSuite.run_trial` wraps the driver dispatch in try/except — a provider/agent exception (e.g. claude-code's per-call `TimeoutError`) is recorded as `reason="infra:timeout"` / `"infra:agent_error"` and skipped by `aggregate()` (and auto-retried on resume), so a single failure can't crash a long run.
 
 **Scoring:** stratified — mean of per-dataset pass rates. Each dataset contributes equally regardless of query count. Per-query rate = `passes / n_trials` (not binary pass@5), so a query with 1/5 passes scores 0.2, not 1.0.
 
@@ -223,7 +227,7 @@ for d in sorted(Path('tasks').iterdir()):
 
 **`ClaudeCodeProvider` text protocol is fragile, not blocked** — the 2026-05-29 Phase 0 spike concluded it didn't work; the 2026-05-30 smoke proved that conclusion was too strong. Simple single-step queries (e.g. stockmarket:1) pass because the model emits the right `{"call":...}` format; harder queries (e.g. music_brainz_20k:1) push the model to native `{"type":"tool_use",...}` and the CLI returns `error_max_turns`. Don't use `--agent-provider=claude-code` as the Phase 4 driver; use `--driver=claude-mcp` (proper MCP path, same Max-plan billing, no model-format dependence).
 
-**DAB driver resume safety** — `eval_dab.py` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls` in `config.json`. On `--output-dir <existing>`, all five are restored; any explicit CLI override that disagrees with the recorded value is rejected so a resumed run can't silently swap drivers mid-stream and corrupt the aggregate.
+**DAB driver resume safety** — `eval_dab.py` records `driver`, `agent_model`, `agent_provider`, `agent_max_turns`, `agent_max_tool_calls`, `agent_verify`, `agent_timeout` in `config.json`. On `--output-dir <existing>`, all seven are restored; any explicit CLI override that disagrees with the recorded value is rejected so a resumed run can't silently swap drivers/caps mid-stream and corrupt the aggregate.
 
 **LabRat MCP server connections are JSON env vars** — `LABRAT_MCP_CONNECTIONS` and optional `LABRAT_MCP_PRIMARY` are read at startup. Only `db_type=duckdb` is supported in the connection spec today; SQLite/Postgres/MySQL are reached via the `attach_database` tool the agent calls inside the running session. If adding Postgres/Mongo MCP support, extend `_build_context_from_env` in `src/labrat/mcp/server.py`.
 

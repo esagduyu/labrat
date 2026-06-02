@@ -5,7 +5,7 @@
 LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> Status: feature-complete v0 alpha. 505 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Evaluated on the **full [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley)** 54-query / 12-dataset benchmark: **58.0%** (pass@5, claude-sonnet-4-6, LabRat tools via MCP) — **above Spacedock (57.7%)** on the public leaderboard, behind Altimate Code (60.4%) and MinusX (63.1%). Strongest single-dataset signal: **crmarenapro 82%** on a 6-database hybrid query set. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
+> Status: feature-complete v0 alpha. 542 tests passing. End-to-end demo operational against DuckDB. Evaluated on [ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs): **100% easy · 80% medium · 60% hard · 80% overall** (48/60 tasks, DuckDB+dbt, claude-sonnet-4-6, best-of-3) — **82% on the 39-task subset that overlaps with Altimate Code's published DuckDB results (vs. their 77%)**. Evaluated on the **full [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) (UC Berkeley)** 54-query / 12-dataset benchmark: **58.0%** (pass@5, claude-sonnet-4-6, LabRat tools via MCP) — **above Spacedock (57.7%)** on the public leaderboard, behind Altimate Code (60.4%) and MinusX (63.1%). Strongest single-dataset signal: **crmarenapro 82%** on a 6-database hybrid query set. Full write-up: [docs/dab-progress-report.md](docs/dab-progress-report.md).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -17,7 +17,7 @@ LabRat is a terminal-native AI data agent. Connect to your warehouse, ask a ques
 - **The SQL editor is the agent's whiteboard.** Watch SQL stream into the editor character-by-character in your warehouse's dialect as the agent thinks. Edit it. Run it. The agent learns from your edits.
 - **Learns from you.** Per [Meta's research](https://medium.com/@AnalyticsAtMeta/inside-metas-home-grown-ai-analytics-agent-4ea6779acfb3), 88% of data scientists' queries hit tables they've used before. LabRat captures your query history, infers your domain, and applies your past corrections automatically. Day-30 LabRat is meaningfully better than day-1 LabRat.
 - **Audit-ready by default.** Every interaction is event-sourced and logged. Pin findings and export polished HTML reports with full provenance — query, results, chart, timestamps, lineage.
-- **Safe by default.** Read-only roles enforced at connection. Mutations refused. Queries gated by EXPLAIN-estimated cost. Spend tracked per session. Destructive mistakes are physically impossible.
+- **Safe by default.** Read-only roles enforced at connection. Mutations and multi-statement injection refused (sqlglot AST-checked). Queries gated by EXPLAIN-estimated cost. Spend tracked per session. Destructive mistakes are physically impossible.
 - **Catalog-native.** Reads your dbt project's `schema.yml`, `manifest.json`, lineage, and tags. Connects to DataHub, OpenMetadata, or any MCP-compatible data catalog. Surfaces the canonical models in your warehouse, not just whatever the LLM guesses.
 - **Mouse-native, keyboard-first.** Composes with your shell, your SSH sessions, your tmux setup. Every feature works without the mouse.
 
@@ -29,7 +29,7 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 |---|---|---|
 | 7 warehouse adapters | ✅ | DuckDB, Postgres, Snowflake, BigQuery, Redshift, Trino, MySQL |
 | 3 LLM providers | ✅ | Anthropic API, Claude Code CLI (Mac OAuth), OpenAI-compatible |
-| Agent tool loop | ✅ | schema exploration, SQL execution, safety gates, multi-DB routing, `attach_database` for cross-DB JOINs, configurable `max_turns` / `max_tool_calls` caps |
+| Agent tool loop | ✅ | one-call `profile_dataset` grounding, schema exploration, SQL execution, safety gates (mutation + statement-stacking refusal), multi-DB routing, `attach_database` for cross-DB JOINs, `load_file` (CSV/TSV/JSON/Parquet), opt-in LLM-as-judge verifier loop, configurable `max_turns` / `max_tool_calls` caps |
 | MCP server | ✅ | `python -m labrat.mcp.server` mounts the LabRat tool registry over MCP stdio — drop into Claude Code, Codex, Cursor, OpenCode, or any MCP-supporting host. Reads connection spec from `LABRAT_MCP_CONNECTIONS` env var. |
 | Query history | ✅ | always-on, PII-redacted JSONL per profile |
 | Personal context engine | ✅ | table relevance scoring, LLM-generated descriptions |
@@ -43,7 +43,7 @@ LabRat is feature-complete for v0 alpha. Below is the full capability inventory.
 | HTML export | ✅ | findings with full provenance |
 | Audit log | ✅ | JSONL event sourcing |
 
-**Test coverage:** 504 passing, 10 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
+**Test coverage:** 542 passing, 10 skipped (gated by `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
 
 **[ADE-bench](https://github.com/dbt-labs/ade-bench) (dbt Labs, DuckDB+dbt, claude-sonnet-4-6, best-of-3, via `LabratLocalAgent`):**
 
@@ -181,6 +181,9 @@ cd ~/repos/ade-bench && uv run ade run helixops_saas001 airbnb001 --db duckdb --
 uv run python scripts/eval_dab.py --datasets deps_dev_v1,github_repos,music_brainz_20k,stockindex,stockmarket
 # Phase 4 measurement via the LabRat MCP server inside claude --print (Max-plan billing)
 uv run python scripts/eval_dab.py --driver claude-mcp --n-trials 5
+# Opt-in LLM-as-judge verifier loop on the labrat-agent driver (default off; extra LLM call/answer).
+# --agent-timeout raises the claude-code per-call subprocess timeout to absorb the extra round-trips:
+uv run python scripts/eval_dab.py --driver labrat-agent --agent-verify --agent-timeout 300
 # Resume a crashed run:
 uv run python scripts/eval_dab.py --output-dir runs/dab/dab-<id>
 
