@@ -1,6 +1,7 @@
 """DuckDB connection implementation."""
 
 from pathlib import Path
+from typing import ClassVar
 
 import duckdb
 import polars as pl
@@ -81,6 +82,37 @@ class DuckDBConnection(Connection):
 
     def sample_table(self, table: str, n: int = 10) -> pl.DataFrame:
         return self.execute(f"SELECT * FROM {table} USING SAMPLE {n}")
+
+    _FILE_READERS: ClassVar[dict[str, str]] = {
+        "csv": "read_csv_auto",
+        "tsv": "read_csv_auto",
+        "json": "read_json_auto",
+        "jsonl": "read_json_auto",
+        "ndjson": "read_json_auto",
+        "parquet": "read_parquet",
+        "pq": "read_parquet",
+    }
+
+    def load_file(self, path: str, table_name: str, file_format: str | None = None) -> int:
+        """Load a CSV/TSV/JSON/Parquet file into a TEMP table; return its row count.
+
+        Uses DuckDB's native auto-readers. Creates a ``TEMP`` table (like
+        ``materialize_table``) so it works even when the database was opened
+        read-only. ``file_format`` is inferred from the path extension when omitted.
+        """
+        if not table_name.replace("_", "").isalnum():
+            raise ValueError(f"table_name must be alphanumeric/underscore: {table_name!r}")
+        fmt = (file_format or Path(path).suffix.lstrip(".")).lower()
+        reader = self._FILE_READERS.get(fmt)
+        if reader is None:
+            supported = ", ".join(sorted(set(self._FILE_READERS)))
+            raise ValueError(f"Unsupported file format {fmt!r}; supported: {supported}.")
+        escaped = path.replace("'", "''")
+        self._connection.execute(
+            f"CREATE OR REPLACE TEMP TABLE {table_name} AS SELECT * FROM {reader}('{escaped}')"
+        )
+        count_row = self._connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+        return int(count_row[0]) if count_row else 0
 
     def column_stats(self, table: str, column: str) -> ColumnStats:
         """Return min/max/null_count/distinct_count/dtype for a column."""
