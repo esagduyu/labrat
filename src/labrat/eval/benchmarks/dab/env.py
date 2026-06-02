@@ -127,3 +127,21 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
         primary=primary,
     )
     return DabTaskEnv(ctx=ctx, attachable=attachable, mongo=mongo)
+
+
+def introspect_env_catalogs(ctx: ToolContext) -> None:
+    """Populate ``ctx.catalogs`` from each *connected* connection, in place.
+
+    ``build_dab_task_env`` constructs empty ``Catalog``s because connections are not
+    yet ``connect()``-ed at build time. The driver connects at trial start and then
+    calls this so the catalog-backed tools (``list_tables`` / ``describe_table`` /
+    ``column_stats`` / ``search_columns``) see real schemas instead of nothing.
+
+    Connections without an ``introspect_catalog`` method keep their empty catalog
+    rather than aborting the trial. Must be called *after* the connections are
+    connected (introspection runs over the live handle).
+    """
+    for name, conn in ctx.connections.items():
+        introspect = getattr(conn, "introspect_catalog", None)
+        if callable(introspect):
+            ctx.catalogs[name] = introspect()

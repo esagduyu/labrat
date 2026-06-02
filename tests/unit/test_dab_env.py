@@ -1,8 +1,10 @@
 from pathlib import Path
+from typing import cast
 
 import yaml
 
-from labrat.eval.benchmarks.dab.env import build_dab_task_env
+from labrat.db.catalog import Catalog
+from labrat.eval.benchmarks.dab.env import build_dab_task_env, introspect_env_catalogs
 
 
 def _write_config(path: Path, clients: dict) -> None:  # type: ignore[type-arg]
@@ -94,6 +96,50 @@ def test_build_task_env_mongo_becomes_mongo_spec_not_attachable(tmp_path: Path) 
     assert env.mongo[0].alias == "articles"
     assert env.mongo[0].database == "articles_db"
     assert env.ctx.primary == "main"
+
+
+def test_introspect_env_catalogs_populates_from_connected_duckdb(tmp_path: Path) -> None:
+    """The labrat-agent driver bug: build_dab_task_env yields empty catalogs because
+    connections aren't connect()-ed yet. After connecting, introspect_env_catalogs
+    must fill ctx.catalogs so list_tables/describe_table/column_stats work."""
+    import duckdb
+
+    duckdb_path = tmp_path / "main.duckdb"
+    con = duckdb.connect(str(duckdb_path))
+    con.execute("CREATE TABLE widgets (id INTEGER, name TEXT)")
+    con.close()
+
+    config = tmp_path / "db_config.yaml"
+    _write_config(config, {"db": {"db_type": "duckdb", "db_path": "main.duckdb"}})
+    env = build_dab_task_env(config)
+
+    # Empty before introspection — the bug this fixes.
+    assert cast(Catalog, env.ctx.catalogs["db"]).schemas == []
+
+    for conn in env.ctx.connections.values():
+        conn.connect()  # type: ignore[attr-defined]
+    try:
+        introspect_env_catalogs(env.ctx)
+    finally:
+        for conn in env.ctx.connections.values():
+            conn.disconnect()  # type: ignore[attr-defined]
+
+    after = cast(Catalog, env.ctx.catalogs["db"])
+    table_names = {t.name for s in after.schemas for t in s.tables}
+    assert "widgets" in table_names
+
+
+def test_introspect_env_catalogs_ignores_connections_without_introspect(tmp_path: Path) -> None:
+    """A connection lacking introspect_catalog keeps its (empty) catalog, no crash."""
+    from labrat.agent.tools.base import ToolContext
+
+    ctx = ToolContext(
+        connections={"x": object()},
+        catalogs={"x": Catalog(database_name="x", schemas=[])},
+        primary="x",
+    )
+    introspect_env_catalogs(ctx)
+    assert cast(Catalog, ctx.catalogs["x"]).schemas == []
 
 
 def test_build_task_env_federation_host_when_no_duckdb(tmp_path: Path) -> None:

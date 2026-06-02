@@ -129,6 +129,45 @@ async def test_run_sql_rejects_mutations(ctx: ToolContext, sql: str) -> None:
     assert result.error is not None
 
 
+# ── run_sql: statement-stacking refusal ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM orders; DROP TABLE orders",  # classic injection
+        "SELECT 1; SELECT 2",  # multiple SELECTs are still multiple statements
+        "SELECT * FROM orders; DELETE FROM orders",
+    ],
+)
+async def test_run_sql_rejects_statement_stacking(ctx: ToolContext, sql: str) -> None:
+    """Multiple statements in one call are refused even if the first is a benign SELECT
+    (parse_one-based mutation check only sees the first statement)."""
+    tool = RunSqlTool()
+    result = await tool.execute(ctx, tool.input_model(query=sql))
+    assert result.ok is False
+    assert result.refused is True
+    assert result.error is not None and "single statement" in result.error.lower()
+
+
+async def test_run_sql_stacking_not_bypassable_by_force(ctx: ToolContext) -> None:
+    """force=True overrides mutation refusal but not the structural single-statement guard."""
+    tool = RunSqlTool()
+    result = await tool.execute(
+        ctx, tool.input_model(query="SELECT 1; DROP TABLE orders", force=True)
+    )
+    assert result.ok is False
+    assert result.refused is True
+
+
+async def test_run_sql_trailing_semicolon_is_single_statement(ctx: ToolContext) -> None:
+    """A single statement with a trailing semicolon is not treated as stacked."""
+    tool = RunSqlTool()
+    result = await tool.execute(ctx, tool.input_model(query="SELECT * FROM orders LIMIT 2;"))
+    assert result.ok is True
+    assert result.row_count == 2
+
+
 # ── run_sql: registered in registry ──────────────────────────────────────────
 
 

@@ -1,7 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import duckdb
 import yaml
 
 from labrat.eval.benchmarks.dab.suite import DabSuite
@@ -119,6 +121,52 @@ async def test_run_trial_prompt_includes_attach_for_duckdb_sqlite_mix(tmp_path: 
     prompt = captured[0]
     assert "ATTACH" in prompt, "Cross-DB ATTACH idiom missing from prompt"
     assert "TYPE SQLITE" in prompt, "SQLITE attachment type missing from prompt"
+
+
+def _make_real_duckdb_fixture(tmp_path: Path) -> None:
+    """A dataset with a real (non-empty) DuckDB so the labrat-agent driver can connect."""
+    dataset_dir = tmp_path / "query_real1"
+    dataset_dir.mkdir(parents=True)
+    duckdb_path = tmp_path / "main.duckdb"
+    con = duckdb.connect(str(duckdb_path))
+    con.execute("CREATE TABLE t(id INTEGER)")
+    con.close()
+    (dataset_dir / "db_config.yaml").write_text(
+        yaml.safe_dump(
+            {"db_clients": {"main_database": {"db_type": "duckdb", "db_path": str(duckdb_path)}}}
+        )
+    )
+    (dataset_dir / "db_description.txt").write_text("Real")
+    (dataset_dir / "query1").mkdir()
+    (dataset_dir / "query1" / "query.json").write_text('"How many?"')
+    (dataset_dir / "query1" / "validate.py").write_text("def validate(out): return (True, None)\n")
+
+
+@patch("labrat.agent.providers.build_provider", return_value=MagicMock())
+async def test_labrat_agent_driver_threads_verify_flag(
+    _provider: MagicMock, tmp_path: Path
+) -> None:
+    """--agent-verify reaches run_agent_task as verify=True; default is False."""
+    _make_real_duckdb_fixture(tmp_path)
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="ok", tool_calls=0, latency_seconds=0.0)
+
+    # verify on
+    suite_on = DabSuite(dab_dir=tmp_path, driver="labrat-agent", agent_verify=True)
+    task = next(iter(suite_on.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite_on.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_on")
+    assert captured.get("verify") is True
+
+    # verify off by default
+    captured.clear()
+    suite_off = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite_off.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_off")
+    assert captured.get("verify") is False
 
 
 async def test_run_trial_records_validator_error(tmp_path: Path) -> None:

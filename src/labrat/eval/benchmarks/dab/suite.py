@@ -204,6 +204,7 @@ class DabSuite:
         agent_provider: str = "anthropic",
         agent_max_turns: int | None = None,
         agent_max_tool_calls: int | None = None,
+        agent_verify: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -214,6 +215,9 @@ class DabSuite:
         self._agent_provider = agent_provider
         self._agent_max_turns = agent_max_turns
         self._agent_max_tool_calls = agent_max_tool_calls
+        # Opt-in LLM-as-judge verifier for the labrat-agent driver (loop-level, so it
+        # has no effect under raw-bash / claude-mcp, whose loops live elsewhere).
+        self._agent_verify = agent_verify
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -576,13 +580,20 @@ class DabSuite:
         from labrat.agent.data_tools import build_data_tools_registry
         from labrat.agent.providers import build_provider
         from labrat.agent.runner import run_agent_task
-        from labrat.eval.benchmarks.dab.env import build_dab_task_env
+        from labrat.eval.benchmarks.dab.env import (
+            build_dab_task_env,
+            introspect_env_catalogs,
+        )
 
         env = build_dab_task_env(db_config_path)
         for conn in env.ctx.connections.values():
             connect = getattr(conn, "connect", None)
             if callable(connect):
                 connect()
+        # Connections aren't connect()-ed in build_dab_task_env, so the catalogs it
+        # builds are empty; introspect now (post-connect) so the catalog-backed tools
+        # (list_tables / describe_table / column_stats / search_columns) actually work.
+        introspect_env_catalogs(env.ctx)
         try:
             registry = build_data_tools_registry()
             provider = build_provider(self._agent_provider, self._agent_model)
@@ -595,6 +606,7 @@ class DabSuite:
                 system_prompt=system_prompt,
                 max_turns=self._agent_max_turns,
                 max_tool_calls=self._agent_max_tool_calls,
+                verify=self._agent_verify,
             )
         finally:
             for conn in env.ctx.connections.values():
