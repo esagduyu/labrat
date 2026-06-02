@@ -13,7 +13,7 @@ ProviderName = Literal["anthropic", "claude-code", "openai"]
 PROVIDER_NAMES: tuple[ProviderName, ...] = ("anthropic", "claude-code", "openai")
 
 
-def build_provider(name: str, model: str) -> ModelProvider:
+def build_provider(name: str, model: str, timeout: int | None = None) -> ModelProvider:
     """Map a CLI/config string to a concrete ModelProvider instance.
 
     Billing notes:
@@ -22,10 +22,16 @@ def build_provider(name: str, model: str) -> ModelProvider:
                     hits the documented conflict for tool round-trips)
       openai      → metered OpenAI-compatible (needs OPENAI_API_KEY or
                     an OPENAI_BASE_URL/api_key pair)
+
+    ``timeout`` (seconds) overrides the per-call subprocess timeout for the
+    ``claude-code`` provider; the others manage their own HTTP timeouts and ignore
+    it. ``None`` keeps the provider default.
     """
     if name == "anthropic":
         return AnthropicProvider(model=model)
     if name == "claude-code":
+        if timeout is not None:
+            return ClaudeCodeProvider(model=model, timeout=timeout)
         return ClaudeCodeProvider(model=model)
     if name == "openai":
         return OpenAICompatibleProvider(model=model)

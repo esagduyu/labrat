@@ -169,6 +169,49 @@ async def test_labrat_agent_driver_threads_verify_flag(
     assert captured.get("verify") is False
 
 
+async def test_run_trial_isolates_agent_timeout_as_infra(tmp_path: Path) -> None:
+    """A TimeoutError from the agent fails only this trial (infra:timeout), not the run."""
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=TimeoutError("claude --print timed out after 120s")),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+    assert result.passed is False
+    assert result.reason == "infra:timeout"
+
+
+async def test_run_trial_isolates_generic_agent_error_as_infra(tmp_path: Path) -> None:
+    """Any other agent exception is recorded as infra:agent_error, not propagated."""
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    with patch.object(
+        DabSuite, "_run_trial_labrat_agent", new=AsyncMock(side_effect=RuntimeError("boom"))
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+    assert result.passed is False
+    assert result.reason == "infra:agent_error"
+
+
+def test_labrat_agent_prompt_surfaces_new_tools_and_discipline(tmp_path: Path) -> None:
+    """The DAB labrat-agent system prompt lists profile_dataset + load_file and the
+    profile->plan->verify discipline, while keeping the single-answer instruction."""
+    from labrat.eval.benchmarks.dab.env import build_dab_task_env
+    from labrat.eval.benchmarks.dab.suite import _build_labrat_agent_system_prompt
+
+    _make_synthetic_fixture(tmp_path)
+    env = build_dab_task_env(tmp_path / "query_synthetic1" / "db_config.yaml")
+    prompt = _build_labrat_agent_system_prompt(env)
+    assert "profile_dataset" in prompt
+    assert "load_file" in prompt
+    assert "profile_dataset first" in prompt  # the prescriptive discipline
+    assert "single plain answer" in prompt  # DAB scoring contract preserved
+
+
 async def test_run_trial_records_validator_error(tmp_path: Path) -> None:
     _make_synthetic_fixture(tmp_path)
     dataset_dir = tmp_path / "query_synthetic1"
