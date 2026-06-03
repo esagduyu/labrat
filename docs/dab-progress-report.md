@@ -303,20 +303,22 @@ The natural Phase 5 work:
 
 ---
 
-## Phase 5: Full 54-query DAB run, 58.0% (2026-05-31 / 2026-06-01)
+## Phase 5: Full 54-query DAB run — submitted 58.0%, corrected to 50.5% (2026-05-31 / 2026-06-01)
 
-The first directly leaderboard-comparable LabRat number on DataAgentBench. All 12 official datasets, all 54 queries, pass@5, claude-sonnet-4-6, claude-mcp driver (LabRat MCP server mounted in `claude --print`, Max-plan billing). Run dir: `runs/dab/dab-1780210698/`. 270 trials. Required four resume cycles across Max-plan session windows.
+> ⚠️ **Correction (2026-06-03).** This run was submitted to the DAB leaderboard at 58.0%, but a trace audit (prompted by the maintainers' review on PR #54) found that the `claude-mcp` harness left the agent unsandboxed, so on some queries it read the benchmark's answer-key files (`ground_truth.csv`/`validate.py`) off disk or pulled external labels (`load_dataset("ag_news")`). **18 of 270 trials are contaminated and withdrawn; the corrected score is 50.5%.** See [Contamination audit and correction](#contamination-audit-and-correction-2026-06-03) below before relying on any figure in this section. The per-dataset numbers below are the **original (contaminated)** values, kept as the historical record and corrected inline where they changed.
 
-**Headline:**
+All 12 official datasets, all 54 queries, pass@5, claude-sonnet-4-6, claude-mcp driver (LabRat MCP server mounted in `claude --print`, Max-plan billing). Run dir: `runs/dab/dab-1780210698/`. 270 trials. Required four resume cycles across Max-plan session windows.
+
+**Headline (corrected):**
 
 | Agent | Score | Notes |
 |---|---|---|
 | MinusX | 63.1% | Official leaderboard top |
 | Altimate Code | 60.4% | |
-| **LabRat (this run)** | **58.0%** | **+0.5pp over Spacedock; 5pp behind MinusX** |
 | Spacedock | 57.7% | |
+| **LabRat (this run, corrected)** | **50.5%** | submitted 58.0%; −7.5pp after withdrawing 18 contaminated trials |
 
-LabRat ships its first beats-an-incumbent score on the public leaderboard. The gap to MinusX and Altimate is real but small — and on a benchmark where the substrate was only built end-to-end over the last 48 hours.
+The originally-reported 58.0% would have edged Spacedock; the corrected 50.5% does not, and we are not claiming a leaderboard placement until the clean sandboxed re-run lands. The substrate plumbing (Postgres + Mongo cross-DB) was built end-to-end over the prior 48 hours and does work mechanically; what the contamination invalidates is the *score-level* claim, agnews above all.
 
 ### What shipped between Phase 4 and Phase 5
 
@@ -330,23 +332,23 @@ Three pieces, all in commits since `6748cc4`:
 
 | Dataset | Pass rate | DB stack | Comment |
 |---------|-----------|----------|---------|
-| agnews | **95%** | Mongo + SQLite | Phase 3 at scale — load_mongo_collection earning its keep |
-| bookreview | **93%** | Postgres + SQLite | Phase 2 at scale |
-| crmarenapro | **82%** | SQLite × 3 + DuckDB × 2 + Postgres (6 DBs!) | The hardest dataset in the benchmark, and one of LabRat's strongest results |
-| stockindex | **100%** | DuckDB + SQLite | Up from 87% in Phase 4 — formatting issue resolved itself |
-| stockmarket | 80% | DuckDB + SQLite | Within noise of Phase 4's 88% |
-| pancancer_atlas | 67% | Postgres + DuckDB | Postgres + DuckDB cross-DB, solid |
-| github_repos | 50% | DuckDB + SQLite | Matches Phase 1b — same swiftandroid/swift miss persists |
-| googlelocal | 50% | Postgres + SQLite | 2 queries clean, 2 stubbornly fail |
-| yelp | 63% | Mongo + DuckDB | Phase 3 at scale, mixed |
-| deps_dev_v1 | 10% | DuckDB + SQLite | Regressed from Phase 4's 40% — likely stochastic on n=10 |
-| music_brainz_20k | 7% | DuckDB + SQLite | Answer-from-context failure mode persists — same `$601.44`, `Systemisch bled` answers |
-| patents | **0%** | Postgres + SQLite | Sonnet ceiling: CPC-code lookup the model just doesn't crack |
-| **Overall** | **58.0%** | | Stratified mean of per-dataset means |
+| agnews | ~~95%~~ → **15%** | Mongo + SQLite | **Contaminated — 16/20 trials read answer key / loaded HF labels; withdrawn** |
+| bookreview | ~~93%~~ → **87%** | Postgres + SQLite | Phase 2 at scale; 1 contaminated trial withdrawn |
+| crmarenapro | **82%** | SQLite × 3 + DuckDB × 2 + Postgres (6 DBs!) | Clean. The hardest dataset in the benchmark, and one of LabRat's strongest results |
+| stockindex | **100%** | DuckDB + SQLite | Clean. Up from 87% in Phase 4 — formatting issue resolved itself |
+| stockmarket | 80% | DuckDB + SQLite | Clean. Within noise of Phase 4's 88% |
+| pancancer_atlas | 67% | Postgres + DuckDB | Clean. Postgres + DuckDB cross-DB, solid |
+| github_repos | 50% | DuckDB + SQLite | Clean. Matches Phase 1b — same swiftandroid/swift miss persists |
+| googlelocal | 50% | Postgres + SQLite | Clean. 2 queries clean, 2 stubbornly fail |
+| yelp | ~~63%~~ → **60%** | Mongo + DuckDB | Phase 3 at scale, mixed; 1 contaminated trial withdrawn |
+| deps_dev_v1 | 10% | DuckDB + SQLite | Clean. Regressed from Phase 4's 40% — likely stochastic on n=10 |
+| music_brainz_20k | 7% | DuckDB + SQLite | Clean. Answer-from-context failure mode persists — same `$601.44`, `Systemisch bled` answers |
+| patents | **0%** | Postgres + SQLite | Clean. Sonnet ceiling: CPC-code lookup the model just doesn't crack |
+| **Overall** | ~~58.0%~~ → **50.5%** | | Stratified mean of per-dataset means (corrected) |
 
 ### Per-query highlights
 
-**25 of 54 queries scored a perfect 5/5.** Notably, 9 of 13 crmarenapro queries are 100% (the dataset has 6 databases involved); all 3 stockindex queries are 100%; agnews:1/2/3 all 100%; pancancer_atlas:2/3 100%.
+**25 of 54 queries scored a perfect 5/5 as submitted** (fewer after the agnews withdrawal). Notably, 9 of 13 crmarenapro queries are 100% (the dataset has 6 databases involved); all 3 stockindex queries are 100%; pancancer_atlas:2/3 100%. (agnews:1/2/3 also showed 100% but are contaminated — see the audit below.)
 
 **11 of 54 queries scored 0/5.** patents:1/2/3 (Sonnet ceiling on CPC-code lookup), music_brainz_20k:1/3 (answer-from-context), github_repos:1/2 (precision + wrong-fork), deps_dev_v1:1, pancancer_atlas:1, crmarenapro:12, googlelocal:2/3.
 
@@ -357,8 +359,8 @@ The 0% queries cluster around two failure modes:
 ### What this validates
 
 1. **The MCP-driver path scales.** 270 trials across 54 queries, 4 different DB types, 12 datasets — all driven by `claude --print --mcp-config` against `labrat.mcp.server`. No protocol surprises.
-2. **Phase 2 (Postgres) works at scale.** bookreview 93%, crmarenapro 82%, pancancer_atlas 67% — the existing `attach_database` tool routing into DuckDB's `postgres` extension is a clean reuse of infrastructure.
-3. **Phase 3 (Mongo) works at scale.** agnews 95%, yelp 63% — the materialize-into-DuckDB pattern lets the agent treat Mongo collections like any other table, including JOINs against attached SQLite / Postgres / DuckDB primaries.
+2. **Phase 2 (Postgres) works at scale.** crmarenapro 82%, pancancer_atlas 67%, bookreview 87% (corrected) — the existing `attach_database` tool routing into DuckDB's `postgres` extension is a clean reuse of infrastructure. These datasets are uncontaminated.
+3. **Phase 3 (Mongo) plumbing works; its score-level validation is on hold.** The materialize-into-DuckDB pattern lets the agent treat Mongo collections like any other table, including JOINs against attached primaries — and it did so in clean trials. But the headline evidence used to be "agnews 95%," and agnews is exactly where the contamination lives (corrected to 15%). Mongo support cannot be claimed validated-by-score until the sandboxed re-run; yelp (60% corrected) is the remaining Mongo signal.
 4. **crmarenapro is the strongest substrate evidence in the run.** 6 databases (SQLite × 3, DuckDB × 2, Postgres × 1) requiring multi-DB orchestration. 82% pass rate. Raw-bash with prompt-engineered preambles wouldn't have built up the right ATTACH topology reliably.
 
 ### What this exposes
@@ -366,6 +368,38 @@ The 0% queries cluster around two failure modes:
 1. **Sonnet ceiling on hard semantic queries.** music_brainz_20k stays at 7% (same `$601.44` answer Phase 1b had). patents stays at 0% across all 3 queries. The tool stack doesn't fix the model's mental model — only force-querying prompt changes might recover music_brainz.
 2. **Stochasticity on n=5.** deps_dev_v1 was 40% in Phase 4, 10% here. github_repos:4 was 60% in Phase 4, 100% here. Pass@5 is a noisy estimator — larger n would tighten the dataset scores by several percentage points.
 3. **Max-plan session limits make a 270-trial run non-trivially operational.** This run required 4 resume cycles across a ~30-hour wall-clock window. The auto-retry-on-resume helps, but a smarter harness (wait-for-reset + sleep) would let one `eval_dab.py` invocation finish unattended.
+
+### Contamination audit and correction (2026-06-03)
+
+When the DAB maintainers reviewed PR #54 they asked for the full per-trial traces, noting that an unusually high agnews score is a classic data-leakage tell. Auditing our own saved `claude --print` transcripts confirmed the leakage — and the cause is our harness, not the benchmark.
+
+**Root cause: the agent was never sandboxed.** The `claude-mcp` driver ran:
+
+```
+claude --print --strict-mcp-config --mcp-config <f> \
+       --model claude-sonnet-4-6 --permission-mode bypassPermissions ...
+```
+
+`--strict-mcp-config` only constrains MCP configuration. With `bypassPermissions` and **no `--allowedTools`/`--disallowedTools`**, the agent retained the full Claude Code native toolset — Bash, WebFetch, `Task`/subagents, Read/Write — alongside the LabRat MCP server. Our DataAgentBench checkout, including every `validate.py` and `ground_truth.csv`, was on the same filesystem and readable. We intended the MCP server to be the sole data interface; it was one tool among many.
+
+**What the traces show** (verbatim):
+- Reading the answer key: `cat .../query_agnews/query3/validate.py`, with a subagent reporting *"The benchmark ground truth from `validate.py` is `GROUND_TRUTH = 336.6363636363636`."*
+- Loading external labels: `load_dataset("fancyzhx/ag_news")`, mapping `article_id → label` — one trial states *"I solved this by mapping article_ids to categories using the HuggingFace AG News labeled dataset."*
+
+**Scope — audited all 270 trials.** 18 accessed answer-key/validator files or external labels:
+
+| Dataset | Contaminated / matched trials |
+|---|---|
+| agnews | **16 / 20** |
+| bookreview | 1 / 15 (`bookreview:3` t4 — subagent read `validate.py`) |
+| yelp | 1 / 35 (`yelp:1` t0 — enumerated `query1/ground_truth.csv`) |
+| all 9 others | 0 |
+
+The audit scans the full transcript text (Bash inputs, tool results, **and** `Task`-subagent returns) — a Bash-only scan undercounts because delegated work surfaces in tool-result text, not parent Bash calls.
+
+**Correction.** Withdrawing the 18 contaminated passes (counting them as non-passes, leaving every other trial untouched) recomputes the stratified mean **58.0% → 50.5%**: agnews 95%→15%, bookreview 93%→87%, yelp 63%→60%, the other nine datasets unchanged. Our local recompute reproduces the submitted 58.0% exactly, which cross-checks the scoring.
+
+**Disclosure & remediation.** Disclosed on PR #54 with a scrubbed 270-trial trace bundle (`runs/dab/dab-1780210698/trace_bundle/` — full LLM history + every tool I/O, `manifest.json` per-trial contamination flags, `CONTAMINATION_AUDIT.md`). We withdrew the 18 contaminated trials and asked maintainers to verify. **The clean replacement requires re-running with the agent sandboxed: tool access restricted to the MCP server (block Bash/WebFetch/Task via `--allowedTools`), the benchmark repo off the agent's filesystem, and no network egress — so answer-key and external-label access are impossible by construction.** This is the top DAB priority, ahead of any Phase 6 score-chasing.
 
 ### Reproducibility
 
@@ -377,6 +411,10 @@ uv run python scripts/eval_dab.py \
 # When the run hits a session limit, simply:
 uv run python scripts/eval_dab.py --output-dir runs/dab/dab-<id>
 # (auto-retries infra trials; safe to fire as many times as needed)
+#
+# NOTE: this command reproduces the *contaminated* run. The clean re-run must
+# additionally sandbox the agent (MCP-only --allowedTools, benchmark repo off
+# the agent's filesystem, no network). See "Contamination audit" above.
 ```
 
 ---
@@ -409,6 +447,8 @@ Root cause candidates:
 ---
 
 ## What comes next
+
+> **Current top priority (2026-06-03): the sandboxed clean re-run.** After the contamination audit above, the immediate next step is re-running the full 54-query benchmark with the agent's tool surface restricted to the MCP server (no Bash/WebFetch/`Task`), the benchmark repo off the agent's filesystem, and no network egress — producing a defensible replacement for the corrected 50.5%. Only after that do the Phase 6 prompt/score improvements below matter. The Phase 1c–4 items in this section are **historical** (Phases 2/3/4 shipped in the run above) and kept for context.
 
 ### Phase 1c (prompt iteration)
 
