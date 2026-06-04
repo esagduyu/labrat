@@ -470,7 +470,7 @@ These are prompt-only or small and target the worst *clean* datasets, so they go
 2. **Answer-format guidance:** *"State your final answer as a plain value on the last line."* (recovers prose-buried answers; cheap insurance against validator-format misses).
 3. **Anti-pattern bullets** in the system prompt (dialect gotchas, grep-before-assuming-a-table).
 
-Two heavier ADOPT builds (north-star §9) are the highest-impact *score* levers but are real work — **schema-linking (NL→relevant-tables-only)** and **mechanically-verified joins (probe before trusting)**. They directly attack deps_dev_v1 (10%), music_brainz (7%), and patents (0%), which are grounding/mental-model failures, not tooling gaps. **Decision: land them before kickoff if you can afford ~a day; otherwise they become the first post-kickoff agent work and ship in the *next* re-run.** Do **not** encode answer-shaped per-dataset "gotchas" docs for DAB — that's the leakage smell we just fixed; keep DAB grounding to schema/grain/join *structure* only.
+Two heavier ADOPT builds (north-star §9) are the highest-impact *score* levers — **schema-linking (NL→relevant-tables-only)** and **mechanically-verified joins (probe before trusting)**. They directly attack deps_dev_v1 (10%), music_brainz (7%), and patents (0%), which are grounding/mental-model failures, not tooling gaps. **✅ SHIPPED before kickoff (2026-06-03):** `link_schema` + `verify_join` tools (`src/labrat/agent/tools/`, registered + surfaced in both driver prompts, TDD'd). They encode only schema/grain/join *structure*, never answer-shaped content (the leakage smell we just fixed).
 
 ### Post-run — agent & product depth (while the run grinds; from the Anthropic self-service-analytics article)
 

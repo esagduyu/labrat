@@ -43,7 +43,9 @@ _DAB_SYSTEM_PROMPT = (
     "Return your final answer as plain text once you are confident."
 )
 
-_DAB_TIMEOUT = 600  # per-trial wall-clock timeout for the claude subprocess
+_DAB_TIMEOUT = (
+    1200  # per-trial wall-clock timeout for the claude subprocess (override: --agent-timeout)
+)
 
 # Native Claude Code tools the claude-mcp driver blocks so the agent can only
 # reach the LabRat MCP server — closes the answer-key/external-label leakage path.
@@ -109,8 +111,12 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         "Tools available:",
         "  profile_dataset — one call returns every table's columns, row counts, foreign "
         "keys, and sample rows (call this FIRST to ground yourself before planning)",
+        "  link_schema — given the question, returns the most relevant tables (ranked) to "
+        "narrow a wide schema before you describe tables or write SQL",
         "  list_tables / describe_table / search_columns — discover schema",
         "  sample_rows / column_stats — inspect actual values",
+        "  verify_join — probe a join's match rate + fan-out BEFORE trusting it (catches "
+        "wrong join keys and fan-out that makes aggregates double-count)",
         "  run_sql — execute one SQL statement (DuckDB dialect; primary connection by default)",
         "  explain_sql — show the query plan without executing",
         "  attach_database — pull a SQLite/Postgres/MySQL file into the primary DuckDB "
@@ -137,9 +143,12 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
             "Approach:",
             "  1. Call profile_dataset first to ground yourself in the real schema, row "
             "counts, and sample values before planning.",
-            "  2. Plan the steps, then run them one at a time, reading each result before "
-            "the next.",
-            "  3. Before answering, re-read the question and confirm your result actually "
+            "  2. On a wide or unfamiliar schema, call link_schema with the question to "
+            "narrow to the relevant tables before planning.",
+            "  3. Plan the steps, then run them one at a time, reading each result before "
+            "the next. Before any multi-table JOIN, call verify_join to confirm the keys "
+            "match and won't fan out.",
+            "  4. Before answering, re-read the question and confirm your result actually "
             "answers it (check magnitudes, units, and that joins didn't drop or fan out rows).",
             "",
             "Run queries until you are confident, then respond with a single plain answer "
@@ -552,8 +561,12 @@ class DabSuite:
 
         prompt_lines = [
             "You have a labrat MCP server connected. It exposes data tools "
-            "(list_tables, describe_table, run_sql, attach_database, …) against "
+            "(link_schema, list_tables, describe_table, sample_rows, run_sql, "
+            "verify_join, attach_database, load_mongo_collection, …) against "
             f"the primary DuckDB database '{primary_name}'.",
+            "On a wide/unfamiliar schema call link_schema(question) first to find the "
+            "relevant tables; before any multi-table JOIN call verify_join to confirm the "
+            "keys match and won't fan out.",
         ]
         if env_spec.attachable:
             prompt_lines.append("")
@@ -631,6 +644,10 @@ class DabSuite:
             if k != "ANTHROPIC_API_KEY" and k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE")
         }
 
+        # Per-trial wall-clock: --agent-timeout override, else the 1200s default.
+        # Hard classification queries (e.g. agnews) need headroom beyond 600s.
+        effective_timeout = self._agent_timeout if self._agent_timeout is not None else _DAB_TIMEOUT
+
         t0 = time.monotonic()
         try:
             result = await asyncio.to_thread(
@@ -638,7 +655,7 @@ class DabSuite:
                 cmd,
                 input=prompt.encode(),
                 capture_output=True,
-                timeout=_DAB_TIMEOUT,
+                timeout=effective_timeout,
                 env=env_vars,
                 # Filesystem isolation: run in the per-trial scratch dir so the
                 # benchmark checkout (validate.py / ground_truth.csv) is not under
@@ -649,7 +666,7 @@ class DabSuite:
             # Record the timeout as a trial-level failure (the validator will mark
             # passed=False) rather than crashing the whole run.
             latency = time.monotonic() - t0
-            return f"[trial exceeded {_DAB_TIMEOUT}s timeout]", 0, latency
+            return f"[trial exceeded {effective_timeout}s timeout]", 0, latency
         latency = time.monotonic() - t0
 
         raw = result.stdout.decode(errors="replace").strip()

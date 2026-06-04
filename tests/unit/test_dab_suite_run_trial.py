@@ -208,6 +208,8 @@ def test_labrat_agent_prompt_surfaces_new_tools_and_discipline(tmp_path: Path) -
     prompt = _build_labrat_agent_system_prompt(env)
     assert "profile_dataset" in prompt
     assert "load_file" in prompt
+    assert "link_schema" in prompt  # grounding tool #25
+    assert "verify_join" in prompt  # grounding tool #25
     assert "profile_dataset first" in prompt  # the prescriptive discipline
     assert "single plain answer" in prompt  # DAB scoring contract preserved
 
@@ -316,6 +318,36 @@ async def test_claude_mcp_mcp_config_path_absolute_under_relative_scratch(
     assert os.path.isabs(cfg_arg), f"--mcp-config must be absolute, got {cfg_arg!r}"
     # And it must actually point at the file that was written.
     assert Path(cfg_arg).exists()
+
+
+async def test_claude_mcp_subprocess_timeout_default_and_override(tmp_path: Path) -> None:
+    """claude-mcp per-trial wall-clock defaults to 1200s and honours --agent-timeout."""
+    _make_real_duckdb_fixture(tmp_path)
+    task = next(iter(DabSuite(dab_dir=tmp_path).tasks()))
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout=b'{"result": "x", "num_turns": 1}', stderr=b"")
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await DabSuite(dab_dir=tmp_path, driver="claude-mcp").run_trial(
+            task, trial_num=0, scratch_dir=tmp_path / "s1"
+        )
+    assert captured["timeout"] == 1200
+
+    captured.clear()
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await DabSuite(dab_dir=tmp_path, driver="claude-mcp", agent_timeout=900).run_trial(
+            task, trial_num=0, scratch_dir=tmp_path / "s2"
+        )
+    assert captured["timeout"] == 900
 
 
 async def test_run_trial_records_validator_error(tmp_path: Path) -> None:
