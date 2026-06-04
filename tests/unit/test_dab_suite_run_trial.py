@@ -212,6 +212,77 @@ def test_labrat_agent_prompt_surfaces_new_tools_and_discipline(tmp_path: Path) -
     assert "single plain answer" in prompt  # DAB scoring contract preserved
 
 
+def test_detect_contamination_flags_markers() -> None:
+    from labrat.eval.benchmarks.dab.suite import _detect_contamination
+
+    assert _detect_contamination("The ground truth from validate.py is 42") == "answer_key"
+    assert _detect_contamination("read ground_truth.csv") == "answer_key"
+    assert _detect_contamination("I used load_dataset('ag_news') for labels") == "external_dataset"
+    assert _detect_contamination("from the HuggingFace dataset") == "external_dataset"
+    assert _detect_contamination("the answer is 3 from a normal SQL aggregation") is None
+
+
+async def test_run_trial_marks_contaminated_answer_as_not_passed(tmp_path: Path) -> None:
+    """An answer that would score correct but shows leakage markers is withdrawn, not passed."""
+    _make_synthetic_fixture(tmp_path)  # validator passes when '3' in output
+    suite = DabSuite(dab_dir=tmp_path)
+    task = next(iter(suite.tasks()))
+    # Contains '3' (validator would pass) AND a leakage marker.
+    leaked = "Reading validate.py, the ground truth is 3."
+    with patch(
+        "labrat.eval.benchmarks.dab.suite._invoke_agent",
+        new=AsyncMock(return_value={"final_text": leaked, "tool_calls": 9}),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+
+    assert result.passed is False
+    assert (result.reason or "").startswith("contaminated:")
+
+
+async def test_claude_mcp_driver_sandboxes_tools_and_cwd(tmp_path: Path) -> None:
+    """The claude-mcp subprocess must restrict tools to the MCP server and run in
+    an isolated scratch cwd so the benchmark repo (answer keys) is unreachable."""
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    task = next(iter(suite.tasks()))
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b'{"result": "answer 1", "num_turns": 2}',
+            stderr=b"",
+        )
+
+    scratch = tmp_path / "scratch_mcp"
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    cmd = captured["cmd"]
+    joined = " ".join(cmd)
+    # Tools restricted to the MCP server; native tools explicitly blocked.
+    assert "--allowedTools" in cmd
+    assert "mcp__labrat" in joined
+    assert "--disallowedTools" in cmd
+    for blocked in ("Bash", "WebFetch", "Task"):
+        assert blocked in joined, f"{blocked} not in disallowed tools"
+    # Subprocess runs in the isolated scratch cwd, not the benchmark repo.
+    assert str(captured["kwargs"].get("cwd")) == str(scratch)
+
+    # The MCP server is told where to write audit-grade per-call traces.
+    import json as _json
+
+    mcp_config = _json.loads((scratch / "mcp-config.json").read_text())
+    server_env = mcp_config["mcpServers"]["labrat"]["env"]
+    assert server_env.get("LABRAT_MCP_LOG_DIR")
+
+
 async def test_run_trial_records_validator_error(tmp_path: Path) -> None:
     _make_synthetic_fixture(tmp_path)
     dataset_dir = tmp_path / "query_synthetic1"

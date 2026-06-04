@@ -36,6 +36,8 @@ import asyncio
 import json
 import os
 import sys
+import time
+from pathlib import Path
 from typing import Any
 
 from mcp.server import NotificationOptions, Server
@@ -46,6 +48,38 @@ from mcp.types import TextContent, Tool
 from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.tools.base import ToolContext, ToolRegistry
 from labrat.db.duckdb_engine import DuckDBConnection
+
+_TOOL_LOG_FILENAME = "mcp_tool_calls.jsonl"
+
+
+def _log_tool_call(
+    log_dir: str | None,
+    *,
+    name: str,
+    arguments: dict[str, Any],
+    ok: bool,
+    output: str,
+    latency_ms: float,
+) -> None:
+    """Append one audit line per tool dispatch to ``<log_dir>/mcp_tool_calls.jsonl``.
+
+    No-op when ``log_dir`` is falsy. Enables audit-grade per-call traces (the gap
+    that made the DAB contamination only reconstructable after the fact). Gated on
+    the ``LABRAT_MCP_LOG_DIR`` env var so normal runs pay nothing.
+    """
+    if not log_dir:
+        return
+    record = {
+        "tool": name,
+        "input": arguments,
+        "ok": ok,
+        "output": output,
+        "latency_ms": latency_ms,
+    }
+    dest = Path(log_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    with (dest / _TOOL_LOG_FILENAME).open("a") as fh:
+        fh.write(json.dumps(record, default=str) + "\n")
 
 
 def _build_context_from_env() -> tuple[ToolContext, list[DuckDBConnection]]:
@@ -116,13 +150,25 @@ def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
             )
         return out
 
+    log_dir = os.environ.get("LABRAT_MCP_LOG_DIR")
+
     @server.call_tool()
     async def _call_tool(  # pyright: ignore[reportUnusedFunction]
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
+        t0 = time.monotonic()
         dispatch = await registry.dispatch(name, arguments, ctx)
         if not dispatch.ok:
-            return [TextContent(type="text", text=f"Error: {dispatch.error}")]
+            error_text = f"Error: {dispatch.error}"
+            _log_tool_call(
+                log_dir,
+                name=name,
+                arguments=arguments,
+                ok=False,
+                output=error_text,
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return [TextContent(type="text", text=error_text)]
         value = dispatch.value
         payload: str
         dumper = getattr(value, "model_dump_json", None)
@@ -133,6 +179,14 @@ def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
                 payload = json.dumps(value, default=str)
             except (TypeError, ValueError):
                 payload = str(value)
+        _log_tool_call(
+            log_dir,
+            name=name,
+            arguments=arguments,
+            ok=True,
+            output=payload,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
         return [TextContent(type="text", text=payload)]
 
     return server

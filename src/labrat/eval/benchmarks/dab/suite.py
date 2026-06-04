@@ -45,6 +45,10 @@ _DAB_SYSTEM_PROMPT = (
 
 _DAB_TIMEOUT = 600  # per-trial wall-clock timeout for the claude subprocess
 
+# Native Claude Code tools the claude-mcp driver blocks so the agent can only
+# reach the LabRat MCP server — closes the answer-key/external-label leakage path.
+_BLOCKED_NATIVE_TOOLS = "Bash,WebFetch,WebSearch,Task,Read,Write,Edit,NotebookEdit,Glob,Grep"
+
 
 # Substrings in a trial's final_text that mark it as an infrastructure failure
 # (not a model semantic failure). Trials with these markers get reason="infra:..."
@@ -64,6 +68,35 @@ def _detect_infra_failure(final_text: str) -> str | None:
     like an infrastructure failure rather than a real attempt; otherwise None."""
     for needle, tag in _INFRA_PATTERNS:
         if needle in final_text:
+            return tag
+    return None
+
+
+# Substrings that mark a trial as contaminated by data leakage — the agent read
+# the benchmark's answer key (validate.py / ground_truth.csv) off disk, or pulled
+# external labels (HuggingFace `load_dataset`). With the claude-mcp driver properly
+# sandboxed (MCP-only --allowedTools, isolated cwd) this is structurally impossible,
+# so this is a loud backstop: any hit means the sandbox regressed. Contaminated
+# trials are withdrawn from aggregate scoring (see aggregate()), never counted as
+# a pass. Tags are checked in order; answer-key access is the more severe signal.
+_CONTAMINATION_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("validate.py", "answer_key"),
+    ("ground_truth", "answer_key"),
+    ("ground truth from", "answer_key"),
+    ("ground truth is confirmed", "answer_key"),
+    ("load_dataset", "external_dataset"),
+    ("huggingface", "external_dataset"),
+    ("fancyzhx/ag_news", "external_dataset"),
+)
+
+
+def _detect_contamination(text: str) -> str | None:
+    """Return a contamination tag ('answer_key' / 'external_dataset') if the trace
+    text shows the agent reached the answer key or an external labelled dataset;
+    otherwise None. Case-insensitive."""
+    low = text.lower()
+    for needle, tag in _CONTAMINATION_PATTERNS:
+        if needle in low:
             return tag
     return None
 
@@ -352,6 +385,22 @@ class DabSuite:
                 artifact={"type": "text", "payload": final_text},
             )
 
+        # Data-leakage backstop: if the trace shows the agent reached the answer key
+        # or an external labelled dataset, withdraw the trial regardless of whether
+        # it would have scored a pass. With a properly sandboxed driver this never
+        # fires; if it does, the reason flags a sandbox regression loudly.
+        contamination_tag = _detect_contamination(final_text)
+        if contamination_tag is not None:
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason=f"contaminated:{contamination_tag}",
+                latency_seconds=latency,
+                tool_calls=tool_calls,
+                artifact={"type": "text", "payload": final_text},
+            )
+
         passed, reason = score_with_validator(validator_path, final_text)
 
         return TrialResult(
@@ -484,6 +533,10 @@ class DabSuite:
                             }
                         ),
                         "LABRAT_MCP_PRIMARY": primary_name,
+                        # Audit-grade per-call traces land in the trial scratch dir
+                        # (one mcp_tool_calls.jsonl line per dispatch) — first-class
+                        # traces instead of reconstructing from ~/.claude after the fact.
+                        "LABRAT_MCP_LOG_DIR": str(scratch_dir),
                     },
                 }
             }
@@ -537,12 +590,22 @@ class DabSuite:
         # its own short default.
         effective_max_turns = self._agent_max_turns if self._agent_max_turns is not None else 200
 
+        # Sandbox gate: restrict the agent's tools to the LabRat MCP server and
+        # explicitly block every native Claude Code tool. Without this the agent
+        # keeps Bash/WebFetch/Task even under bypassPermissions and can read the
+        # benchmark's answer keys off disk or fetch external labels (the 2026-06-03
+        # contamination). --disallowedTools takes precedence and is the hard block;
+        # --allowedTools scopes the rest to the MCP server.
         cmd = [
             "claude",
             "--print",
             "--strict-mcp-config",
             "--mcp-config",
             str(mcp_config_path),
+            "--allowedTools",
+            "mcp__labrat",
+            "--disallowedTools",
+            _BLOCKED_NATIVE_TOOLS,
             "--model",
             self._agent_model,
             "--permission-mode",
@@ -571,6 +634,10 @@ class DabSuite:
                 capture_output=True,
                 timeout=_DAB_TIMEOUT,
                 env=env_vars,
+                # Filesystem isolation: run in the per-trial scratch dir so the
+                # benchmark checkout (validate.py / ground_truth.csv) is not under
+                # the agent's cwd. DB paths reach the MCP server via env, not cwd.
+                cwd=str(scratch_dir),
             )
         except subprocess.TimeoutExpired:
             # Record the timeout as a trial-level failure (the validator will mark
@@ -654,8 +721,10 @@ class DabSuite:
             return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
 
         # Drop infra failures so they don't depress the pass rate on queries that
-        # never got a fair shot (Max-plan session limit, API credit, timeout).
-        semantic_results = [r for r in results if not (r.reason or "").startswith("infra:")]
+        # never got a fair shot (Max-plan session limit, API credit, timeout), and
+        # contaminated trials (data-leakage backstop) which are withdrawn entirely.
+        _withdrawn = ("infra:", "contaminated:")
+        semantic_results = [r for r in results if not (r.reason or "").startswith(_withdrawn)]
         if not semantic_results:
             return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
 

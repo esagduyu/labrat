@@ -35,3 +35,22 @@ def test_aggregate_empty_returns_zero() -> None:
     score = suite.aggregate([])
     assert score.overall == 0.0
     assert score.n_tasks == 0
+
+
+def test_aggregate_excludes_contaminated_trials() -> None:
+    """Contaminated trials are withdrawn from scoring (like infra:), not counted."""
+    suite = DabSuite(dab_dir=__import__("pathlib").Path("/nonexistent"))
+    results = [
+        _r("a:1", True),
+        TrialResult(
+            task_id="a:1",
+            trial_num=1,
+            passed=False,
+            reason="contaminated:answer_key",
+            latency_seconds=0.0,
+        ),
+    ]
+    score = suite.aggregate(results)
+    # The contaminated trial is dropped, so a:1 is 1/1 = 1.0, not 1/2.
+    assert score.per_task["a:1"] == 1.0
+    assert score.overall == 1.0
