@@ -315,6 +315,23 @@ The DAB maintainers (PR #54) asked for full per-trial traces, noting that high a
 
 The next reasonable target on this benchmark is closing the gap to MinusX 63.1% — most of the remaining 5pp lives in music_brainz, patents, and the deps_dev_v1 / github_repos / googlelocal "0% on a specific validator pattern" cluster.
 
+## DAB pre-run sandbox gate (2026-06-03)
+
+Implemented the gate that makes the clean re-run safe (commit `6b4d3bf`), so the contamination in the previous entry is impossible by construction rather than by hope. Four parts in the `claude-mcp` driver + MCP server, all TDD'd:
+
+1. **Tool allowlist.** The `claude --print` invocation now passes `--allowedTools mcp__labrat` + `--disallowedTools Bash,WebFetch,WebSearch,Task,Read,Write,Edit,NotebookEdit,Glob,Grep`. `bypassPermissions` alone left the entire Claude Code toolset live; `--disallowedTools` is the hard block, `--allowedTools` scopes the rest to the LabRat MCP server.
+2. **Filesystem isolation.** The subprocess runs with `cwd=<trial scratch dir>`; DB paths reach the MCP server via env, so the DataAgentBench checkout (validate.py / ground_truth.csv) is never under the agent's cwd.
+3. **Contamination backstop.** `_detect_contamination()` scans each trial's output for answer-key (`validate.py`, `ground_truth`) / external-dataset (`load_dataset`, `huggingface`) markers; a hit withdraws the trial as `reason="contaminated:<tag>"`, which `aggregate()` now excludes alongside `infra:`. Under the sandbox this should never fire — if it does, it flags a sandbox regression loudly instead of silently inflating the score.
+4. **Audit-grade traces.** The MCP server's `_log_tool_call` writes one `{tool,input,output,ok,latency_ms}` line per dispatch to `<LABRAT_MCP_LOG_DIR>/mcp_tool_calls.jsonl`; the driver points it at the trial scratch dir. Per-tool-call traces are now first-class, not reconstructed from `~/.claude` after the fact.
+
+**Two latent bugs the live agnews smoke caught** (neither would have surfaced without running it — the unit tests used absolute `tmp_path` and an in-process context):
+1. **Relative `--mcp-config` path doubling.** Setting `cwd` for isolation made the CLI re-resolve a *relative* config path against the new cwd (`Invalid MCP configuration: … not found`); the first real agnews trial failed instantly with `infra:agent_error`. Fix: `scratch_dir = scratch_dir.resolve()` up front + a regression test with a *relative* scratch dir.
+2. **`:memory:` federation server crash.** `_build_context_from_env` defaulted `read_only=True`, but DuckDB can't open `:memory:` read-only — so for federation datasets (agnews, yelp; no file-backed DuckDB primary) the MCP server **crashed on startup**. This was *masked in Phase 5* because the agent used Bash and never needed the MCP server; the sandbox (Bash blocked) exposed it. Symptom: agnews:1 "passed" with a dead server (memorized answer), agnews:2 timed out flailing. Fix: force `read_only=False` for `:memory:` (it's the agent's writable workspace — it ATTACHes / loads Mongo into it) + a regression test.
+
+**Validation (2026-06-03, agnews:1 + agnews:2, sandboxed):** gate holds. agnews:1 PASSes via genuine classification — 31 MCP calls (`load_mongo_collection`, `attach_database`, `run_sql`), zero Bash/file/HF access; the `mcp_tool_calls.jsonl` audit log confirms MCP-only. agnews:2 honestly times out on the genuinely hard 111-article classification (17 legit MCP calls) — the real difficulty, not a leakage-inflated pass. Contamination detector clean on both. The leakage-era agnews 95% vs. this is the honest signal. Lesson: harness code that changes `cwd` or re-creates connections from a spec must be tested with the inputs production actually passes (relative paths, `:memory:`).
+
+Network egress isolation (container / `unshare -n`) stays an environment step — not portable from Python on macOS, and moot once Bash/WebFetch are blocked. Open tuning note: the 600s per-trial timeout may be tight for legitimately hard classification queries (agnews:2); consider raising `--agent-timeout` for the full re-run and accepting some honest timeouts.
+
 ## Pillar 1: profiling, file ingest, verifier loop, prescriptive prompt (2026-06-01)
 
 Work on `feat/rat-maze-pillar1`. Six technical changes to the agent substrate:

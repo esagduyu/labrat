@@ -111,9 +111,13 @@ def _build_context_from_env() -> tuple[ToolContext, list[DuckDBConnection]]:
                 file=sys.stderr,
             )
             sys.exit(2)
-        conn = DuckDBConnection(
-            path=str(meta["db_path"]), read_only=bool(meta.get("read_only", True))
-        )
+        db_path = str(meta["db_path"])
+        # An in-memory database cannot be opened read-only, and when it's the
+        # primary it's the agent's writable workspace (attach_database / load_file
+        # / load_mongo_collection materialize into it). Force read_only=False for
+        # :memory: regardless of the spec default.
+        read_only = False if db_path == ":memory:" else bool(meta.get("read_only", True))
+        conn = DuckDBConnection(path=db_path, read_only=read_only)
         conn.connect()
         live.append(conn)
         connections[name] = conn

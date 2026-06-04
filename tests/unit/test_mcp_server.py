@@ -1,7 +1,26 @@
 import json
 from pathlib import Path
+from typing import Any
 
-from labrat.mcp.server import _log_tool_call
+from labrat.mcp.server import _build_context_from_env, _log_tool_call
+
+
+def test_build_context_from_env_allows_in_memory_primary(monkeypatch: Any) -> None:
+    """A :memory: primary (the DAB federation workspace) must come up writable —
+    DuckDB cannot even open :memory: read-only, and the agent ATTACHes / loads
+    Mongo into it. Regression for the sandbox smoke that exposed this."""
+    monkeypatch.setenv(
+        "LABRAT_MCP_CONNECTIONS", '{"__federation": {"db_type": "duckdb", "db_path": ":memory:"}}'
+    )
+    monkeypatch.setenv("LABRAT_MCP_PRIMARY", "__federation")
+    ctx, live = _build_context_from_env()
+    try:
+        assert ctx.primary == "__federation"
+        # Writable check: CREATE would raise on a read-only connection.
+        ctx.connections["__federation"]._conn.execute("CREATE TABLE t(x INTEGER)")  # type: ignore[attr-defined]
+    finally:
+        for c in live:
+            c.disconnect()
 
 
 def test_log_tool_call_writes_jsonl_line(tmp_path: Path) -> None:

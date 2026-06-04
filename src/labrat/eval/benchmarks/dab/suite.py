@@ -497,6 +497,12 @@ class DabSuite:
         from labrat.db.duckdb_engine import DuckDBConnection
         from labrat.eval.benchmarks.dab.env import build_dab_task_env
 
+        # Resolve to absolute up front: the subprocess runs with cwd=scratch_dir
+        # (filesystem isolation), so any relative --mcp-config / log path would be
+        # re-resolved by the claude CLI against the new cwd and double. The harness
+        # passes a repo-relative scratch dir, so this matters in practice.
+        scratch_dir = scratch_dir.resolve()
+
         if not shutil.which("claude"):
             raise RuntimeError(
                 "claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code"

@@ -283,6 +283,41 @@ async def test_claude_mcp_driver_sandboxes_tools_and_cwd(tmp_path: Path) -> None
     assert server_env.get("LABRAT_MCP_LOG_DIR")
 
 
+async def test_claude_mcp_mcp_config_path_absolute_under_relative_scratch(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """--mcp-config must be absolute: with cwd set to the scratch dir, a relative
+    config path is re-resolved by the claude CLI against cwd and doubles (the live
+    agnews smoke caught this). Mimic the real harness, which passes a repo-relative
+    scratch dir."""
+    import os
+
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    task = next(iter(suite.tasks()))
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout=b'{"result": "x", "num_turns": 1}', stderr=b"")
+
+    # Run from a base dir and hand run_trial a RELATIVE scratch path.
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=Path("rel_scratch/agnews_1__trial0"))
+
+    cmd = captured["cmd"]
+    cfg_arg = cmd[cmd.index("--mcp-config") + 1]
+    assert os.path.isabs(cfg_arg), f"--mcp-config must be absolute, got {cfg_arg!r}"
+    # And it must actually point at the file that was written.
+    assert Path(cfg_arg).exists()
+
+
 async def test_run_trial_records_validator_error(tmp_path: Path) -> None:
     _make_synthetic_fixture(tmp_path)
     dataset_dir = tmp_path / "query_synthetic1"

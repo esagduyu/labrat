@@ -450,17 +450,17 @@ Root cause candidates:
 
 **Sequencing decision (2026-06-03):** the clean re-run realistically takes *many days* across Max-plan session-limit failures, so we land the highest-impact DAB changes **first**, kick the run off, and only *then* go deep on broader agent/product work (the Anthropic-article-derived Scent/Trail layer below, tracked in `FEATURE_ROADMAP.md` and north-star §8). Everything in "Pre-run gate" and "Pre-run score levers" should be in `master` before kickoff; everything under "Post-run" happens while the run grinds.
 
-### Pre-run gate — MUST land before kickoff (else the run is invalid again)
+### Pre-run gate — ✅ IMPLEMENTED + VALIDATED (2026-06-03)
 
-The contamination root cause was an unsandboxed agent. Close it, in priority order:
+The contamination root cause was an unsandboxed agent. Shipped, TDD'd (551 tests passing), and validated live on agnews (`runs/dab/dab-1780554221/`): agnews:1 PASSes via 31 MCP-only calls (`load_mongo_collection`/`attach_database`/`run_sql`, no Bash/file/HF — the `mcp_tool_calls.jsonl` log proves it), agnews:2 honestly times out on the hard 111-article classification; contamination detector clean on both. The smoke also caught and fixed two latent bugs (relative `--mcp-config` doubling under `cwd`; the `:memory:` federation server crash that Phase 5's Bash usage had masked). Parts:
 
-1. **Tool allowlist (the actual fix).** In `_run_trial_claude_mcp`, add `--allowedTools "mcp__labrat"` and `--disallowedTools "Bash,WebFetch,WebSearch,Task,Read,Write,Edit,NotebookEdit"`. `--permission-mode bypassPermissions` alone is **not** a sandbox — it kept the full Claude Code toolset live.
-2. **Filesystem isolation.** Run the subprocess from an empty scratch `cwd`; the MCP server already gets DB paths via `LABRAT_MCP_CONNECTIONS`, so the agent never needs the DAB checkout on its path. Keep `validate.py`/`ground_truth.csv` outside `cwd` — ideally copy only the DB files into the scratch dir.
-3. **No network egress.** Run in a container / `unshare -n` so `load_dataset("ag_news")` can't reach HuggingFace even if a tool slips. Belt-and-suspenders once Bash/WebFetch are gone.
-4. **Standing contamination detector.** Promote the `flags()` scan from `scripts/_build_dab_trace_bundle.py` into a post-trial check: scan each trace for `{ground_truth, validate.py, load_dataset, huggingface}`, auto-mark `reason="contaminated"` (excluded from `aggregate()`), and warn loudly. Makes silent leakage impossible to ship ever again.
-5. **Server-side tool-call logging** in `src/labrat/mcp/server.py` (gated on `LABRAT_MCP_LOG_DIR`) — one `{tool, input, output, ok, latency_ms}` line per dispatch — so traces are first-class, not reconstructed from `~/.claude`.
+1. ✅ **Tool allowlist.** `_run_trial_claude_mcp` now passes `--allowedTools "mcp__labrat"` + `--disallowedTools "Bash,WebFetch,WebSearch,Task,Read,Write,Edit,NotebookEdit,Glob,Grep"`. `--permission-mode bypassPermissions` alone is **not** a sandbox — it kept the full Claude Code toolset live.
+2. ✅ **Filesystem isolation.** The subprocess runs with `cwd=<absolute trial scratch dir>`; the MCP server gets DB paths via `LABRAT_MCP_CONNECTIONS`, so the agent never needs the DAB checkout on its path. (`scratch_dir.resolve()` up front — a relative scratch dir + cwd change otherwise doubles the `--mcp-config` path; the live smoke caught this, now covered by a regression test.)
+3. ⚙️ **No network egress** (the one item that stays an *environment* step). Run in a container / `unshare -n` so `load_dataset("ag_news")` can't reach HuggingFace even if a tool slips. Not portable from Python on macOS, and moot once Bash/WebFetch are blocked — do it at kickoff via the run environment.
+4. ✅ **Standing contamination detector.** `_detect_contamination()` scans each trial's output for `{validate.py, ground_truth, load_dataset, huggingface, …}`; a hit withdraws the trial as `reason="contaminated:<tag>"`, which `aggregate()` excludes alongside `infra:`. Silent leakage can never inflate the score again.
+5. ✅ **Server-side tool-call logging.** `_log_tool_call` in `src/labrat/mcp/server.py` writes one `{tool, input, output, ok, latency_ms}` line per dispatch to `<LABRAT_MCP_LOG_DIR>/mcp_tool_calls.jsonl`; the driver points it at the trial scratch dir. Traces are first-class, not reconstructed from `~/.claude`.
 
-Items 1+2 close the hole; 3–5 are the rigor layer. ~1–2 hours total.
+Items 1+2 close the hole; 4+5 are the rigor layer; 3 is the environment belt-and-suspenders. The clean full re-run still has to happen — this makes it safe to run.
 
 ### Pre-run score levers — cheap, high-ROI, land before kickoff
 
