@@ -25,6 +25,15 @@ cd "$REPO" || { echo "[tick] cannot cd to $REPO"; exit 1; }
 
 echo "[tick] $(date -u +%Y-%m-%dT%H:%M:%SZ) starting DAB clean re-run tick"
 
+# ── Concurrency guard ────────────────────────────────────────────────────────
+# Never run two eval_dab against the same run dir (e.g. a manual resume overlapping
+# the next 6h cron fire) — they'd race on trials.jsonl. If one is already running,
+# this tick is a no-op.
+if pgrep -f "eval_dab.py.*dab-rerun-clean" >/dev/null 2>&1; then
+  echo "[tick] an eval_dab for dab-rerun-clean is already running — skipping this tick."
+  exit 0
+fi
+
 # ── 0. mongod must be up (agnews/yelp use it via load_mongo_collection) ──────
 if ! pgrep -x mongod >/dev/null 2>&1; then
   echo "[tick] WARNING: mongod is not running — agnews/yelp trials will fail."
