@@ -448,7 +448,39 @@ Root cause candidates:
 
 ## What comes next
 
-> **Current top priority (2026-06-03): the sandboxed clean re-run.** After the contamination audit above, the immediate next step is re-running the full 54-query benchmark with the agent's tool surface restricted to the MCP server (no Bash/WebFetch/`Task`), the benchmark repo off the agent's filesystem, and no network egress — producing a defensible replacement for the corrected 50.5%. Only after that do the Phase 6 prompt/score improvements below matter. The Phase 1c–4 items in this section are **historical** (Phases 2/3/4 shipped in the run above) and kept for context.
+**Sequencing decision (2026-06-03):** the clean re-run realistically takes *many days* across Max-plan session-limit failures, so we land the highest-impact DAB changes **first**, kick the run off, and only *then* go deep on broader agent/product work (the Anthropic-article-derived Scent/Trail layer below, tracked in `FEATURE_ROADMAP.md` and north-star §8). Everything in "Pre-run gate" and "Pre-run score levers" should be in `master` before kickoff; everything under "Post-run" happens while the run grinds.
+
+### Pre-run gate — MUST land before kickoff (else the run is invalid again)
+
+The contamination root cause was an unsandboxed agent. Close it, in priority order:
+
+1. **Tool allowlist (the actual fix).** In `_run_trial_claude_mcp`, add `--allowedTools "mcp__labrat"` and `--disallowedTools "Bash,WebFetch,WebSearch,Task,Read,Write,Edit,NotebookEdit"`. `--permission-mode bypassPermissions` alone is **not** a sandbox — it kept the full Claude Code toolset live.
+2. **Filesystem isolation.** Run the subprocess from an empty scratch `cwd`; the MCP server already gets DB paths via `LABRAT_MCP_CONNECTIONS`, so the agent never needs the DAB checkout on its path. Keep `validate.py`/`ground_truth.csv` outside `cwd` — ideally copy only the DB files into the scratch dir.
+3. **No network egress.** Run in a container / `unshare -n` so `load_dataset("ag_news")` can't reach HuggingFace even if a tool slips. Belt-and-suspenders once Bash/WebFetch are gone.
+4. **Standing contamination detector.** Promote the `flags()` scan from `scripts/_build_dab_trace_bundle.py` into a post-trial check: scan each trace for `{ground_truth, validate.py, load_dataset, huggingface}`, auto-mark `reason="contaminated"` (excluded from `aggregate()`), and warn loudly. Makes silent leakage impossible to ship ever again.
+5. **Server-side tool-call logging** in `src/labrat/mcp/server.py` (gated on `LABRAT_MCP_LOG_DIR`) — one `{tool, input, output, ok, latency_ms}` line per dispatch — so traces are first-class, not reconstructed from `~/.claude`.
+
+Items 1+2 close the hole; 3–5 are the rigor layer. ~1–2 hours total.
+
+### Pre-run score levers — cheap, high-ROI, land before kickoff
+
+These are prompt-only or small and target the worst *clean* datasets, so they go in the same pre-run PRs:
+
+1. **Force-query rule for music_brainz (7%):** *"Do not answer from memory. You MUST run a query and print the result before answering."* Signal it worked: trial times rise from ~7s to 30s+.
+2. **Answer-format guidance:** *"State your final answer as a plain value on the last line."* (recovers prose-buried answers; cheap insurance against validator-format misses).
+3. **Anti-pattern bullets** in the system prompt (dialect gotchas, grep-before-assuming-a-table).
+
+Two heavier ADOPT builds (north-star §9) are the highest-impact *score* levers but are real work — **schema-linking (NL→relevant-tables-only)** and **mechanically-verified joins (probe before trusting)**. They directly attack deps_dev_v1 (10%), music_brainz (7%), and patents (0%), which are grounding/mental-model failures, not tooling gaps. **Decision: land them before kickoff if you can afford ~a day; otherwise they become the first post-kickoff agent work and ship in the *next* re-run.** Do **not** encode answer-shaped per-dataset "gotchas" docs for DAB — that's the leakage smell we just fixed; keep DAB grounding to schema/grain/join *structure* only.
+
+### Post-run — agent & product depth (while the run grinds; from the Anthropic self-service-analytics article)
+
+Anthropic's data team reports **<21% accuracy without a skills/reference-doc layer, >95% with it** ([article](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude)). That layer is exactly our under-built **Rat Maze (Scent + Trail)**. These are product-level, not DAB-overfit, and are detailed in north-star §8:
+
+- **Reference docs "written for retrieval by an LLM"** — Quick Reference / Dimensions / Key Tables (grain + joins) / **Gotchas** / Best Practices / Cross-refs; routing triggers, not recipes. The concrete shape of **Scent**.
+- **Curation > raw retrieval** — their ablation: raw grep over thousands of prior queries moved accuracy <1pp. Re-ranks our `search_query_history` (low-leverage as raw access); the value is distilling `history/` into **Trails**.
+- **Correction-harvesting loop** — skills decay 95%→65% in weeks unscented; a scheduled agent that turns corrections into doc PRs keeps the Maze fresh. Maps onto our self-healing `memory/` + `/schedule`.
+- **Provenance footer** (source tier → freshness → ownership) — cheap trust UI for Pillar 2 ("spread the cheese").
+- **Eval-as-telemetry + ablation discipline** — store every eval result with skill-version/git-SHA/model-ID; ablate each change against the fixed smoke set (they hit *three net-negative doc iterations* — measure, don't stack).
 
 ### Phase 1c (prompt iteration)
 
