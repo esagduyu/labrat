@@ -50,11 +50,17 @@ fi
 echo "[tick] Max-plan probe OK."
 
 # ── 2. Start / resume the full run ───────────────────────────────────────────
+# Scope to the 12 OFFICIAL DAB datasets only — the local DAB checkout also contains
+# 5 unofficial extras (civic_unstructured, cve, imdb, krama, usaspending = 50 queries)
+# that are NOT part of the 54-query benchmark. Without this filter the run wastes
+# budget on them and pollutes the leaderboard aggregate.
+OFFICIAL="agnews,bookreview,crmarenapro,deps_dev_v1,github_repos,googlelocal,music_brainz_20k,pancancer_atlas,patents,stockindex,stockmarket,yelp"
 env -u ANTHROPIC_API_KEY -u CLAUDECODE uv run python scripts/eval_dab.py \
   --driver claude-mcp \
   --n-trials 5 \
   --agent-model claude-sonnet-4-6 \
   --agent-timeout 1200 \
+  --datasets "$OFFICIAL" \
   --output-dir "$RUN_DIR"
 RC=$?
 
@@ -64,7 +70,10 @@ if [ -f "$RUN_DIR/trials.jsonl" ]; then
   uv run python3 - "$RUN_DIR/trials.jsonl" <<'PY'
 import json, sys
 from collections import defaultdict
-rows = [json.loads(l) for l in open(sys.argv[1])]
+OFFICIAL = {"agnews","bookreview","crmarenapro","deps_dev_v1","github_repos","googlelocal",
+            "music_brainz_20k","pancancer_atlas","patents","stockindex","stockmarket","yelp"}
+rows = [json.loads(l) for l in open(sys.argv[1])
+        if json.loads(l)["task_id"].split(":")[0] in OFFICIAL]  # official datasets only
 real = {}
 for r in rows:  # keep the latest non-infra attempt per (task,trial)
     k = (r["task_id"], r["trial_num"])
