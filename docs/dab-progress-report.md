@@ -462,6 +462,18 @@ The contamination root cause was an unsandboxed agent. Shipped, TDD'd (551 tests
 
 Items 1+2 close the hole; 4+5 are the rigor layer; 3 is the environment belt-and-suspenders. The clean full re-run still has to happen — this makes it safe to run.
 
+### Clean sandboxed re-run — IN PROGRESS (`runs/dab/dab-rerun-clean`, since 2026-06-04)
+
+Full 54-query official benchmark, claude-mcp, n=5, `--agent-timeout 1200`, sandbox gate on. **Do not cite a final score until it completes** — these are interim observations.
+
+**How it runs (self-healing local loop):** `scripts/dab_rerun_tick.sh` probes Max-plan (skips cleanly if the limit is active, so it never blasts fast-fail trials), then starts/resumes `eval_dab.py --output-dir runs/dab/dab-rerun-clean` (official-scoped, idempotent, concurrency-guarded). `dab_rerun_loop.sh` fires it every **30 min** — the cheap probe means it resumes within ~30 min of a limit reset instead of waiting out a fixed window (an earlier 6h loop wasted ~1h+ per cycle). It must run locally (Max-plan OAuth + mongod + DAB checkout); a Claude Code routine on the bridge env worked until a power outage destroyed the bridge, so the local `nohup` loop is the durable path. Two scope/robustness lessons baked in: always `--datasets <12 official>` (the suite enumerates 104 queries incl. 5 unofficial extras), and a concurrency guard so a manual resume can't race the loop.
+
+**Interim findings:**
+- **The sandbox holds at scale.** Every trial uses MCP tools only (`mcp_tool_calls.jsonl` confirms `load_mongo_collection`/`attach_database`/`run_sql`/…); zero Bash/file/web. No contamination outside agnews.
+- **agnews leaks via model *parametric memory*, not tooling.** Even fully sandboxed, Sonnet recalled the public AG News id→label mapping ("article_ids 0–29,999 = Business, label=2") and applied it via SQL. `_detect_contamination` caught and withdrew it (via the "huggingface" mention), but only catches trials that *name* the dataset — silent memorized use would pass. **agnews is intrinsically unreliable for any pretraining-exposed model**; caveat it. Benchmark-side fix: shuffle/reassign `article_id`s so memorized positions don't map to labels — worth proposing upstream.
+- **Precedent (DAB PR #53, Altimate):** identical agnews `load_dataset` leak, same maintainer, sandboxed re-run **accepted onto the leaderboard** — agnews 100%→35%, stratified 68.93%→63.18%. They ran GPT‑5.5, so the contamination is model-agnostic, and our disclose→sandbox→rerun path is the accepted one.
+- **Clean-vs-old per-dataset (datasets completed so far):** deps_dev_v1 10%→~30% (grounding tools may help; n=5 noisy), github_repos 50% flat, patents 0% flat (Sonnet ceiling), bookreview tracking high, agnews honest ~29% (≈ Altimate's clean 35%). The strong datasets (crmarenapro, stockindex, stockmarket, googlelocal, music_brainz) were still queued at the time of writing.
+
 ### Pre-run score levers — cheap, high-ROI, land before kickoff
 
 These are prompt-only or small and target the worst *clean* datasets, so they go in the same pre-run PRs:

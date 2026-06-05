@@ -365,3 +365,25 @@ Follow-ups to the Pillar 1 sprint (on `master` after merges `3ff4d10`, `6a78914`
 `config.json` now records **seven** agent fields (added `agent_verify`, `agent_timeout`); all restored on `--output-dir` resume with conflicting overrides rejected. 542 tests pass, pyright/ruff clean.
 
 **Measurement note:** the verifier only runs on the labrat-agent driver, which needs a metered `ANTHROPIC_API_KEY` (not set) for a clean run; claude-mcp (Max-plan) bypasses it. A claude-code partial read is the fallback but is fragile under the verifier's extra round-trips — per-trial isolation + a larger `--agent-timeout` make it *survivable* but not reliable.
+
+## DAB grounding tools + clean sandboxed re-run (2026-06-04, in progress)
+
+Pre-kickoff work for the clean re-run, then the run itself.
+
+**Grounding tools (FEATURE_ROADMAP #25), shipped + TDD'd:**
+- `link_schema` (`tools/link_schema.py`) — NL question → ranked relevant tables via lexical stem-overlap over the catalog (columns + matched terms). Narrows wide schemas before SQL. Pure/deterministic.
+- `verify_join` (`tools/verify_join.py`) — COUNT-probe a join before trusting it: match rate (wrong-key detection) + max right-rows-per-key (fan-out / double-count detection) + a plain verdict.
+- Both registered in `build_data_tools_registry()` (reach labrat-agent + the claude-mcp MCP path) and surfaced in both driver prompts.
+- claude-mcp per-trial timeout raised 600s → **1200s** (default; `--agent-timeout` now overrides it for claude-mcp too) — hard classification queries (agnews) need the headroom.
+
+**Self-healing local runner (`scripts/dab_rerun_tick.sh` + `dab_rerun_loop.sh`):**
+- The run must execute *locally* (Max-plan OAuth + mongod + local DAB checkout). First tried a Claude Code **routine on the bridge environment** (runs on the Mac); it worked initially but a **power outage destroyed the bridge env** (`environment_not_found` on the next fire) — bridges don't survive a reboot. Switched to the local loop, which is reboot-fragile too but matches the "small bash script" ask; launchd (reboot-durable) was declined as a persistence escalation.
+- Loop tick: probe Max-plan (skip cleanly if the limit is active — avoids blasting fast-fail trials), else start/resume `eval_dab.py --output-dir runs/dab/dab-rerun-clean`. Idempotent (skips completed (task,trial), retries infra). Concurrency guard prevents overlapping evals.
+- **Poll every 30 min, not 6h.** The original 6h buffer wasted ~1h+ per session-limit cycle (the limit reset well before the next tick). The cheap probe lets a 30-min loop resume within ~30 min of reset. Confirmed live: caught a "resets 11pm" limit and resumed ~15 min after.
+- **Scope to the 12 OFFICIAL datasets** (`--datasets …`). The local DAB checkout enumerates **104 queries / 520 trials** — 5 unofficial extras (civic_unstructured, cve, imdb, krama, usaspending) on top of the official 54/270. The first ticks ran unfiltered and wasted ~7 civic trials before the filter was added (task_filter isn't resume-guarded, so it applies cleanly).
+
+**Interim findings (run ongoing; do NOT cite a final score yet):**
+- **The sandbox holds.** Every trial uses MCP tools only (`mcp_tool_calls.jsonl` confirms); zero file/web access. No contamination outside agnews.
+- **agnews leaks via model *memory*, not just tools.** Even fully sandboxed, Sonnet recalled the public AG News id→label mapping ("article_ids 0–29,999 = Business, label=2") and applied it via SQL — `_detect_contamination` caught it (via the "huggingface" mention) and withdrew it, but only catches trials that *name* the dataset; silent memorized use would pass. So **agnews is intrinsically unreliable for a pretraining-exposed model regardless of sandbox** — caveat it, don't treat its number as capability. Benchmark-side fix = shuffle `article_id`s; worth raising upstream.
+- **Precedent — DAB PR #53 (Altimate):** same agnews `load_dataset` leak, same maintainer, sandboxed re-run **accepted onto the leaderboard**; agnews 100%→35%, stratified 68.93%→63.18%. They ran GPT‑5.5, so the contamination is model-agnostic. Our disclose→sandbox→rerun path is the accepted playbook.
+- **Interim clean-vs-old per-dataset:** deps_dev_v1 10%→~30% (grounding tools may help, but n=5 noisy), github_repos 50% flat, patents 0% flat (Sonnet ceiling), bookreview tracking high, agnews honest ~29% (matches Altimate's clean 35%). The strong datasets (crmarenapro, stockindex, stockmarket, googlelocal, music_brainz) were still running at the time of writing.
