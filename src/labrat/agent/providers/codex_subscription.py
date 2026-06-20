@@ -1,0 +1,378 @@
+"""GPT-5.5 via the user's ChatGPT subscription (Codex Responses API).
+
+GPT-5.5 is subscription-only today (no metered API), so the only way to run
+LabRat's own ``AgentLoop`` on it is to speak the same protocol the Codex CLI
+uses: the OpenAI **Responses API** at ``chatgpt.com/backend-api/codex/responses``,
+authenticated with the Codex CLI's ``~/.codex/auth.json`` tokens.
+
+This provider is a native ``ModelProvider`` (not a proxy) so the Rat Core stays
+embeddable. It translates LabRat's Anthropic-format history + tool schemas into
+Responses ``input``/``tools`` items, streams the SSE response, and reduces it
+back into ``TextBlock`` / ``ToolUseBlock``.
+
+Reverse-engineered & unversioned: the path/headers/beta value can change without
+notice. This is the personal/dev/benchmark path; the metered ``openai`` provider
+is the distributable one. See
+``docs/superpowers/specs/2026-06-01-codex-subscription-provider-design.md``.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import time
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any, cast
+
+from labrat.agent.loop import ContentBlock, TextBlock, ToolUseBlock
+from labrat.agent.providers.base import ModelProvider
+
+_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+_TOKEN_URL = "https://auth.openai.com/oauth/token"
+_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+_DEFAULT_MODEL = "gpt-5.5"
+_DEFAULT_AUTH_PATH = Path.home() / ".codex" / "auth.json"
+# Refresh this many seconds before the JWT `exp` rather than waiting for a 401.
+_REFRESH_SKEW_SECONDS = 300
+_HTTP_TIMEOUT_SECONDS = 600
+
+
+def _b64url_decode(segment: str) -> bytes:
+    """Decode a base64url JWT segment, restoring stripped ``=`` padding."""
+    padding = "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(segment + padding)
+
+
+def _account_id_from_jwt(id_token: str) -> str | None:
+    """Pull the ChatGPT account id from the id_token's auth claim.
+
+    The claim lives at ``["https://api.openai.com/auth"].chatgpt_account_id``.
+    Returns None if the token can't be decoded or the claim is absent.
+    """
+    try:
+        _header, payload, _sig = id_token.split(".")
+        claims: dict[str, Any] = json.loads(_b64url_decode(payload))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    auth = claims.get("https://api.openai.com/auth")
+    if isinstance(auth, dict):
+        account_id = cast(dict[str, Any], auth).get("chatgpt_account_id")
+        if isinstance(account_id, str) and account_id:
+            return account_id
+    return None
+
+
+def _jwt_exp(token: str) -> int | None:
+    """Return the ``exp`` (unix seconds) claim of a JWT, or None if unreadable."""
+    try:
+        _header, payload, _sig = token.split(".")
+        claims: dict[str, Any] = json.loads(_b64url_decode(payload))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    exp = claims.get("exp")
+    return exp if isinstance(exp, int) else None
+
+
+class CodexSubscriptionProvider(ModelProvider):
+    """Run LabRat's loop on GPT-5.5 via the ChatGPT subscription (Codex API)."""
+
+    def __init__(
+        self,
+        model: str = _DEFAULT_MODEL,
+        reasoning_effort: str = "medium",
+        auth_path: Path | None = None,
+    ) -> None:
+        self._model = model
+        self._reasoning_effort = reasoning_effort
+        self._auth_path = auth_path or _DEFAULT_AUTH_PATH
+
+    # ---- auth -----------------------------------------------------------------
+
+    def _load_auth(self) -> dict[str, Any]:
+        raw = json.loads(Path(self._auth_path).read_text())
+        if not isinstance(raw, dict):
+            raise ValueError(f"Malformed Codex auth file at {self._auth_path}")
+        return cast(dict[str, Any], raw)
+
+    def _maybe_refresh(self, auth: dict[str, Any]) -> dict[str, Any]:
+        """Refresh the access token if it expires within the skew window.
+
+        Returns the (possibly updated) auth dict. Re-persists atomically on a
+        successful refresh. Fail-soft: if refresh fails but the current token is
+        still valid we keep using it; the SSE call surfaces a real 401 otherwise.
+        """
+        tokens_obj = auth.get("tokens")
+        if not isinstance(tokens_obj, dict):
+            raise ValueError("Codex auth file has no `tokens` object")
+        tokens = cast(dict[str, Any], tokens_obj)
+        access_token = tokens.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise ValueError("Codex auth file has no access_token")
+
+        exp = _jwt_exp(access_token)
+        if exp is not None and exp - time.time() > _REFRESH_SKEW_SECONDS:
+            return auth  # still fresh
+
+        refresh_token = tokens.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            return auth  # nothing to refresh with; let the call fail loudly if expired
+
+        import httpx
+
+        resp = httpx.post(
+            _TOKEN_URL,
+            json={
+                "grant_type": "refresh_token",
+                "client_id": _OAUTH_CLIENT_ID,
+                "refresh_token": refresh_token,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        new_access = data.get("access_token")
+        if isinstance(new_access, str) and new_access:
+            tokens["access_token"] = new_access
+        new_id = data.get("id_token")
+        if isinstance(new_id, str) and new_id:
+            tokens["id_token"] = new_id
+        new_refresh = data.get("refresh_token")
+        if isinstance(new_refresh, str) and new_refresh:
+            tokens["refresh_token"] = new_refresh
+        self._persist_auth(auth)
+        return auth
+
+    def _persist_auth(self, auth: dict[str, Any]) -> None:
+        path = Path(self._auth_path)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(auth))
+        tmp.chmod(0o600)
+        tmp.replace(path)
+
+    def _headers(self, auth: dict[str, Any]) -> dict[str, str]:
+        tokens: dict[str, Any] = auth["tokens"]
+        access_token: str = tokens["access_token"]
+        id_token = tokens.get("id_token")
+        account_id = None
+        if isinstance(id_token, str):
+            account_id = _account_id_from_jwt(id_token)
+        if not account_id:
+            account_id = tokens.get("account_id") or auth.get("account_id")
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "OpenAI-Beta": "responses=experimental",
+            "originator": "codex_cli_rs",
+            "User-Agent": "codex_cli_rs",
+            "accept": "text/event-stream",
+            "content-type": "application/json",
+        }
+        if isinstance(account_id, str) and account_id:
+            headers["chatgpt-account-id"] = account_id
+        return headers
+
+    # ---- translation ----------------------------------------------------------
+
+    def _to_responses_request(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        system: str,
+    ) -> dict[str, Any]:
+        """Translate Anthropic-format history + tools into a Responses request body."""
+        input_items: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                input_items.append(_text_message_item(role, content))
+                continue
+            for block in content:
+                btype = block.get("type")
+                if btype == "text":
+                    input_items.append(_text_message_item(role, block.get("text", "")))
+                elif btype == "tool_use":
+                    input_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": block["id"],
+                            "name": block["name"],
+                            "arguments": json.dumps(block.get("input", {})),
+                        }
+                    )
+                elif btype == "tool_result":
+                    input_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": block["tool_use_id"],
+                            "output": _tool_result_to_str(block.get("content", "")),
+                        }
+                    )
+
+        responses_tools = [
+            {
+                "type": "function",
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+                "strict": False,
+            }
+            for t in tools
+        ]
+
+        body: dict[str, Any] = {
+            "model": self._model,
+            "instructions": system or "",
+            "input": input_items,
+            "tools": responses_tools,
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "reasoning": {"effort": self._reasoning_effort, "summary": "auto"},
+            "include": ["reasoning.encrypted_content"],
+            "store": False,
+            "stream": True,
+        }
+        return body
+
+    # ---- streaming ------------------------------------------------------------
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        system: str,
+    ) -> AsyncIterator[ContentBlock]:
+        import httpx
+
+        auth = self._maybe_refresh(self._load_auth())
+        headers = self._headers(auth)
+        body = self._to_responses_request(messages, tools, system)
+
+        async def _emit() -> AsyncIterator[ContentBlock]:
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
+                async with client.stream(
+                    "POST", _RESPONSES_URL, headers=headers, json=body
+                ) as resp:
+                    resp.raise_for_status()
+                    async for event in _iter_sse_events(resp.aiter_lines()):
+                        for block in _reduce_event(event):
+                            yield block
+
+        return _emit()
+
+
+def _text_message_item(role: str, text: str) -> dict[str, Any]:
+    content_type = "output_text" if role == "assistant" else "input_text"
+    return {
+        "type": "message",
+        "role": role,
+        "content": [{"type": content_type, "text": text}],
+    }
+
+
+def _tool_result_to_str(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in cast(list[Any], content):
+            if isinstance(block, dict):
+                b = cast(dict[str, Any], block)
+                if b.get("type") == "text":
+                    parts.append(str(b.get("text", "")))
+                else:
+                    parts.append(str(b))
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(content)
+
+
+async def _iter_sse_events(lines: AsyncIterator[str]) -> AsyncIterator[dict[str, Any]]:
+    """Reduce a `text/event-stream` line iterator into parsed JSON event payloads.
+
+    Events are blank-line delimited; we accumulate the ``data:`` payload of each.
+    Tolerates ``[DONE]`` sentinels and malformed JSON lines (skipped).
+    """
+    data_buf: list[str] = []
+    async for raw in lines:
+        line = raw.rstrip("\r")
+        if line == "":
+            if data_buf:
+                payload = "\n".join(data_buf)
+                data_buf = []
+                event = _parse_sse_data(payload)
+                if event is not None:
+                    yield event
+            continue
+        if line.startswith(":"):
+            continue  # SSE comment / heartbeat
+        if line.startswith("data:"):
+            data_buf.append(line[len("data:") :].lstrip())
+    if data_buf:
+        event = _parse_sse_data("\n".join(data_buf))
+        if event is not None:
+            yield event
+
+
+def _parse_sse_data(payload: str) -> dict[str, Any] | None:
+    if payload == "[DONE]":
+        return None
+    try:
+        parsed: Any = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        return cast(dict[str, Any], parsed)
+    return None
+
+
+def _reduce_event(event: dict[str, Any]) -> list[ContentBlock]:
+    """Map one Responses SSE event to zero or more LabRat content blocks."""
+    etype = event.get("type")
+    if etype == "response.output_text.delta":
+        delta = event.get("delta")
+        if isinstance(delta, str) and delta:
+            return [TextBlock(text=delta)]
+        return []
+    if etype == "response.output_item.done":
+        item = event.get("item")
+        if isinstance(item, dict):
+            item_d = cast(dict[str, Any], item)
+            if item_d.get("type") == "function_call":
+                return [_function_call_block(item_d)]
+        return []
+    if etype in ("response.failed", "response.incomplete"):
+        detail = _error_detail(event)
+        raise RuntimeError(f"Codex Responses stream {etype}: {detail}")
+    return []
+
+
+def _function_call_block(item: dict[str, Any]) -> ToolUseBlock:
+    raw_args = item.get("arguments", "")
+    try:
+        parsed_args: Any = json.loads(raw_args) if raw_args else {}
+    except json.JSONDecodeError:
+        parsed_args = {}
+    args: dict[str, Any] = (
+        cast(dict[str, Any], parsed_args) if isinstance(parsed_args, dict) else {}
+    )
+    return ToolUseBlock(
+        id=str(item.get("call_id") or item.get("id") or ""),
+        name=str(item.get("name", "")),
+        input=args,
+    )
+
+
+def _error_detail(event: dict[str, Any]) -> str:
+    response = event.get("response")
+    if isinstance(response, dict):
+        resp = cast(dict[str, Any], response)
+        err = resp.get("error")
+        if isinstance(err, dict):
+            errd = cast(dict[str, Any], err)
+            return str(errd.get("message") or errd)
+        status = resp.get("status")
+        if status:
+            return str(status)
+    return json.dumps(event)[:200]

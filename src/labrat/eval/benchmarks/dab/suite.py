@@ -267,6 +267,7 @@ class DabSuite:
         agent_max_tool_calls: int | None = None,
         agent_verify: bool = False,
         agent_timeout: int | None = None,
+        agent_reasoning: str | None = None,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -283,6 +284,9 @@ class DabSuite:
         # Per-call provider timeout override (seconds); only the claude-code provider
         # honours it. None = provider default (120s for claude-code).
         self._agent_timeout = agent_timeout
+        # Reasoning effort for the codex (GPT-5.5) provider; ignored by the others.
+        # None = provider default (medium).
+        self._agent_reasoning = agent_reasoning
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -727,7 +731,10 @@ class DabSuite:
         try:
             registry = build_data_tools_registry()
             provider = build_provider(
-                self._agent_provider, self._agent_model, timeout=self._agent_timeout
+                self._agent_provider,
+                self._agent_model,
+                timeout=self._agent_timeout,
+                reasoning=self._agent_reasoning,
             )
             system_prompt = _build_labrat_agent_system_prompt(env)
             result = await run_agent_task(
