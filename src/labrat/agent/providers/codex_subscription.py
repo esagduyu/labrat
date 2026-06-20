@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
@@ -86,6 +87,19 @@ class CodexSubscriptionProvider(ModelProvider):
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._auth_path = auth_path or _DEFAULT_AUTH_PATH
+        # Stable per-instance (≈ per-trial) prompt-cache routing key: all turns of
+        # one trial share the growing prefix, so routing them to the same cache
+        # maximizes hit rate. A routing hint only — caching itself is automatic.
+        self._cache_key = uuid.uuid4().hex
+        # Token usage accumulated across every stream() call on this instance
+        # (≈ per-trial totals). Populated from each response's `usage` block.
+        self.usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
+            "requests": 0,
+        }
 
     # ---- auth -----------------------------------------------------------------
 
@@ -231,6 +245,13 @@ class CodexSubscriptionProvider(ModelProvider):
             "include": ["reasoning.encrypted_content"],
             "store": False,
             "stream": True,
+            # Prompt caching is automatic on the Responses API (caches the longest
+            # stable prefix >1024 tok). We optimize it with a per-trial routing key
+            # that keeps all of a trial's turns on the same cache. NOTE: the
+            # `prompt_cache_retention` param is a valid OpenAI-API param but the
+            # codex/ChatGPT backend rejects it with HTTP 400 ("Unsupported
+            # parameter"), so we omit it — GPT-5.5 already defaults to 24h retention.
+            "prompt_cache_key": self._cache_key,
         }
         return body
 
@@ -254,11 +275,26 @@ class CodexSubscriptionProvider(ModelProvider):
                     "POST", _RESPONSES_URL, headers=headers, json=body
                 ) as resp:
                     resp.raise_for_status()
-                    async for event in _iter_sse_events(resp.aiter_lines()):
-                        for block in _reduce_event(event):
-                            yield block
+                    async for block in self._consume(resp.aiter_lines()):
+                        yield block
 
         return _emit()
+
+    async def _consume(self, lines: AsyncIterator[str]) -> AsyncIterator[ContentBlock]:
+        """Reduce an SSE line stream into content blocks while accumulating the
+        per-call token usage onto ``self.usage`` (from the ``response.completed``
+        event). Split out from ``stream`` so it's testable without real HTTP."""
+        async for event in _iter_sse_events(lines):
+            usage = _extract_usage(event)
+            if usage is not None:
+                self._add_usage(usage)
+            for block in _reduce_event(event):
+                yield block
+
+    def _add_usage(self, usage: dict[str, int]) -> None:
+        for key in ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"):
+            self.usage[key] += usage.get(key, 0)
+        self.usage["requests"] += 1
 
 
 def _text_message_item(role: str, text: str) -> dict[str, Any]:
@@ -346,6 +382,47 @@ def _reduce_event(event: dict[str, Any]) -> list[ContentBlock]:
         detail = _error_detail(event)
         raise RuntimeError(f"Codex Responses stream {etype}: {detail}")
     return []
+
+
+def _extract_usage(event: dict[str, Any]) -> dict[str, int] | None:
+    """Pull a normalized token-usage dict from a ``response.completed`` event,
+    or None if the event carries no usage. Handles both the Responses shape
+    (``input_tokens_details.cached_tokens``) and the Chat-Completions shape
+    (``prompt_tokens_details.cached_tokens``) since the Codex endpoint is
+    reverse-engineered and may report either."""
+    if event.get("type") != "response.completed":
+        return None
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return None
+    usage = cast(dict[str, Any], response).get("usage")
+    if not isinstance(usage, dict):
+        return None
+    u = cast(dict[str, Any], usage)
+
+    def _int(x: Any) -> int:
+        return x if isinstance(x, int) else 0
+
+    def _cached() -> int:
+        for field in ("input_tokens_details", "prompt_tokens_details"):
+            details = u.get(field)
+            if isinstance(details, dict):
+                c = cast(dict[str, Any], details).get("cached_tokens")
+                if isinstance(c, int):
+                    return c
+        return 0
+
+    reasoning = 0
+    out_details = u.get("output_tokens_details")
+    if isinstance(out_details, dict):
+        reasoning = _int(cast(dict[str, Any], out_details).get("reasoning_tokens"))
+
+    return {
+        "input_tokens": _int(u.get("input_tokens") or u.get("prompt_tokens")),
+        "output_tokens": _int(u.get("output_tokens") or u.get("completion_tokens")),
+        "cached_tokens": _cached(),
+        "reasoning_tokens": reasoning,
+    }
 
 
 def _function_call_block(item: dict[str, Any]) -> ToolUseBlock:

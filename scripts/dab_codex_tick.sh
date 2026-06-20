@@ -62,6 +62,11 @@ echo "[codex-tick] GPT-5.5 probe OK."
 # ── 2. Start / resume the run ────────────────────────────────────────────────
 VERIFY_FLAG=()
 [ "$VERIFY" = "1" ] && VERIFY_FLAG=(--agent-verify)
+# Optional per-trial tool-call cap to clip the heavy tail (one 74-turn trial cost
+# ~1.9M tokens). Only passed when MAX_TOOL_CALLS is set, because --max-tool-calls
+# is resume-guarded — a fresh run sets it; an existing uncapped run must not.
+CAP_FLAG=()
+[ -n "${MAX_TOOL_CALLS:-}" ] && CAP_FLAG=(--max-tool-calls "$MAX_TOOL_CALLS")
 uv run python scripts/eval_dab.py \
   --driver labrat-agent \
   --agent-provider codex \
@@ -70,6 +75,7 @@ uv run python scripts/eval_dab.py \
   --n-trials "$NTRIALS" \
   --datasets "$DATASETS" \
   "${VERIFY_FLAG[@]}" \
+  "${CAP_FLAG[@]}" \
   --output-dir "$RUN_DIR"
 RC=$?
 echo "[codex-tick] eval_dab exit=$RC"

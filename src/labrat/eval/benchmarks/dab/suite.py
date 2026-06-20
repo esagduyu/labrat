@@ -22,7 +22,7 @@ import re
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from labrat.eval.benchmarks.dab.env import DabTaskEnv
 from labrat.eval.types import (
@@ -361,6 +361,7 @@ class DabSuite:
         scratch_dir.mkdir(parents=True, exist_ok=True)
         db_config_path = Path(task.config["db_config_path"])
         validator_path = Path(task.config["validator_path"])
+        self._last_usage: dict[str, int] | None = None
 
         try:
             if self._driver == "labrat-agent":
@@ -432,6 +433,7 @@ class DabSuite:
             latency_seconds=latency,
             tool_calls=tool_calls,
             artifact={"type": "text", "payload": final_text},
+            meta={"usage": self._last_usage} if self._last_usage else {},
         )
 
     # ── raw-bash driver (Phase 1b baseline) ──────────────────────────────────
@@ -746,6 +748,15 @@ class DabSuite:
                 max_turns=self._agent_max_turns,
                 max_tool_calls=self._agent_max_tool_calls,
                 verify=self._agent_verify,
+            )
+            # Capture per-trial token usage if the provider tracks it (codex does);
+            # run_trial folds it into TrialResult.meta so trials.jsonl records real
+            # tokens + cache hit rate.
+            provider_usage = getattr(provider, "usage", None)
+            self._last_usage = (
+                cast("dict[str, int]", dict(cast("dict[str, Any]", provider_usage)))
+                if isinstance(provider_usage, dict)
+                else None
             )
         finally:
             for conn in env.ctx.connections.values():

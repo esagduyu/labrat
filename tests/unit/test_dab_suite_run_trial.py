@@ -169,6 +169,37 @@ async def test_labrat_agent_driver_threads_verify_flag(
     assert captured.get("verify") is False
 
 
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_driver_records_provider_token_usage(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    """When the provider exposes per-trial token usage (codex), it lands in TrialResult.meta."""
+    _make_real_duckdb_fixture(tmp_path)
+    usage = {
+        "input_tokens": 5000,
+        "output_tokens": 100,
+        "cached_tokens": 4200,
+        "reasoning_tokens": 0,
+        "requests": 8,
+    }
+    provider = MagicMock()
+    provider.usage = usage
+    mock_build.return_value = provider
+
+    suite = DabSuite(
+        dab_dir=tmp_path, driver="labrat-agent", agent_provider="codex", agent_model="gpt-5.5"
+    )
+    task = next(iter(suite.tasks()))
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        return SimpleNamespace(final_text="42", tool_calls=8, latency_seconds=1.0)
+
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_usage")
+
+    assert result.meta.get("usage") == usage
+
+
 async def test_run_trial_isolates_agent_timeout_as_infra(tmp_path: Path) -> None:
     """A TimeoutError from the agent fails only this trial (infra:timeout), not the run."""
     _make_synthetic_fixture(tmp_path)

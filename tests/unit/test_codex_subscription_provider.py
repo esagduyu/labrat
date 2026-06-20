@@ -234,3 +234,91 @@ def test_build_provider_codex_defaults_to_medium() -> None:
     provider = build_provider("codex", "gpt-5.5")
     assert isinstance(provider, CodexSubscriptionProvider)
     assert provider._reasoning_effort == "medium"
+
+
+# ---- 6. usage capture (response.completed.usage) ----------------------------
+
+
+def test_extract_usage_responses_shape() -> None:
+    from labrat.agent.providers.codex_subscription import _extract_usage
+
+    ev = {
+        "type": "response.completed",
+        "response": {
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 50,
+                "input_tokens_details": {"cached_tokens": 900},
+                "output_tokens_details": {"reasoning_tokens": 30},
+            }
+        },
+    }
+    assert _extract_usage(ev) == {
+        "input_tokens": 1000,
+        "output_tokens": 50,
+        "cached_tokens": 900,
+        "reasoning_tokens": 30,
+    }
+
+
+def test_extract_usage_chat_completions_cached_field_fallback() -> None:
+    from labrat.agent.providers.codex_subscription import _extract_usage
+
+    # Some endpoints report the Chat-Completions shape (prompt_tokens_details).
+    ev = {
+        "type": "response.completed",
+        "response": {
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 50,
+                "prompt_tokens_details": {"cached_tokens": 800},
+            }
+        },
+    }
+    assert _extract_usage(ev)["cached_tokens"] == 800
+
+
+def test_extract_usage_ignores_non_completed_and_missing() -> None:
+    from labrat.agent.providers.codex_subscription import _extract_usage
+
+    assert _extract_usage({"type": "response.output_text.delta", "delta": "x"}) is None
+    assert _extract_usage({"type": "response.completed", "response": {}}) is None
+
+
+async def test_consume_accumulates_usage_and_yields_blocks() -> None:
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    assert provider.usage["input_tokens"] == 0  # starts at zero
+    stream = (
+        'data: {"type": "response.output_text.delta", "delta": "Hi"}\n'
+        "\n"
+        'data: {"type": "response.completed", "response": {"usage": {'
+        '"input_tokens": 1200, "output_tokens": 40, '
+        '"input_tokens_details": {"cached_tokens": 1000}}}}\n'
+        "\n"
+    )
+    blocks = [b async for b in provider._consume(_alines(stream))]
+    assert any(isinstance(b, TextBlock) and b.text == "Hi" for b in blocks)
+    assert provider.usage["input_tokens"] == 1200
+    assert provider.usage["output_tokens"] == 40
+    assert provider.usage["cached_tokens"] == 1000
+    assert provider.usage["requests"] == 1
+
+
+# ---- 7. prompt caching parameters -------------------------------------------
+
+
+def test_request_includes_cache_key_but_not_unsupported_retention() -> None:
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    b1 = provider._to_responses_request([{"role": "user", "content": "hi"}], [], "sys")
+    # prompt_cache_key is a routing hint that improves hit rate (accepted by codex).
+    assert isinstance(b1["prompt_cache_key"], str) and b1["prompt_cache_key"]
+    # prompt_cache_retention is rejected by the codex endpoint (HTTP 400), so it
+    # must NOT be sent — GPT-5.5 defaults to 24h retention anyway.
+    assert "prompt_cache_retention" not in b1
+    # Key must be STABLE across turns of the same trial (same provider instance) so
+    # all turns route to the same cache.
+    b2 = provider._to_responses_request([{"role": "user", "content": "again"}], [], "sys")
+    assert b2["prompt_cache_key"] == b1["prompt_cache_key"]
+    # Different provider instances (different trials) get different keys.
+    other = CodexSubscriptionProvider(model="gpt-5.5")
+    assert other._to_responses_request([], [], "")["prompt_cache_key"] != b1["prompt_cache_key"]
