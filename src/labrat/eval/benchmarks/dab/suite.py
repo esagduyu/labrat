@@ -84,8 +84,16 @@ def _detect_infra_failure(final_text: str) -> str | None:
 _CONTAMINATION_PATTERNS: tuple[tuple[str, str], ...] = (
     ("validate.py", "answer_key"),
     ("ground_truth", "answer_key"),
-    ("ground truth from", "answer_key"),
-    ("ground truth is confirmed", "answer_key"),
+    # Natural-language gold-answer assertions. The DAB maintainers (PR #54) caught
+    # three leaks our filename-only scan missed: the access happened inside a Task
+    # subagent (whose internal calls aren't in the transcript) and only its English
+    # summary survives — e.g. "confirmed from the ground truth file", "matches the
+    # ground truth answer 2020". In a DAB analysis trace these phrases only appear
+    # when the agent reached the answer key, so they're high-signal markers.
+    ("ground truth", "answer_key"),
+    ("ground-truth", "answer_key"),
+    ("answer key", "answer_key"),
+    ("gold answer", "answer_key"),
     ("load_dataset", "external_dataset"),
     ("huggingface", "external_dataset"),
     ("fancyzhx/ag_news", "external_dataset"),

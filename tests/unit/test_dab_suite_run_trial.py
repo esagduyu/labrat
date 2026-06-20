@@ -223,6 +223,18 @@ def test_detect_contamination_flags_markers() -> None:
     assert _detect_contamination("from the HuggingFace dataset") == "external_dataset"
     assert _detect_contamination("the answer is 3 from a normal SQL aggregation") is None
 
+    # Natural-language ground-truth assertions from subagent summaries — the gap the
+    # DAB maintainers caught (PR #54): the leak happens inside a Task subagent whose
+    # internal calls aren't in the transcript, and its summary asserts gold-answer
+    # knowledge in plain English (no underscore filename, no validate.py mention).
+    assert _detect_contamination("confirmed from the ground truth file") == "answer_key"
+    assert _detect_contamination("matches the ground truth answer 2020") == "answer_key"
+    assert _detect_contamination("this matches the ground truth") == "answer_key"
+    assert _detect_contamination("verified against the answer key") == "answer_key"
+    assert _detect_contamination("equals the gold answer") == "answer_key"
+    # Don't over-trigger: ordinary ML/eval vocabulary that isn't a leak claim.
+    assert _detect_contamination("I built a confusion matrix against my predictions") is None
+
 
 async def test_run_trial_marks_contaminated_answer_as_not_passed(tmp_path: Path) -> None:
     """An answer that would score correct but shows leakage markers is withdrawn, not passed."""
