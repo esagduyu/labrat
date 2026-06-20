@@ -1,6 +1,22 @@
-# LabRat on DataAgentBench: Phase 1 Results and Roadmap
+# LabRat on DataAgentBench: Results, Contamination Audit, and Leaderboard Acceptance
 
-> **TL;DR** — LabRat scored **48.5%** on the 5 DuckDB+SQLite datasets of DataAgentBench (17 queries, pass@5, claude-sonnet-4-6). This is an explicitly a **raw Claude + prompt engineering baseline** — no LabRat tools, no LabRat agent loop. Phase 4 will route DAB through LabRat's actual tool stack; the gap between Phase 1b and Phase 4 is the quantified value of the tool layer.
+> **TL;DR (2026-06-18)** — **LabRat is on the [DataAgentBench public leaderboard](https://ucbepic.github.io/DataAgentBench/) at a stratified Pass@1 of 51.4%** (rank #10 of 18; full 54-query / 12-dataset benchmark, pass@5, claude-sonnet-4-6, LabRat tools via the MCP driver). Getting there was a four-act story this doc records end to end: a **48.5%** raw-Claude+prompt baseline (Phase 1b) → a **54.0%** measured tool-layer delta on the shared subset (Phase 4) → a full-coverage run **submitted at 58.0% that we self-audited and the maintainers independently re-validated down to 51.4%** after a harness contamination leak (Phase 5) → a **sandboxed clean re-run that independently confirms ~50%** (the sandbox gate is now permanent). Strongest single-dataset signal: **crmarenapro 82%** on a 6-database hybrid query set. The honest read: ~51% is a real, defensible, maintainer-verified number; the journey to it is a case study in benchmark contamination and how to disclose and fix it.
+
+---
+
+## Final outcome: accepted onto the leaderboard at 51.4% (2026-06-18)
+
+After we disclosed the Phase 5 contamination (below), DAB maintainer **@Ruiying-Ma re-validated all 270 answers independently**, confirmed the leakage, and counted every contaminated trial as a non-pass (0-penalty). Their trace audit found **3 additional subagent-delegated leaks beyond the 18 we flagged** (21 contaminated trials total). The resulting **stratified Pass@1 of 51.4%** was accepted, and **LabRat was added to the public leaderboard** (rank #10 of 18, just below Claude Opus 4.6 ReAct at 54.7%). Per the maintainers' process, PR #54 was closed and the entry merged on their end (they keep third-party commits out of the project repo).
+
+Our own **sandboxed clean re-run** (`runs/dab/dab-rerun-clean`, sandbox gate on) independently lands at **~50% official-12 stratified mean**, cross-confirming the accepted figure. So three numbers, three meanings — never conflate them:
+
+| Number | What it is |
+|---|---|
+| ~~58.0%~~ | The original submission. **Contaminated — never cite.** |
+| 50.5% | Our interim recompute withdrawing the 18 trials we found. |
+| **51.4%** | **The official, maintainer-re-validated leaderboard figure. Cite this.** |
+
+A separate sandboxed re-submission with score improvements (force-query rule, schema-linking/verify-join grounding) is planned. Full detail on each act is below.
 
 ---
 
@@ -15,15 +31,20 @@ The benchmark structure:
 - Success is judged by an exact-match or near-match validator per query (`validate.py` per task) — no LLM judge, no partial credit
 - Scoring is **stratified**: mean of per-dataset pass rates. Each dataset contributes equally regardless of query count. Per-query rate = `passes / n_trials` (not binary)
 
-The top-of-leaderboard scores as of May 2026:
+The leaderboard as of the 2026-06-12 recompute (the neighborhood LabRat now sits in):
 
-| Agent | Score | Notes |
-|-------|-------|-------|
-| MinusX | 63.1% | Full 54-query / 12-dataset run |
-| Altimate Code | 60.4% | Full 54-query / 12-dataset run |
-| Spacedock | 57.7% | Full 54-query / 12-dataset run |
+| # | Agent | Pass@1 |
+|---|-------|--------|
+| 1 | Altimate Code + GPT-5.5 + Claude Sonnet 4.6 | 71.7% |
+| 2 | Altimate Code + Claude Sonnet 4.6 | 68.2% |
+| 3 | Spacedock (Recce) + Claude Opus 4.8 | 67.2% |
+| 4 | MinusX + Sonnet 4.6 + GPT-5.5-mini + Haiku 4.5 | 65.2% |
+| … | … | … |
+| 9 | Claude Opus 4.6 ReAct | 54.7% |
+| **10** | **LabRat (Claude Sonnet 4.6)** | **51.4%** |
+| 11 | Oracle Forge (Team PaLM) + Gemini 3.1 Pro Preview | 47.2% |
 
-Our Phase 1 runs cover only 17/54 official queries (5 DuckDB+SQLite-only datasets) and are not directly comparable to leaderboard scores until we complete Phase 2 (PostgreSQL) and Phase 3 (MongoDB).
+The leaders pair a stronger/secondary model or a deeper agent harness with Sonnet; LabRat is the strongest single-Sonnet-4.6 entry below the Opus ReAct baseline. (Phase 1 runs below cover only 17/54 queries and predate full coverage — kept as historical record.)
 
 ---
 
@@ -303,22 +324,19 @@ The natural Phase 5 work:
 
 ---
 
-## Phase 5: Full 54-query DAB run — submitted 58.0%, corrected to 50.5% (2026-05-31 / 2026-06-01)
+## Phase 5: Full 54-query DAB run — submitted 58.0% → maintainer-re-validated to 51.4% (accepted) (2026-05-31 / 2026-06-18)
 
-> ⚠️ **Correction (2026-06-03).** This run was submitted to the DAB leaderboard at 58.0%, but a trace audit (prompted by the maintainers' review on PR #54) found that the `claude-mcp` harness left the agent unsandboxed, so on some queries it read the benchmark's answer-key files (`ground_truth.csv`/`validate.py`) off disk or pulled external labels (`load_dataset("ag_news")`). **18 of 270 trials are contaminated and withdrawn; the corrected score is 50.5%.** See [Contamination audit and correction](#contamination-audit-and-correction-2026-06-03) below before relying on any figure in this section. The per-dataset numbers below are the **original (contaminated)** values, kept as the historical record and corrected inline where they changed.
+> ⚠️ **Resolution (2026-06-18).** This run was submitted to the DAB leaderboard at 58.0%, but a trace audit (prompted by the maintainers' review on PR #54) found that the `claude-mcp` harness left the agent unsandboxed, so on some queries it read the benchmark's answer-key files (`ground_truth.csv`/`validate.py`) off disk or pulled external labels (`load_dataset("ag_news")`). We disclosed it; the maintainers **independently re-validated all 270 answers, found 21 contaminated trials** (the 18 we flagged + 3 subagent-delegated leaks they caught), and **accepted LabRat onto the leaderboard at 51.4%.** Our interim recompute (withdrawing just our 18) was 50.5%. See [Contamination audit and correction](#contamination-audit-and-correction-2026-06-03) below. The per-dataset numbers below are the **original (contaminated)** values, kept as the historical record and corrected inline where they changed.
 
 All 12 official datasets, all 54 queries, pass@5, claude-sonnet-4-6, claude-mcp driver (LabRat MCP server mounted in `claude --print`, Max-plan billing). Run dir: `runs/dab/dab-1780210698/`. 270 trials. Required four resume cycles across Max-plan session windows.
 
-**Headline (corrected):**
+**Headline (final, accepted):**
 
 | Agent | Score | Notes |
 |---|---|---|
-| MinusX | 63.1% | Official leaderboard top |
-| Altimate Code | 60.4% | |
-| Spacedock | 57.7% | |
-| **LabRat (this run, corrected)** | **50.5%** | submitted 58.0%; −7.5pp after withdrawing 18 contaminated trials |
+| **LabRat (this run, accepted)** | **51.4%** | submitted 58.0%; maintainers re-validated all 270, withdrew 21 contaminated trials, accepted onto the leaderboard |
 
-The originally-reported 58.0% would have edged Spacedock; the corrected 50.5% does not, and we are not claiming a leaderboard placement until the clean sandboxed re-run lands. The substrate plumbing (Postgres + Mongo cross-DB) was built end-to-end over the prior 48 hours and does work mechanically; what the contamination invalidates is the *score-level* claim, agnews above all.
+The originally-reported 58.0% would have placed higher; the accepted 51.4% lands at rank #10. The substrate plumbing (Postgres + Mongo cross-DB) was built end-to-end over the prior 48 hours and works mechanically; what the contamination invalidated was the *score-level* claim, agnews above all — now corrected and independently verified.
 
 ### What shipped between Phase 4 and Phase 5
 
@@ -397,9 +415,9 @@ claude --print --strict-mcp-config --mcp-config <f> \
 
 The audit scans the full transcript text (Bash inputs, tool results, **and** `Task`-subagent returns) — a Bash-only scan undercounts because delegated work surfaces in tool-result text, not parent Bash calls.
 
-**Correction.** Withdrawing the 18 contaminated passes (counting them as non-passes, leaving every other trial untouched) recomputes the stratified mean **58.0% → 50.5%**: agnews 95%→15%, bookreview 93%→87%, yelp 63%→60%, the other nine datasets unchanged. Our local recompute reproduces the submitted 58.0% exactly, which cross-checks the scoring.
+**Correction → maintainer re-validation → acceptance.** Our recompute withdrawing the 18 contaminated passes we found gave **58.0% → 50.5%** (agnews 95%→15%, bookreview 93%→87%, yelp 63%→60%, the other nine unchanged); our local recompute reproduced the submitted 58.0% exactly, cross-checking the scoring. The maintainers then **re-validated all 270 answers independently** and found **3 more leaks we'd missed — all subagent-delegated** (the contaminating access happened inside a `Task` subagent and surfaced only in tool-result text, not parent Bash calls). Counting all **21** contaminated trials as non-passes, they settled on **51.4%** and **accepted LabRat onto the leaderboard.** The 51.4%-vs-50.5% gap is the difference between their full independent re-validation of every answer and our withdraw-only recompute — 51.4% is the figure to cite.
 
-**Disclosure & remediation.** Disclosed on PR #54 with a scrubbed 270-trial trace bundle (`runs/dab/dab-1780210698/trace_bundle/` — full LLM history + every tool I/O, `manifest.json` per-trial contamination flags, `CONTAMINATION_AUDIT.md`). We withdrew the 18 contaminated trials and asked maintainers to verify. **The clean replacement requires re-running with the agent sandboxed: tool access restricted to the MCP server (block Bash/WebFetch/Task via `--allowedTools`), the benchmark repo off the agent's filesystem, and no network egress — so answer-key and external-label access are impossible by construction.** This is the top DAB priority, ahead of any Phase 6 score-chasing.
+**Disclosure & remediation.** Disclosed on PR #54 with a scrubbed 270-trial trace bundle (`runs/dab/dab-1780210698/trace_bundle/` — full LLM history + every tool I/O, `manifest.json` per-trial contamination flags, `CONTAMINATION_AUDIT.md`). The clean replacement required re-running with the agent sandboxed: tool access restricted to the MCP server (block Bash/WebFetch/Task via `--allowedTools`), the benchmark repo off the agent's filesystem, and no network egress — so answer-key and external-label access are impossible by construction. **That sandbox gate is now permanent (see "Pre-run gate" below) and the clean re-run is complete** — it independently lands at ~50%, confirming the accepted figure.
 
 ### Reproducibility
 
@@ -462,17 +480,18 @@ The contamination root cause was an unsandboxed agent. Shipped, TDD'd (551 tests
 
 Items 1+2 close the hole; 4+5 are the rigor layer; 3 is the environment belt-and-suspenders. The clean full re-run still has to happen — this makes it safe to run.
 
-### Clean sandboxed re-run — IN PROGRESS (`runs/dab/dab-rerun-clean`, since 2026-06-04)
+### Clean sandboxed re-run — ✅ COMPLETE (`runs/dab/dab-rerun-clean`)
 
-Full 54-query official benchmark, claude-mcp, n=5, `--agent-timeout 1200`, sandbox gate on. **Do not cite a final score until it completes** — these are interim observations.
+Full 54-query official benchmark, claude-mcp, n=5, `--agent-timeout 1200`, sandbox gate on. The self-healing local loop ran to completion ("all 270 trials have a real result"). **Result: ~50% official-12 stratified mean — independently confirming the accepted 51.4%** (the run's auto-generated `report.md` shows `0.48`, but that headline includes the unofficial `civic_unstructured` dataset; recompute over the official 12 only).
 
-**How it runs (self-healing local loop):** `scripts/dab_rerun_tick.sh` probes Max-plan (skips cleanly if the limit is active, so it never blasts fast-fail trials), then starts/resumes `eval_dab.py --output-dir runs/dab/dab-rerun-clean` (official-scoped, idempotent, concurrency-guarded). `dab_rerun_loop.sh` fires it every **30 min** — the cheap probe means it resumes within ~30 min of a limit reset instead of waiting out a fixed window (an earlier 6h loop wasted ~1h+ per cycle). It must run locally (Max-plan OAuth + mongod + DAB checkout); a Claude Code routine on the bridge env worked until a power outage destroyed the bridge, so the local `nohup` loop is the durable path. Two scope/robustness lessons baked in: always `--datasets <12 official>` (the suite enumerates 104 queries incl. 5 unofficial extras), and a concurrency guard so a manual resume can't race the loop.
+**Per-dataset (clean run):** bookreview 1.00, stockindex 0.87, stockmarket 0.84, crmarenapro 0.80, github_repos 0.50, pancancer_atlas 0.47, googlelocal 0.40, yelp 0.40, deps_dev_v1 0.30 (was 10% in Phase 5 — grounding tools + n noise), agnews 0.30, music_brainz_20k 0.13, patents 0.00.
 
-**Interim findings:**
+**How it ran (self-healing local loop):** `scripts/dab_rerun_tick.sh` probes Max-plan (skips cleanly if the limit is active, so it never blasts fast-fail trials), then starts/resumes `eval_dab.py --output-dir runs/dab/dab-rerun-clean` (official-scoped, idempotent, concurrency-guarded). `dab_rerun_loop.sh` fired it every **30 min** — the cheap probe means it resumes within ~30 min of a limit reset instead of waiting out a fixed window (an earlier 6h loop wasted ~1h+ per cycle). It must run locally (Max-plan OAuth + mongod + DAB checkout); a Claude Code routine on the bridge env worked until a power outage destroyed the bridge, so the local `nohup` loop was the durable path. Two scope/robustness lessons baked in: always `--datasets <12 official>` (the suite enumerates 104 queries incl. 5 unofficial extras), and a concurrency guard so a manual resume can't race the loop.
+
+**Findings:**
 - **The sandbox holds at scale.** Every trial uses MCP tools only (`mcp_tool_calls.jsonl` confirms `load_mongo_collection`/`attach_database`/`run_sql`/…); zero Bash/file/web. No contamination outside agnews.
 - **agnews leaks via model *parametric memory*, not tooling.** Even fully sandboxed, Sonnet recalled the public AG News id→label mapping ("article_ids 0–29,999 = Business, label=2") and applied it via SQL. `_detect_contamination` caught and withdrew it (via the "huggingface" mention), but only catches trials that *name* the dataset — silent memorized use would pass. **agnews is intrinsically unreliable for any pretraining-exposed model**; caveat it. Benchmark-side fix: shuffle/reassign `article_id`s so memorized positions don't map to labels — worth proposing upstream.
-- **Precedent (DAB PR #53, Altimate):** identical agnews `load_dataset` leak, same maintainer, sandboxed re-run **accepted onto the leaderboard** — agnews 100%→35%, stratified 68.93%→63.18%. They ran GPT‑5.5, so the contamination is model-agnostic, and our disclose→sandbox→rerun path is the accepted one.
-- **Clean-vs-old per-dataset (datasets completed so far):** deps_dev_v1 10%→~30% (grounding tools may help; n=5 noisy), github_repos 50% flat, patents 0% flat (Sonnet ceiling), bookreview tracking high, agnews honest ~29% (≈ Altimate's clean 35%). The strong datasets (crmarenapro, stockindex, stockmarket, googlelocal, music_brainz) were still queued at the time of writing.
+- **Precedent (DAB PR #53, Altimate):** identical agnews `load_dataset` leak, same maintainer, sandboxed re-run **accepted onto the leaderboard** — agnews 100%→35%, stratified 68.93%→63.18%. They ran GPT‑5.5, so the contamination is model-agnostic, and our disclose→sandbox→rerun path is the accepted one — which is exactly how LabRat landed at 51.4%.
 
 ### Pre-run score levers — cheap, high-ROI, land before kickoff
 
