@@ -108,3 +108,9 @@ if len(done) >= target:
     print("[codex-tick] DONE — every trial in this subset has a real result.")
 PY
 fi
+
+# Optionally refresh the overnight score sheet after this tick (set by the
+# overnight orchestrator) so a long phase keeps OVERNIGHT_SCORESHEET.md current.
+if [ "${SCORESHEET_AFTER:-0}" = "1" ]; then
+  uv run python "$REPO/scripts/dab_codex_scoresheet.py" >/dev/null 2>&1 || true
+fi
