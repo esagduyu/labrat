@@ -157,13 +157,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--agent-provider",
-        choices=["anthropic", "claude-code", "openai"],
+        choices=["anthropic", "claude-code", "openai", "codex"],
         default=None,
         help=(
             "Model provider for the labrat-agent driver. 'anthropic' (default) uses "
             "metered API billing. 'claude-code' shells the claude CLI subprocess "
             "(Max-plan billing; subject to the documented text-protocol conflict for "
-            "tool round-trips). 'openai' uses an OpenAI-compatible endpoint."
+            "tool round-trips). 'openai' uses an OpenAI-compatible endpoint. 'codex' "
+            "runs GPT-5.5 via the ChatGPT subscription (Codex Responses API + "
+            "~/.codex/auth.json; no metered key)."
+        ),
+    )
+    parser.add_argument(
+        "--agent-reasoning",
+        choices=["minimal", "low", "medium", "high"],
+        default=None,
+        help=(
+            "Reasoning effort for the codex (GPT-5.5) provider on the labrat-agent "
+            "driver. Default: medium. Ignored by the other providers."
         ),
     )
     parser.add_argument(
@@ -251,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_max_tool_calls", args.max_tool_calls),
         ("agent_verify", args.agent_verify),
         ("agent_timeout", args.agent_timeout),
+        ("agent_reasoning", args.agent_reasoning),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -284,6 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     effective_timeout: int | None = (
         args.agent_timeout if args.agent_timeout is not None else existing_cfg.get("agent_timeout")
     )
+    effective_reasoning: str | None = (
+        args.agent_reasoning
+        if args.agent_reasoning is not None
+        else existing_cfg.get("agent_reasoning")
+    )
 
     suite = DabSuite(
         dab_dir=args.dab_dir,
@@ -295,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_max_tool_calls=effective_max_tool_calls,
         agent_verify=effective_verify,
         agent_timeout=effective_timeout,
+        agent_reasoning=effective_reasoning,
     )
 
     task_filter: list[str] | None = None
@@ -324,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_max_tool_calls": effective_max_tool_calls,
                 "agent_verify": effective_verify,
                 "agent_timeout": effective_timeout,
+                "agent_reasoning": effective_reasoning,
                 "n_trials": args.n_trials,
                 "task_filter": task_filter,
             },
