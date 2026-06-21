@@ -106,3 +106,18 @@ async def test_top_k_caps_total_sections_across_docs(
     )
     total = sum(len(r.sections) for r in out.results)
     assert total == 1  # both docs' Gotchas match "date parsing"; cap is across docs
+
+
+def test_registered_in_data_tools_registry() -> None:
+    from labrat.agent.data_tools import build_data_tools_registry
+
+    names = {s["name"] for s in build_data_tools_registry().to_anthropic_schemas()}
+    assert "search_reference_docs" in names
+
+
+def test_system_prompt_routes_to_the_tool() -> None:
+    from pathlib import Path
+
+    text = Path("src/labrat/agent/prompts/system_base.md").read_text(encoding="utf-8")
+    assert "search_reference_docs" in text
+    assert "Consult reference docs" in text
