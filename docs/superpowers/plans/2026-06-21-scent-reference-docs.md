@@ -67,7 +67,8 @@ def test_question_tokens_drops_stopwords_and_short_tokens() -> None:
     assert "customer" in toks
     assert "many" not in toks  # stopword
     assert "how" not in toks  # stopword
-    assert "id" not in toks if "id" in toks else True  # <3 chars filtered
+    assert "place" in toks  # 5-char content word survives
+    assert all(len(t) >= 3 for t in toks)  # short tokens filtered
 
 
 def test_stem_strips_trailing_s_only_when_long_enough() -> None:
@@ -522,7 +523,6 @@ from pathlib import Path
 
 import pytest
 
-from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.search_reference_docs import SearchReferenceDocsTool
 
@@ -597,18 +597,13 @@ async def test_top_k_caps_matched_sections(env: Path) -> None:
     )
     total_sections = sum(len(r.sections) for r in out.results)
     assert total_sections == 1
-
-
-async def test_registered_in_data_tools_registry() -> None:
-    names = {s["name"] for s in build_data_tools_registry().to_anthropic_schemas()}
-    assert "search_reference_docs" in names
 ```
 
-> Note: `test_registered_in_data_tools_registry` will FAIL until Task 5. That is expected — it documents the cross-task contract. Run the other four tests in Step 2/4 by name; the registry test goes green in Task 5.
+> Note: registry wiring + its test land in Task 5, so every commit in this task is green. This file gains a registry test and a prompt-router test in Task 5.
 
 - [ ] **Step 2: Run the tool tests to verify they fail**
 
-Run: `uv run pytest tests/unit/test_search_reference_docs.py -q -k "not registered"`
+Run: `uv run pytest tests/unit/test_search_reference_docs.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'labrat.agent.tools.search_reference_docs'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -749,13 +744,13 @@ class SearchReferenceDocsTool(Tool[_Input]):
 
 - [ ] **Step 4: Run the tool tests to verify they pass**
 
-Run: `uv run pytest tests/unit/test_search_reference_docs.py -q -k "not registered"`
+Run: `uv run pytest tests/unit/test_search_reference_docs.py -q`
 Expected: PASS (the four behavioral tests).
 
 - [ ] **Step 5: Full gate**
 
 Run: `uv run ruff format . && uv run ruff check . && uv run pyright && uv run pytest -q`
-Expected: clean; all green **except** `test_registered_in_data_tools_registry` (goes green in Task 5). If you prefer a fully-green gate here, this test can be left failing only between Task 4 and Task 5 — note it explicitly in the commit body.
+Expected: clean + all green.
 
 - [ ] **Step 6: Commit**
 
@@ -763,8 +758,7 @@ Expected: clean; all green **except** `test_registered_in_data_tools_registry` (
 git add src/labrat/agent/tools/search_reference_docs.py tests/unit/test_search_reference_docs.py
 git commit -m "feat(scent): search_reference_docs tool (section-level lexical retrieval)
 
-Benchmark-safe: empty store -> results=[] (no fallback-to-all). Registry test is
-red until Task 5 wires the tool into build_data_tools_registry().
+Benchmark-safe: empty store -> results=[] (no fallback-to-all).
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
@@ -777,17 +771,24 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 **Files:**
 - Modify: `src/labrat/agent/data_tools.py` (import + `register` + docstring list)
 - Modify: `src/labrat/agent/prompts/system_base.md` (new Workflow step 1 + Tool Usage bullet)
-- Test: `tests/unit/test_search_reference_docs.py::test_registered_in_data_tools_registry` (already written in Task 4) + a new prompt-content assertion.
+- Test: append a registry test + a prompt-content assertion to `tests/unit/test_search_reference_docs.py`.
 
 **Interfaces:**
-- Consumes: `SearchReferenceDocsTool` from Task 4.
+- Consumes: `SearchReferenceDocsTool` from Task 4; `build_data_tools_registry` from `labrat.agent.data_tools`.
 - Produces: `search_reference_docs` present in `build_data_tools_registry()`.
 
-- [ ] **Step 1: Add the prompt-content failing test**
+- [ ] **Step 1: Add the registry + prompt-content failing tests**
 
 Append to `tests/unit/test_search_reference_docs.py`:
 
 ```python
+def test_registered_in_data_tools_registry() -> None:
+    from labrat.agent.data_tools import build_data_tools_registry
+
+    names = {s["name"] for s in build_data_tools_registry().to_anthropic_schemas()}
+    assert "search_reference_docs" in names
+
+
 def test_system_prompt_routes_to_the_tool() -> None:
     from pathlib import Path
 
@@ -796,7 +797,7 @@ def test_system_prompt_routes_to_the_tool() -> None:
     assert "Consult reference docs" in text
 ```
 
-- [ ] **Step 2: Run the two now-relevant tests to verify they fail**
+- [ ] **Step 2: Run the two new tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_search_reference_docs.py -q -k "registered or routes"`
 Expected: FAIL — tool not in registry; prompt lacks the router line.
@@ -1055,4 +1056,4 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 
 **3. Type consistency** — `question_tokens`/`stem`/`name_tokens` named identically across T1→T4; `ScentDoc`/`Section`/`parse_document(text, *, domain, scope)` identical across T2→T3→T4→T6; `MazeStore(project_root, home, profile)` + `from_env(profile)` + `docs(kind)` identical across T3→T4→T6; `_Output.results`, `DocResult.{domain,quick_reference,sections}`, `SectionMatch.{heading,body,score,matched_terms}` consistent T4→T6. ✅
 
-**Cross-task note (intentional, flagged in the plan):** `test_registered_in_data_tools_registry` is authored in T4 but only passes after T5 — documented in T4 Step 5/Step 6 so the executor expects one red test in that window.
+**Cross-task note:** registry wiring and its test both live in T5, so every commit is green (no knowingly-red commit between tasks).
