@@ -6,6 +6,8 @@ returns the rendered checklist so progress is visible. It never blocks the agent
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
@@ -20,7 +22,7 @@ class _Input(BaseModel):
             "Omit to just return the current checklist."
         ),
     )
-    status: str = Field(
+    status: Literal["doing", "done"] = Field(
         default="done",
         description="New status for the step: 'doing' (started) or 'done' (finished).",
     )
@@ -57,7 +59,9 @@ class WorkflowTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        state = self._states.setdefault(ctx.profile_name, WorkflowState.new())
+        if ctx.profile_name not in self._states:
+            self._states[ctx.profile_name] = WorkflowState.new()
+        state = self._states[ctx.profile_name]
         if args.step is not None:
             if args.step not in STEP_KEYS:
                 raise ValueError(
