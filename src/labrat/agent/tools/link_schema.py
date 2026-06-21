@@ -8,80 +8,13 @@ a ranked shortlist with columns + matched terms. Cheap, deterministic, no LLM ca
 
 from __future__ import annotations
 
-import re
 from typing import cast
 
 from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
 from labrat.db.catalog import Catalog
-
-_STOPWORDS = {
-    "the",
-    "a",
-    "an",
-    "of",
-    "in",
-    "on",
-    "for",
-    "to",
-    "and",
-    "or",
-    "by",
-    "with",
-    "which",
-    "what",
-    "how",
-    "many",
-    "most",
-    "all",
-    "list",
-    "show",
-    "each",
-    "per",
-    "is",
-    "are",
-    "that",
-    "this",
-    "number",
-    "count",
-    "total",
-    "average",
-    "sum",
-    "find",
-    "give",
-    "get",
-    "from",
-    "where",
-    "group",
-    "order",
-    "have",
-    "has",
-    "did",
-    "do",
-    "does",
-    "between",
-    "over",
-    "into",
-    "their",
-    "its",
-    "was",
-    "were",
-    "any",
-}
-
-
-def _name_tokens(s: str) -> list[str]:
-    """Split an identifier into alphanumeric tokens (article_metadata → article, metadata)."""
-    return re.findall(r"[a-z0-9]+", s.lower())
-
-
-def _question_tokens(s: str) -> list[str]:
-    return [t for t in _name_tokens(s) if len(t) >= 3 and t not in _STOPWORDS]
-
-
-def _stem(t: str) -> str:
-    return t[:-1] if len(t) > 3 and t.endswith("s") else t
+from labrat.maze._lexical import name_tokens, question_tokens, stem
 
 
 class _Input(BaseModel):
@@ -128,17 +61,17 @@ class LinkSchemaTool(Tool[_Input]):
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
         catalog = cast(Catalog, ctx.catalogs[args.database or ctx.primary])
-        q_stems = {_stem(t) for t in _question_tokens(args.question)}
+        q_stems = {stem(t) for t in question_tokens(args.question)}
         # map stem -> original question token (for human-readable matched_terms)
-        stem_to_term = {_stem(t): t for t in _question_tokens(args.question)}
+        stem_to_term = {stem(t): t for t in question_tokens(args.question)}
 
         scored: list[_Match] = []
         for schema in catalog.schemas:
             for table in schema.tables:
-                name_stems = {_stem(t) for t in _name_tokens(table.name)}
+                name_stems = {stem(t) for t in name_tokens(table.name)}
                 col_stems: set[str] = set()
                 for col in table.columns:
-                    col_stems.update(_stem(t) for t in _name_tokens(col.name))
+                    col_stems.update(stem(t) for t in name_tokens(col.name))
 
                 name_hits = q_stems & name_stems
                 col_hits = (q_stems & col_stems) - name_hits
