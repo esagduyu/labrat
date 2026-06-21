@@ -155,8 +155,9 @@ def main() -> None:
         out.append(f"| {ds} | {pct(g)}{gc}{flag} | {pct(s)} | {delta} |")
     gfull = strat(full_rates, OFFICIAL)
     out.append(
-        f"| **Stratified mean** | **{pct(gfull)}** | **51.4%** | "
-        f"{(gfull - 0.5138) * 100:+.1f}pp" if gfull is not None else "| **Stratified mean** | **—** | **51.4%** | — "
+        f"| **Stratified mean** | **{pct(gfull)}** | **51.4%** | {(gfull - 0.5138) * 100:+.1f}pp"
+        if gfull is not None
+        else "| **Stratified mean** | **—** | **51.4%** | — "
     )
     out[-1] = out[-1] + " |"
     out.append("")
