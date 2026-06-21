@@ -69,6 +69,39 @@ def _apply_limit(sql: str, limit: int) -> str:
     return f"{stripped}\nLIMIT {limit}"
 
 
+def _classify_sql_error(message: str) -> tuple[str, str]:
+    """Classify a DB exception message into (category, remediation hint).
+
+    Deterministic substring matching — dialect-agnostic enough for the DuckDB primary;
+    the categories generalize. Order matters: the column check (which requires "column")
+    runs before the table check so "column ... does not exist" is not mis-tagged.
+    """
+    m = message.lower()
+    if "column" in m and (
+        "not found" in m or "does not have a column" in m or "does not exist" in m
+    ):
+        return (
+            "missing_column",
+            "Column not found — call describe_table / search_columns to confirm the column name.",
+        )
+    if ("table" in m or "catalog" in m) and ("does not exist" in m or "not found" in m):
+        return (
+            "unknown_table",
+            "Table not found — call list_tables / profile_dataset to confirm the table name.",
+        )
+    if "parser error" in m or "syntax error" in m:
+        return ("syntax", "Syntax error — re-check the SQL against the active dialect.")
+    if "conversion" in m or "cast" in m or "type mismatch" in m or "no function matches" in m:
+        return (
+            "type_mismatch",
+            "Type mismatch — check column types with describe_table and cast explicitly.",
+        )
+    return (
+        "other",
+        "Inspect the error; verify table/column names and types before retrying.",
+    )
+
+
 def _log(
     profile: str,
     thread_id: str,
@@ -114,6 +147,9 @@ class _Output(BaseModel):
     refused: bool = False
     needs_confirmation: bool = False
     error: str | None = None
+    error_category: str | None = None
+    executed_sql: str | None = None
+    hint: str | None = None
 
 
 class RunSqlTool(Tool[_Input]):
@@ -209,6 +245,7 @@ class RunSqlTool(Tool[_Input]):
             elapsed_ms = (time.monotonic() - t0) * 1000
         except Exception as exc:
             elapsed_ms = (time.monotonic() - t0) * 1000
+            category, hint = _classify_sql_error(str(exc))
             _log(
                 profile=ctx.profile_name,
                 thread_id=thread_id,
@@ -219,7 +256,14 @@ class RunSqlTool(Tool[_Input]):
                 execution_time_ms=elapsed_ms,
                 error_message=str(exc),
             )
-            return _Output(ok=False, query=args.query, error=str(exc))
+            return _Output(
+                ok=False,
+                query=args.query,
+                error=str(exc),
+                error_category=category,
+                executed_sql=sql,
+                hint=hint,
+            )
 
         rows = [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
         _log(
