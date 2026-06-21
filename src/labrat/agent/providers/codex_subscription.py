@@ -91,6 +91,16 @@ class CodexSubscriptionProvider(ModelProvider):
         # one trial share the growing prefix, so routing them to the same cache
         # maximizes hit rate. A routing hint only — caching itself is automatic.
         self._cache_key = uuid.uuid4().hex
+        # Encrypted reasoning items captured per function_call (keyed by call_id).
+        # GPT-5.5 is a reasoning model; passing these back on the next turn is the
+        # #1 fix for cache misses — omitting them makes the prefix diverge and the
+        # model restart its reasoning. See _consume (capture) + _to_responses_request
+        # (re-emit before the matching function_call).
+        self._reasoning_by_call_id: dict[str, dict[str, Any]] = {}
+        # Safety net: if the codex endpoint ever rejects reasoning items in the input
+        # (HTTP 400, as it does for some params), stream() flips this and retries
+        # without them, degrading to the pre-passback behavior instead of stalling.
+        self._reasoning_passback_disabled = False
         # Token usage accumulated across every stream() call on this instance
         # (≈ per-trial totals). Populated from each response's `usage` block.
         self.usage: dict[str, int] = {
@@ -195,6 +205,7 @@ class CodexSubscriptionProvider(ModelProvider):
     ) -> dict[str, Any]:
         """Translate Anthropic-format history + tools into a Responses request body."""
         input_items: list[dict[str, Any]] = []
+        emitted_reasoning: set[str] = set()
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -206,6 +217,15 @@ class CodexSubscriptionProvider(ModelProvider):
                 if btype == "text":
                     input_items.append(_text_message_item(role, block.get("text", "")))
                 elif btype == "tool_use":
+                    # Re-emit the captured reasoning item immediately before its
+                    # function_call (deduped — one reasoning item can precede several
+                    # parallel calls). Keeps the prefix byte-identical to what the
+                    # model produced, so the cache hits and reasoning continues.
+                    if not self._reasoning_passback_disabled:
+                        reasoning = self._reasoning_by_call_id.get(block["id"])
+                        if reasoning is not None and reasoning["id"] not in emitted_reasoning:
+                            input_items.append(reasoning)
+                            emitted_reasoning.add(reasoning["id"])
                     input_items.append(
                         {
                             "type": "function_call",
@@ -267,27 +287,54 @@ class CodexSubscriptionProvider(ModelProvider):
 
         auth = self._maybe_refresh(self._load_auth())
         headers = self._headers(auth)
-        body = self._to_responses_request(messages, tools, system)
 
         async def _emit() -> AsyncIterator[ContentBlock]:
             async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
-                async with client.stream(
-                    "POST", _RESPONSES_URL, headers=headers, json=body
-                ) as resp:
-                    resp.raise_for_status()
-                    async for block in self._consume(resp.aiter_lines()):
-                        yield block
+                for _attempt in range(2):
+                    body = self._to_responses_request(messages, tools, system)
+                    sent_reasoning = any(it.get("type") == "reasoning" for it in body["input"])
+                    try:
+                        async with client.stream(
+                            "POST", _RESPONSES_URL, headers=headers, json=body
+                        ) as resp:
+                            resp.raise_for_status()
+                            async for block in self._consume(resp.aiter_lines()):
+                                yield block
+                        return
+                    except httpx.HTTPStatusError as exc:
+                        # If reasoning items triggered a 400, disable passback and retry
+                        # once without them (the prefix-cache loss is far better than a
+                        # stalled run). Any other 4xx/5xx propagates to per-trial isolation.
+                        if (
+                            exc.response.status_code == 400
+                            and sent_reasoning
+                            and not self._reasoning_passback_disabled
+                        ):
+                            self._reasoning_passback_disabled = True
+                            continue
+                        raise
 
         return _emit()
 
     async def _consume(self, lines: AsyncIterator[str]) -> AsyncIterator[ContentBlock]:
-        """Reduce an SSE line stream into content blocks while accumulating the
-        per-call token usage onto ``self.usage`` (from the ``response.completed``
-        event). Split out from ``stream`` so it's testable without real HTTP."""
+        """Reduce an SSE line stream into content blocks while (a) accumulating
+        per-call token usage onto ``self.usage`` and (b) capturing reasoning items
+        and mapping each to the function_call it precedes, so we can pass them back
+        next turn. Split out from ``stream`` so it's testable without real HTTP."""
+        current_reasoning: dict[str, Any] | None = None
         async for event in _iter_sse_events(lines):
             usage = _extract_usage(event)
             if usage is not None:
                 self._add_usage(usage)
+            item = _output_item_done(event)
+            if item is not None:
+                itype = item.get("type")
+                if itype == "reasoning":
+                    current_reasoning = _reasoning_input_item(item)
+                elif itype == "function_call" and current_reasoning is not None:
+                    call_id = str(item.get("call_id") or item.get("id") or "")
+                    if call_id:
+                        self._reasoning_by_call_id[call_id] = current_reasoning
             for block in _reduce_event(event):
                 yield block
 
@@ -382,6 +429,26 @@ def _reduce_event(event: dict[str, Any]) -> list[ContentBlock]:
         detail = _error_detail(event)
         raise RuntimeError(f"Codex Responses stream {etype}: {detail}")
     return []
+
+
+def _output_item_done(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the ``item`` of a ``response.output_item.done`` event, else None."""
+    if event.get("type") != "response.output_item.done":
+        return None
+    item = event.get("item")
+    return cast(dict[str, Any], item) if isinstance(item, dict) else None
+
+
+def _reasoning_input_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Build the input-format reasoning item to pass back next turn (carries the
+    encrypted_content the model needs to resume its chain of thought)."""
+    out: dict[str, Any] = {"type": "reasoning", "id": str(item.get("id", ""))}
+    enc = item.get("encrypted_content")
+    if enc is not None:
+        out["encrypted_content"] = enc
+    summary = item.get("summary")
+    out["summary"] = summary if isinstance(summary, list) else []
+    return out
 
 
 def _extract_usage(event: dict[str, Any]) -> dict[str, int] | None:

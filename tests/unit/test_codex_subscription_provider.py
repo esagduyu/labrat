@@ -322,3 +322,113 @@ def test_request_includes_cache_key_but_not_unsupported_retention() -> None:
     # Different provider instances (different trials) get different keys.
     other = CodexSubscriptionProvider(model="gpt-5.5")
     assert other._to_responses_request([], [], "")["prompt_cache_key"] != b1["prompt_cache_key"]
+
+
+# ---- 8. reasoning-item passback (the top cause of cache misses for reasoning models) ----
+
+
+async def test_consume_captures_reasoning_and_maps_to_call_id() -> None:
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    stream = (
+        'data: {"type": "response.output_item.done", "item": {"type": "reasoning", '
+        '"id": "rs_1", "encrypted_content": "ENC", "summary": []}}\n'
+        "\n"
+        'data: {"type": "response.output_item.done", "item": {"type": "function_call", '
+        '"call_id": "call_1", "name": "run_sql", "arguments": "{}"}}\n'
+        "\n"
+        'data: {"type": "response.completed", "response": {"usage": '
+        '{"input_tokens": 10, "output_tokens": 1}}}\n'
+        "\n"
+    )
+    blocks = [b async for b in provider._consume(_alines(stream))]
+    assert any(isinstance(b, ToolUseBlock) and b.id == "call_1" for b in blocks)
+    r = provider._reasoning_by_call_id["call_1"]
+    assert r["type"] == "reasoning"
+    assert r["encrypted_content"] == "ENC"
+    assert r["id"] == "rs_1"
+
+
+def test_to_responses_request_passes_reasoning_before_function_call() -> None:
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    provider._reasoning_by_call_id = {
+        "call_1": {"type": "reasoning", "id": "rs_1", "encrypted_content": "ENC", "summary": []}
+    }
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "q"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_1", "name": "run_sql", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "ok"}],
+        },
+    ]
+    items = provider._to_responses_request(messages, [], "sys")["input"]
+    fc_idx = next(
+        i
+        for i, it in enumerate(items)
+        if it.get("type") == "function_call" and it["call_id"] == "call_1"
+    )
+    # The reasoning item must sit immediately before the function_call it preceded.
+    assert items[fc_idx - 1]["type"] == "reasoning"
+    assert items[fc_idx - 1]["encrypted_content"] == "ENC"
+    assert items[fc_idx - 1]["id"] == "rs_1"
+
+
+def test_reasoning_item_emitted_once_for_parallel_calls() -> None:
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    shared = {"type": "reasoning", "id": "rs_1", "encrypted_content": "ENC", "summary": []}
+    provider._reasoning_by_call_id = {"call_1": shared, "call_2": shared}
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "a", "input": {}},
+                {"type": "tool_use", "id": "call_2", "name": "b", "input": {}},
+            ],
+        }
+    ]
+    items = provider._to_responses_request(messages, [], "")["input"]
+    reasoning = [it for it in items if it.get("type") == "reasoning"]
+    assert len(reasoning) == 1  # one reasoning item, not duplicated across parallel calls
+    assert items[0]["type"] == "reasoning"  # and it leads the group
+
+
+def test_to_responses_request_unchanged_without_reasoning() -> None:
+    # Back-compat: no captured reasoning → no reasoning items injected.
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}],
+        }
+    ]
+    items = provider._to_responses_request(messages, [], "")["input"]
+    assert not any(it.get("type") == "reasoning" for it in items)
+
+
+def test_reasoning_passback_can_be_disabled_for_safety_fallback() -> None:
+    # If the codex endpoint rejects reasoning items (HTTP 400), stream() flips this
+    # flag and retries without them; _to_responses_request must then omit reasoning.
+    provider = CodexSubscriptionProvider(model="gpt-5.5")
+    provider._reasoning_by_call_id = {
+        "call_1": {"type": "reasoning", "id": "rs_1", "encrypted_content": "E", "summary": []}
+    }
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}],
+        }
+    ]
+    # enabled by default → reasoning emitted
+    assert any(
+        it.get("type") == "reasoning"
+        for it in provider._to_responses_request(messages, [], "")["input"]
+    )
+    # disabled → omitted
+    provider._reasoning_passback_disabled = True
+    assert not any(
+        it.get("type") == "reasoning"
+        for it in provider._to_responses_request(messages, [], "")["input"]
+    )
