@@ -84,7 +84,7 @@ class SearchReferenceDocsTool(Tool[_Input]):
         for doc in docs:
             for idx, section in enumerate(doc.sections):
                 # Skip the Quick Reference section from matching — it's only for context
-                if section.heading == "Quick Reference":
+                if section.heading.strip().lower() == "quick reference":
                     continue
                 heading_stems = _stems(f"{doc.domain} {section.heading}")
                 body_stems = _stems(section.body)

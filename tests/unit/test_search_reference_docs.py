@@ -80,3 +80,29 @@ async def test_top_k_caps_matched_sections(env: Path) -> None:
     )
     total_sections = sum(len(r.sections) for r in out.results)
     assert total_sections == 1
+
+
+async def test_top_k_caps_total_sections_across_docs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """top_k caps the total matched sections across docs, not per-doc."""
+    scent = tmp_path / "labrat_maze" / "scent"
+    scent.mkdir(parents=True)
+    (scent / "a.md").write_text(
+        "---\nkind: scent\ndomain: alpha\n---\n## Gotchas\n- alpha date parsing note\n",
+        encoding="utf-8",
+    )
+    (scent / "b.md").write_text(
+        "---\nkind: scent\ndomain: beta\n---\n## Gotchas\n- beta date parsing note\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
+
+    tool = SearchReferenceDocsTool()
+    out = await tool.execute(
+        ToolContext(profile_name="default"),
+        tool.input_model(question="date parsing", top_k=1),
+    )
+    total = sum(len(r.sections) for r in out.results)
+    assert total == 1  # both docs' Gotchas match "date parsing"; cap is across docs
