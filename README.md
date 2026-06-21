@@ -5,7 +5,7 @@
 **LabRat is a terminal-native AI data agent — and the start of "Claude Code for data scientists."** Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> **Status: feature-complete v0 alpha.** 577 tests passing, end-to-end against DuckDB. On the public [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) leaderboard at **51.4%** (rank #10/18) and **80%** on dbt Labs' [ADE-bench](https://github.com/dbt-labs/ade-bench) — see [Benchmark records](#benchmark-records).
+> **Status: feature-complete v0 alpha.** 578 tests passing, end-to-end against DuckDB. On the public [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) leaderboard at **51.4%** (rank #10/18) and **80%** on dbt Labs' [ADE-bench](https://github.com/dbt-labs/ade-bench) — see [Benchmark records](#benchmark-records).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -86,7 +86,7 @@ LabRat is feature-complete for v0 alpha.
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts · HTML export · Audit log | ✅ | unicode + image-protocol charts; provenance-rich HTML findings; JSONL event sourcing |
 
-**Test coverage:** 577 tests (LLM-gated tests skipped without `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
+**Test coverage:** 578 tests (LLM-gated tests skipped without `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
 
 ## Architecture
 
@@ -137,14 +137,13 @@ LabRat explores your schema, samples data, consults your history and memories, s
 
 v0 alpha is feature-complete. The path forward follows the three pillars.
 
-**Pillar 1 — find the cheese reliably (within-task reasoning).** Largely shipped: grounding profiler, schema-linking, mechanically-verified joins, the verifier loop. In flight:
-- **GPT-5.5 and cross-model measurement** — a native provider now runs LabRat's full loop (verifier included) on GPT-5.5; we're measuring the verifier's contribution and benchmarking GPT-5.5 against the Sonnet baseline.
-- **Closing the DAB gap to the leaders** (Altimate 71.7%, Spacedock 67.2%, MinusX 65.2%): force-query prompting to recover the answer-from-memory failures (music_brainz), the patents ceiling, and a self-improving tool-iteration loop that adds and ablates one tool at a time against a held-out subset.
-- **ADE-bench:** `compare_schema` and `trace_column_lineage` tools to close the output-schema and dependency gaps.
+**What this phase taught us — the lever is grounding, not the model.** A GPT‑5.5 experiment ([write-up](docs/dab-progress-report.md)) found GPT‑5.5 ≈ Sonnet (not a free win) and the opt-in verifier gave **no measured accuracy benefit** on DAB. Meanwhile the failures we root-caused were **ungrounded data handling** (e.g. a query that fails only because a `Date` column is dirty mixed-format text) — fixable for *any* model by a one-line reference-doc note. That, plus Anthropic's [21%→95% result](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude) and Altimate's leaderboard-topping AutoContext, points the roadmap squarely at the knowledge/grounding layer.
 
-**Pillar 2 — spread the cheese (the workflow product).** The **Cheese** share artifact: every answer carries its SQL + reasoning, saveable and exportable as a reviewable unit; a provenance footer on every result; notebook (marimo) integration.
+**Pillar 1 — find the cheese reliably (within-task reasoning).** Largely shipped: grounding profiler, schema-linking, mechanically-verified joins, the opt-in verifier. Remaining work is *cheap, grounding-shaped* prompt levers (a force-query rule for answer-from-memory failures; a dirty-data/date-parsing anti-pattern bullet — both proven needed this session), ablated against the smoke set — not more model or reasoning machinery.
 
-**Pillar 3 — map the Rat Maze (the knowledge moat).** Promote the existing `memory/` + `validations/` + `context_engine/` + `catalog/` seeds into a scoped, optional knowledge layer — reference docs written for LLM retrieval, reusable analysis recipes, a correction-harvesting loop that keeps the maze fresh, scoped per-user and per-team. This is the [21%→95% lever](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude) and the long-term differentiator.
+**Pillar 2 — spread the cheese (the workflow product).** The **Cheese** share artifact: every answer carries its SQL + reasoning, saveable and exportable as a reviewable unit; a provenance footer on every result; notebook (marimo) integration. This is the Figma-style adoption wedge — what makes LabRat a *workflow tool*, not a one-shot.
+
+**Pillar 3 — map the Rat Maze (the knowledge moat — the priority).** A scoped, optional **Scent** layer: reference docs written for LLM retrieval (`search_reference_docs` tool), an **auto-cartographer** that explores a new warehouse and drafts a curated, GT-firewalled grounding doc (structure verified, semantics flagged for a human to own), reusable analysis recipes, and a correction-harvesting loop that keeps it fresh — scoped per-user and per-team. This is the **21%→95% lever and the long-term differentiator**; the design (`FEATURE_ROADMAP.md` #26a/#26b) is locked and is the focus of the next build session.
 
 **Foundations:** extract `labrat-core` as an installable embeddable package; testcontainers integration tests for the live warehouse adapters; v1 GA after a week of dogfooding.
 
@@ -159,7 +158,7 @@ AGPL-3.0. Use, modify, and redistribute LabRat for any purpose, including commer
 ## Development
 
 ```bash
-uv run pytest                        # full test suite (577 tests)
+uv run pytest                        # full test suite (578 tests)
 uv run ruff check . && uv run ruff format --check . && uv run pyright   # lint + types
 
 # Evals (see CLAUDE.md for the full matrix)
