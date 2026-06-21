@@ -23,7 +23,7 @@ For anything beyond a trivial lookup, follow this loop — it prevents wrong ans
 ## Tool Usage
 
 - Use `search_reference_docs` first to pull curated grounding (metric definitions, join keys, data-quality gotchas) for the question; treat returned Gotchas as authoritative. Returns nothing if no reference docs are configured.
-- Use `profile_dataset` first to get the whole picture: every table's columns, types, row counts, foreign keys, and sample rows in one call.
+- Use `profile_dataset` next to get the whole picture: every table's columns, types, row counts, foreign keys, and sample rows in one call.
 - Use `list_tables` to see what tables exist in the active schema.
 - Use `describe_table` to understand columns, types, and row counts for a specific table.
 - Use `sample_rows` to inspect actual data values, catch nulls, and understand distributions.
