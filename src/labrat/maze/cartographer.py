@@ -11,7 +11,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from labrat.agent.tools.profile_dataset import (
-    _Output as ProfileOutput,  # type: ignore[reportPrivateUsage]
+    _Output as ProfileOutput,  # pyright: ignore[reportPrivateUsage]
 )
 from labrat.db.base import Connection
 from labrat.maze.document import Section
