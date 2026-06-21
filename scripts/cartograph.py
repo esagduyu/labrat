@@ -53,16 +53,16 @@ async def _run(args: argparse.Namespace) -> int:
         raise SystemExit("--connections must contain at least one entry")
     connections = _build_connections(spec)
     primary = args.primary or next(iter(connections))
-    catalogs: dict[str, object] = {
-        name: conn.introspect_catalog()  # type: ignore[attr-defined]
-        for name, conn in connections.items()
-    }
-
-    llm_fn: LLMFn | None = None
-    if args.with_semantics:
-        llm_fn = provider_llm_fn(build_provider(args.provider, args.model))
-
     try:
+        catalogs: dict[str, object] = {
+            name: conn.introspect_catalog()  # type: ignore[attr-defined]
+            for name, conn in connections.items()
+        }
+
+        llm_fn: LLMFn | None = None
+        if args.with_semantics:
+            llm_fn = provider_llm_fn(build_provider(args.provider, args.model))
+
         docs = await generate_scent(
             connections=connections,
             catalogs=catalogs,
