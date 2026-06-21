@@ -62,6 +62,51 @@ def build_key_tables(profile: ProfileOutput, joins: list[VerifiedJoin]) -> Secti
     return Section(heading="Key Tables", body="\n\n".join(blocks), source="verified")
 
 
+def _candidate_joins(profile: ProfileOutput) -> list[tuple[str, str, str, str]]:
+    """Candidate (left_table, left_col, right_table, right_col) join keys from declared
+    FKs and an ``<base>_id`` name heuristic. Excludes self-joins; de-duplicates."""
+    by_name = {t.name.lower(): t for t in profile.tables}
+    candidates: list[tuple[str, str, str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+
+    def _add(lt: str, lc: str, rt: str, rc: str) -> None:
+        if rt.lower() == lt.lower():
+            return  # self-join
+        key = (lt, lc, rt, rc)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(key)
+
+    # (a) declared FKs from the profile ("col -> reftable.refcol")
+    for t in profile.tables:
+        for fk in t.foreign_keys:
+            if " -> " not in fk:
+                continue
+            lc, rhs = fk.split(" -> ", 1)
+            if "." not in rhs:
+                continue
+            rt_name, rc = rhs.split(".", 1)
+            _add(t.name, lc.strip(), rt_name.strip(), rc.strip())
+
+    # (b) <base>_id name heuristic
+    for t in profile.tables:
+        for col in t.columns:
+            cname = col.name.lower()
+            if not cname.endswith("_id"):
+                continue
+            base = cname[:-3]
+            for rt_name in (base, base + "s"):
+                rt = by_name.get(rt_name)
+                if rt is None:
+                    continue
+                rt_cols = {rc.name.lower(): rc.name for rc in rt.columns}
+                for cand in (cname, "id"):
+                    if cand in rt_cols:
+                        _add(t.name, col.name, rt.name, rt_cols[cand])
+                        break
+    return candidates
+
+
 def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> Section:
     lines: list[str] = []
     for t in profile.tables:
@@ -90,32 +135,9 @@ async def discover_joins(
     mechanically verify each with verify_join. Keeps only ``likely_valid`` joins and
     excludes self-joins.
     """
-    by_name = {t.name.lower(): t for t in profile.tables}
-    candidates: list[tuple[str, str, str, str]] = []
-    seen: set[tuple[str, str, str, str]] = set()
-
-    for t in profile.tables:
-        for col in t.columns:
-            cname = col.name.lower()
-            if not cname.endswith("_id"):
-                continue
-            base = cname[:-3]
-            for rt_name in (base, base + "s"):
-                rt = by_name.get(rt_name)
-                if rt is None or rt.name == t.name:  # missing table or self-join → skip
-                    continue
-                rt_cols = {rc.name.lower(): rc.name for rc in rt.columns}
-                for cand in (cname, "id"):
-                    if cand in rt_cols:
-                        key = (t.name, col.name, rt.name, rt_cols[cand])
-                        if key not in seen:
-                            seen.add(key)
-                            candidates.append(key)
-                        break
-
     tool = VerifyJoinTool()
     joins: list[VerifiedJoin] = []
-    for lt, lc, rt, rc in candidates:
+    for lt, lc, rt, rc in _candidate_joins(profile):
         verdict = await tool.execute(
             ctx,
             tool.input_model(
