@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-_FIXTURE = "tests/fixtures/sample_dbs/ecommerce.duckdb"
 _CLI = Path("scripts/cartograph.py")
 
 
@@ -19,11 +18,11 @@ def _load_cli():  # type: ignore[no-untyped-def]
     return mod
 
 
-async def test_cli_writes_doc_without_model(tmp_path: Path) -> None:
+async def test_cli_writes_doc_without_model(tmp_path: Path, ecommerce_db: Path) -> None:
     cli = _load_cli()
     out = tmp_path / "labrat_maze" / "scent"
     args = SimpleNamespace(
-        connections=json.dumps({"shop": {"db_type": "duckdb", "db_path": _FIXTURE}}),
+        connections=json.dumps({"shop": {"db_type": "duckdb", "db_path": str(ecommerce_db)}}),
         primary=None,
         out=str(out),
         with_semantics=False,

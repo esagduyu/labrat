@@ -19,12 +19,10 @@ from labrat.agent.tools.profile_dataset import (
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.maze.cartographer import _candidate_joins, discover_joins
 
-_FIXTURE = "tests/fixtures/sample_dbs/ecommerce.duckdb"
-
 
 @pytest.fixture()
-def ctx() -> Iterator[ToolContext]:
-    conn = DuckDBConnection(Path(_FIXTURE), read_only=True)
+def ctx(ecommerce_db: Path) -> Iterator[ToolContext]:
+    conn = DuckDBConnection(ecommerce_db, read_only=True)
     conn.connect()
     catalog = conn.introspect_catalog()
     yield ToolContext(connection=conn, catalog=catalog, primary="primary")
