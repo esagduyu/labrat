@@ -87,8 +87,9 @@ are the stable identifiers the `workflow` tool accepts.
 - Registered in `build_data_tools_registry()`.
 
 **Inspectability:** the tool's return value shows the full checklist (the agent sees its own
-progress); each call is appended to the audit JSONL (`audit/`) for a human-inspectable trail; the
-`WorkflowState` is queryable so a future TUI widget can render it live (widget out of scope).
+progress); the `WorkflowState` is queryable so a future TUI widget can render it live (widget out of
+scope); and `run_sql` already logs every execution — including failures, with the error message — to
+the query-history log, so repair attempts are recorded there without new audit wiring.
 
 ## 5. Deterministic SQL self-repair
 
@@ -148,8 +149,8 @@ Usage bullet for `workflow`. Keep the existing reference-docs (#26a) router step
   non-empty `hint`, and `executed_sql` set; a valid query still returns `ok=True` unchanged
   (back-compat).
 - **registry:** `workflow` present in `build_data_tools_registry().to_anthropic_schemas()`.
-- **prompt:** `system_base.md` contains the 9 step keys + the `workflow` instruction.
-- **audit:** a `workflow` call emits an audit entry (if wired through the audit path).
+- **prompt:** `system_base.md` names the `workflow` tool, includes the repair guidance
+  (`error_category` / `hint`), and covers the SOP steps (clarify → review).
 - Gate every commit: `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -q`.
 
 ## 9. Decisions settled during brainstorming (+ SOTA review)
