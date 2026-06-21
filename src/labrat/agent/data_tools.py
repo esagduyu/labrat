@@ -22,12 +22,13 @@ from labrat.agent.tools.sample_rows import SampleRowsTool
 from labrat.agent.tools.search_columns import SearchColumnsTool
 from labrat.agent.tools.search_reference_docs import SearchReferenceDocsTool
 from labrat.agent.tools.verify_join import VerifyJoinTool
+from labrat.agent.tools.workflow import WorkflowTool
 
 
 def build_data_tools_registry() -> ToolRegistry:
     """Return a registry with the standard read-only data-access tools.
 
-    Tools included: search_reference_docs, profile_dataset, list_tables,
+    Tools included: search_reference_docs, workflow, profile_dataset, list_tables,
     describe_table, search_columns, link_schema, sample_rows, column_stats,
     run_sql, explain_sql, verify_join, attach_database, load_file,
     load_mongo_collection.
@@ -38,6 +39,7 @@ def build_data_tools_registry() -> ToolRegistry:
     """
     registry = ToolRegistry()
     registry.register(SearchReferenceDocsTool())
+    registry.register(WorkflowTool())
     registry.register(ProfileDatasetTool())
     registry.register(ListTablesTool())
     registry.register(DescribeTableTool())
