@@ -314,6 +314,7 @@ from pydantic import BaseModel
 
 from labrat.agent.tools.profile_dataset import _Output as ProfileOutput
 from labrat.db.base import Connection
+from labrat.maze.document import Section
 
 _STRINGY = ("CHAR", "TEXT", "STRING", "VARCHAR")
 
@@ -330,7 +331,7 @@ def _is_stringy(data_type: str) -> bool:
     return any(tok in up for tok in _STRINGY)
 
 
-def build_quick_reference(profile: ProfileOutput) -> "Section":
+def build_quick_reference(profile: ProfileOutput) -> Section:
     lines = [f"Database `{profile.database}`: {profile.tables_profiled} tables profiled."]
     for t in profile.tables:
         rc = "unknown" if t.row_count is None else f"{t.row_count}"
@@ -340,7 +341,7 @@ def build_quick_reference(profile: ProfileOutput) -> "Section":
     return Section(heading="Quick Reference", body="\n".join(lines), source="verified")
 
 
-def build_key_tables(profile: ProfileOutput, joins: list[VerifiedJoin]) -> "Section":
+def build_key_tables(profile: ProfileOutput, joins: list[VerifiedJoin]) -> Section:
     joins_by_table: dict[str, list[VerifiedJoin]] = {}
     for j in joins:
         joins_by_table.setdefault(j.left.split(".")[0], []).append(j)
@@ -359,7 +360,7 @@ def build_key_tables(profile: ProfileOutput, joins: list[VerifiedJoin]) -> "Sect
     return Section(heading="Key Tables", body="\n\n".join(blocks), source="verified")
 
 
-def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> "Section":
+def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> Section:
     lines: list[str] = []
     for t in profile.tables:
         for col in t.columns:
@@ -377,16 +378,7 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
                 lines.append(f"- `{t.name}.{col.name}`: {', '.join(sorted(vals))}")
     body = "\n".join(lines) if lines else "No low-cardinality categorical columns detected."
     return Section(heading="Dimensions", body=body, source="verified")
-
-
-# Imported at end to keep the module's public surface readable.
-from labrat.maze.document import Section  # noqa: E402
 ```
-
-> Note on the `Section` import placement: it is imported at the bottom only to keep the
-> dataclass/builders at the top readable; pyright resolves the forward-referenced return
-> annotations via `from __future__ import annotations`. If ruff/pyright object, move
-> `from labrat.maze.document import Section` to the top import block and drop the `# noqa`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -396,7 +388,7 @@ Expected: PASS (3 tests).
 - [ ] **Step 5: Full gate**
 
 Run: `uv run ruff format . && uv run ruff check . && uv run pyright && uv run pytest -q`
-Expected: clean + all green. (If the bottom import trips ruff E402/pyright, move it to the top import block per the note and re-run.)
+Expected: clean + all green.
 
 - [ ] **Step 6: Commit**
 
@@ -575,7 +567,7 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 **Interfaces:**
 - Consumes: `parse_document` (Task 1), `Section`, `ScentDoc`, `LLMFn` (from `labrat.agent.verifier`).
 - Produces:
-  - `async draft_semantics(skeleton: ScentDoc, profile: ProfileOutput, llm_fn: LLMFn) -> list[Section]` — returns sections tagged `source="draft"`.
+  - `async draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> list[Section]` — returns sections tagged `source="draft"`.
   - `merge_sections(verified: list[Section], drafted: list[Section]) -> list[Section]` — appends drafted sections whose heading does not collide (case-insensitive) with a verified heading.
 
 - [ ] **Step 1: Write the failing test**
@@ -586,7 +578,6 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 
 from __future__ import annotations
 
-from labrat.agent.tools.profile_dataset import _Output as ProfileOutput
 from labrat.maze.cartographer import draft_semantics, merge_sections
 from labrat.maze.document import ScentDoc, Section
 
@@ -607,8 +598,7 @@ async def test_draft_sections_are_tagged_draft() -> None:
         domain="sales",
         sections=[Section(heading="Key Tables", body="- verified facts", source="verified")],
     )
-    profile = ProfileOutput(database="sales", tables_total=0, tables_profiled=0)
-    drafted = await draft_semantics(skeleton, profile, _stub_llm)
+    drafted = await draft_semantics(skeleton, _stub_llm)
     by_heading = {s.heading: s for s in drafted}
     assert "Gotchas" in by_heading
     assert all(s.source == "draft" for s in drafted)
@@ -635,14 +625,8 @@ Expected: FAIL — `cannot import name 'draft_semantics'`.
 
 - [ ] **Step 3: Add to `src/labrat/maze/cartographer.py`**
 
-Add to the top import block:
-
-```python
-from labrat.agent.verifier import LLMFn
-from labrat.maze.document import ScentDoc, parse_document, render_document
-```
-
-(Then remove the bottom `from labrat.maze.document import Section` line and add `Section` to that top import: `from labrat.maze.document import ScentDoc, Section, parse_document, render_document`.)
+Add `from labrat.agent.verifier import LLMFn` to the top import block, and extend the
+existing document import to `from labrat.maze.document import ScentDoc, Section, parse_document, render_document`.
 
 Add the functions:
 
@@ -660,16 +644,14 @@ _SEMANTICS_INSTRUCTION = (
 )
 
 
-def _semantics_prompt(skeleton: ScentDoc, profile: ProfileOutput) -> str:
+def _semantics_prompt(skeleton: ScentDoc) -> str:
     facts = render_document(skeleton)
     return f"{_SEMANTICS_INSTRUCTION}\n\n--- VERIFIED FACTS ---\n{facts}\n--- END FACTS ---\n"
 
 
-async def draft_semantics(
-    skeleton: ScentDoc, profile: ProfileOutput, llm_fn: LLMFn
-) -> list[Section]:
+async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> list[Section]:
     """Single LLM pass: draft the interpretive sections, tagged Source: draft."""
-    raw = await llm_fn(_semantics_prompt(skeleton, profile))
+    raw = await llm_fn(_semantics_prompt(skeleton))
     parsed = parse_document(raw, domain="_draft")
     return [
         Section(heading=s.heading, body=s.body, source="draft")
@@ -890,7 +872,7 @@ async def generate_scent(
             sections=sections,
         )
         if with_semantics and llm_fn is not None:
-            drafted = await draft_semantics(doc, profile, llm_fn)
+            drafted = await draft_semantics(doc, llm_fn)
             doc = doc.model_copy(update={"sections": merge_sections(doc.sections, drafted)})
         docs.append(doc)
 
@@ -1126,6 +1108,6 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 
 **2. Placeholder scan:** No TBD/TODO/"similar to". Every code step has complete code; every run step has an exact command + expected result. The bottom-import note in Task 2 gives a concrete fallback, not a placeholder.
 
-**3. Type consistency:** `VerifiedJoin{left,right,match_rate,fanout}` consistent Tasks 2/3/5. `Section.source` (Task 1) used Tasks 2/4. `discover_joins(ctx, profile, *, database)` consistent Tasks 3/5. `draft_semantics(skeleton, profile, llm_fn)` / `merge_sections(verified, drafted)` consistent Tasks 4/5. `generate_scent(... ) -> list[ScentDoc]` / `write_docs(docs, out_dir) -> list[Path]` consistent Tasks 5/6. `ProfileOutput`/`VerifyJoinOutput` are the imported private `_Output` types, cast at every `execute` call site. `LLMFn` imported from `labrat.agent.verifier` in Tasks 4/5/6.
+**3. Type consistency:** `VerifiedJoin{left,right,match_rate,fanout}` consistent Tasks 2/3/5. `Section.source` (Task 1) used Tasks 2/4. `discover_joins(ctx, profile, *, database)` consistent Tasks 3/5. `draft_semantics(skeleton, llm_fn)` / `merge_sections(verified, drafted)` consistent Tasks 4/5. `generate_scent(... ) -> list[ScentDoc]` / `write_docs(docs, out_dir) -> list[Path]` consistent Tasks 5/6. `ProfileOutput`/`VerifyJoinOutput` are the imported private `_Output` types, cast at every `execute` call site. `LLMFn` imported from `labrat.agent.verifier` in Tasks 4/5/6.
 
 **Cross-task note:** the `Section` import location in `cartographer.py` is created at the bottom in Task 2 (with a documented fallback) and moved to the top import block in Task 4 when more `document` symbols are needed — Task 4 Step 3 states this explicitly.
