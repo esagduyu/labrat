@@ -8,9 +8,15 @@ profile_dataset + verify_join tools; never reads ground-truth artifacts.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import cast
+
 from pydantic import BaseModel
 
 from labrat.agent.tools.base import ToolContext
+from labrat.agent.tools.profile_dataset import (
+    ProfileDatasetTool,
+)
 from labrat.agent.tools.profile_dataset import (
     _Output as ProfileOutput,  # pyright: ignore[reportPrivateUsage]
 )
@@ -190,3 +196,75 @@ def merge_sections(verified: list[Section], drafted: list[Section]) -> list[Sect
     """Append drafted sections whose heading does not collide with a verified one."""
     taken = {s.heading.strip().lower() for s in verified}
     return list(verified) + [d for d in drafted if d.heading.strip().lower() not in taken]
+
+
+async def generate_scent(
+    *,
+    connections: dict[str, object],
+    catalogs: dict[str, object],
+    primary: str,
+    with_semantics: bool = False,
+    llm_fn: LLMFn | None = None,
+    table_budget: int = 40,
+    distinct_cap: int = 25,
+    relevance: dict[str, float] | None = None,
+) -> list[ScentDoc]:
+    """Generate one Scent doc per connection: a verified deterministic skeleton plus,
+    when ``with_semantics`` and ``llm_fn`` are given, an LLM-drafted semantics pass.
+    """
+    profiler = ProfileDatasetTool()
+    docs: list[ScentDoc] = []
+
+    for name, conn in connections.items():
+        ctx = ToolContext(connections=connections, catalogs=catalogs, primary=primary)
+        profile = await profiler.execute(
+            ctx, profiler.input_model(database=name, sample_rows=0, max_tables=10_000)
+        )
+
+        # budget: rank by relevance (when supplied) else row count, keep top N
+        if len(profile.tables) > table_budget:
+            kept = sorted(
+                profile.tables,
+                key=lambda t: relevance.get(t.name, 0.0) if relevance else (t.row_count or 0),
+                reverse=True,
+            )[:table_budget]
+            omitted = len(profile.tables) - len(kept)
+            profile = profile.model_copy(
+                update={
+                    "tables": kept,
+                    "tables_profiled": len(kept),
+                    "note": f"Budgeted to top {table_budget} of {profile.tables_total} "
+                    f"tables; {omitted} omitted.",
+                }
+            )
+
+        joins = await discover_joins(ctx, profile, database=name)
+        sections = [
+            build_quick_reference(profile),
+            build_key_tables(profile, joins),
+            build_dimensions(profile, cast(Connection, conn), cap=distinct_cap),
+        ]
+        doc = ScentDoc(
+            domain=name,
+            kind="scent",
+            tables=[t.name for t in profile.tables],
+            confidence="draft",
+            sections=sections,
+        )
+        if with_semantics and llm_fn is not None:
+            drafted = await draft_semantics(doc, llm_fn)
+            doc = doc.model_copy(update={"sections": merge_sections(doc.sections, drafted)})
+        docs.append(doc)
+
+    return docs
+
+
+def write_docs(docs: list[ScentDoc], out_dir: Path) -> list[Path]:
+    """Write each doc to ``<out_dir>/<domain>.md``; returns the paths written."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for doc in docs:
+        path = out_dir / f"{doc.domain}.md"
+        path.write_text(render_document(doc), encoding="utf-8")
+        paths.append(path)
+    return paths
