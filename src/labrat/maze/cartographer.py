@@ -15,8 +15,9 @@ from labrat.agent.tools.profile_dataset import (
     _Output as ProfileOutput,  # pyright: ignore[reportPrivateUsage]
 )
 from labrat.agent.tools.verify_join import VerifyJoinTool
+from labrat.agent.verifier import LLMFn
 from labrat.db.base import Connection
-from labrat.maze.document import Section
+from labrat.maze.document import ScentDoc, Section, parse_document, render_document
 
 _STRINGY = ("CHAR", "TEXT", "STRING", "VARCHAR")
 
@@ -154,3 +155,38 @@ async def discover_joins(
                 )
             )
     return joins
+
+
+_SEMANTICS_INSTRUCTION = (
+    "You are a senior data analyst writing a reference doc for an LLM data agent.\n"
+    "The VERIFIED FACTS below are mechanically confirmed ground truth — DO NOT alter, "
+    "repeat, or contradict them. Write ONLY the interpretive sections a senior analyst "
+    "would add: ## Gotchas (wrong-answer modes, dirty-data warnings), ## Best Practices "
+    "(canonical metric definitions, preferred columns), and ## Cross-References. Use short, "
+    "retrieval-oriented bullets and routing-trigger phrasing. If you are unsure about a "
+    "business rule, say so rather than invent. Output GitHub-flavored markdown with ## "
+    "headings only; do not emit a ## Quick Reference, ## Dimensions, or ## Key Tables "
+    "section (those are already verified)."
+)
+
+
+def _semantics_prompt(skeleton: ScentDoc) -> str:
+    facts = render_document(skeleton)
+    return f"{_SEMANTICS_INSTRUCTION}\n\n--- VERIFIED FACTS ---\n{facts}\n--- END FACTS ---\n"
+
+
+async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> list[Section]:
+    """Single LLM pass: draft the interpretive sections, tagged Source: draft."""
+    raw = await llm_fn(_semantics_prompt(skeleton))
+    parsed = parse_document(raw, domain="_draft")
+    return [
+        Section(heading=s.heading, body=s.body, source="draft")
+        for s in parsed.sections
+        if s.heading
+    ]
+
+
+def merge_sections(verified: list[Section], drafted: list[Section]) -> list[Section]:
+    """Append drafted sections whose heading does not collide with a verified one."""
+    taken = {s.heading.strip().lower() for s in verified}
+    return list(verified) + [d for d in drafted if d.heading.strip().lower() not in taken]
