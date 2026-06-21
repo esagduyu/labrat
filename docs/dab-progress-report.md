@@ -554,6 +554,31 @@ The three candidate architectures for Phase 4 (documented in `decisions.md`): MC
 
 ---
 
+## Phase 6 — GPT‑5.5 via ChatGPT subscription: an honest experiment (2026-06-20 → 21)
+
+We built a native `CodexSubscriptionProvider` (Responses API at `chatgpt.com/backend-api/codex/responses`, reusing the Codex CLI's `~/.codex/auth.json`) so LabRat's *own* AgentLoop — verifier included — could run on **GPT‑5.5**, which is subscription-only (no metered API). The goal: measure GPT‑5.5 vs Sonnet, measure the verifier's value, and stress the tool layer on a second model. The experiment ran its course and answered its questions; the honest summary is below. (Provider design + shipped commits: memory `project_codex_subscription_provider`; the provider is the personal/dev/benchmark path, with the metered `openai` provider as the distributable one.)
+
+### Accuracy: GPT‑5.5 ≈ Sonnet (slightly behind on the subset)
+On the 5 DuckDB+SQLite datasets (n=5, `labrat-agent` driver), GPT‑5.5 stratified to **~49%** vs Sonnet's ~53% on the same queries — **not a free win**. Different error profile: GPT‑5.5 is markedly better on deps_dev_v1 (50% vs Sonnet's 10% — dependency-graph traversal) but worse on stockindex and github_repos. music_brainz stays low on both (~20%) — the answer-from-memory failure is model-independent (force-query prompt rule still needed). A full 54-query GPT‑5.5 leaderboard number was **not** pursued — see "rate limit" below.
+
+### Verifier ablation: no benefit on GPT‑5.5
+Verify-OFF vs verify-ON on the subset (n=5) came out **49.3% vs 49.1% — a −0.2pp dead heat.** The opt-in LLM-as-judge verifier buys zero accuracy here for extra tokens. It does **not** reproduce Anthropic's +6% adversarial-review result because ours is a "does this answer address the question?" *sufficiency* gate, not a full adversarial review — and it cannot catch a *wrong-but-plausible* answer (e.g. the stockindex dirty-date miss). **Decision: keep the verifier opt-in / default-off; do not enable it for GPT‑5.5.** External evidence (Anthropic's +6% at +32% tokens / +72% latency) already justified opt-in-default-off; our own ablation confirms it's not worth turning on for this workload.
+
+### Token economics & prompt caching (the most reusable finding)
+We added per-trial token capture (the Responses `response.completed.usage` block → `TrialResult.meta`). What it revealed:
+- **One DAB trial is enormous: ~625K input tokens** (≈99% re-sent context, ~5K output), over ~18 turns — because the agent loop re-sends the system prompt + all 13 tool schemas + the whole growing history (incl. a 2.5–4K-token `profile_dataset` blob) on *every* turn. A ~414-trial run exhausts the subscription rate limit (`plan_type: prolite`; the 429 body carries `resets_in_seconds`).
+- **Prompt caching is automatic on the Responses API** (caches the longest stable prefix). Our measured hit rate was **~40%** — far below Sonnet-via-claude-CLI's **93%**.
+- We chased the gap: research named *dropping reasoning items* as "the top cause of cache misses" for reasoning models, so we shipped **reasoning-item passback** (capture each encrypted `reasoning` item, re-emit it before its function_call). **It's verified working (the codex endpoint accepts reasoning items — no 400) but it barely moved the rate (~40% → ~41%, confounded by trial length).**
+- **The real bottleneck is cache TTL eviction, not prefix instability.** Our trials run ~18 turns × ~80s ≈ **20+ minutes wall-clock**, far past the codex cache's 5–10-min in-memory window — so mid-trial the cache evicts and a perfect prefix has nothing to hit. We **cannot extend retention**: `prompt_cache_retention: "24h"` is rejected by the codex endpoint with HTTP 400 ("Unsupported parameter"). So the lever for better caching is **shorter/faster trials** (the turn cap we built + history pruning + a leaner `profile_dataset`), not more prefix work.
+
+### Rate limit: the subscription path is benchmark-constrained
+GPT‑5.5 is subscription-only, so a full 270-trial run is bound by the ChatGPT rate limit. Even on the upgraded (~$100/mo `prolite`) tier, a single overnight ~414-trial attempt hit a hard `429` and didn't recover for hours. A self-healing watchdog (`scripts/dab_codex_{tick,loop,finish}.sh`) trickles through resets, but **full GPT‑5.5 benchmarking on the subscription is impractical** — keep Sonnet (Max-plan, claude-mcp) as the full-benchmark path.
+
+### Net conclusion
+GPT‑5.5 is **not a free win** (≈ Sonnet), the **verifier doesn't help**, and the **subscription path is rate- and cache-constrained**. The experiment's lasting value is model-agnostic: real per-trial token/usage capture, the **stockindex dirty-date grounding case** (the poster child for the Scent layer — see `FEATURE_ROADMAP.md` #26b), and a set of token-efficiency levers. If chasing caching further, the path is shorter trials; given GPT‑5.5 ≈ Sonnet, that energy is better spent on the grounding/Scent layer.
+
+---
+
 ## Gotchas and operational notes
 
 **Local repo has 5 unofficial extras.** `~/repos/DataAgentBench` has 17 directories, not 12. The extras (`civic_unstructured`, `cve`, `imdb`, `krama`, `usaspending`) are not in the official benchmark and must not be included in official runs.
