@@ -14,11 +14,14 @@ from pydantic import BaseModel
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
 _H2_RE = re.compile(r"^##\s+(.*)$", re.MULTILINE)
+_RECOGNIZED_SOURCES = {"verified", "draft", "human"}
+_SOURCE_LINE_RE = re.compile(r"^\*\*Source:\*\*\s*(\w+)\b.*$")
 
 
 class Section(BaseModel):
     heading: str  # "" for the preamble before the first H2
     body: str
+    source: str = "human"  # "verified" | "draft" | "human"; provenance for #26b cartographer
 
 
 class ScentDoc(BaseModel):
@@ -36,17 +39,39 @@ class ScentDoc(BaseModel):
         return None
 
 
+def _extract_source(body: str) -> tuple[str, str]:
+    """Lift a leading ``**Source:** <token>`` line into a source value.
+
+    If the first non-empty line of ``body`` is a Source marker, return
+    (token-or-"human", body-without-that-line). Otherwise ("human", body unchanged).
+    """
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() == "":
+            continue
+        m = _SOURCE_LINE_RE.match(line.strip())
+        if m is None:
+            return "human", body  # first real line is not a marker
+        token = m.group(1).lower()
+        source = token if token in _RECOGNIZED_SOURCES else "human"
+        rest = "\n".join(lines[:i] + lines[i + 1 :]).strip()
+        return source, rest
+    return "human", body
+
+
 def _split_sections(body: str) -> list[Section]:
     """Split a markdown body on H2 (##) headings. Text before the first H2 is the preamble."""
     matches = list(_H2_RE.finditer(body))
     sections: list[Section] = []
     preamble = body[: matches[0].start()] if matches else body
     if preamble.strip():
-        sections.append(Section(heading="", body=preamble.strip()))
+        src, clean = _extract_source(preamble.strip())
+        sections.append(Section(heading="", body=clean, source=src))
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        sections.append(Section(heading=m.group(1).strip(), body=body[start:end].strip()))
+        src, clean = _extract_source(body[start:end].strip())
+        sections.append(Section(heading=m.group(1).strip(), body=clean, source=src))
     return sections
 
 
@@ -78,3 +103,29 @@ def parse_document(text: str, *, domain: str, scope: str = "") -> ScentDoc:
         scope=scope,
         sections=_split_sections(body),
     )
+
+
+def render_document(doc: ScentDoc) -> str:
+    """Serialize a ScentDoc back to markdown (inverse of parse_document).
+
+    Emits YAML frontmatter then each section as ``## heading`` + a ``**Source:**``
+    marker line + the body. A section with an empty heading (preamble) is emitted
+    body-only without a marker.
+    """
+    fm: dict[str, Any] = {"kind": doc.kind, "domain": doc.domain}
+    if doc.tables:
+        fm["tables"] = doc.tables
+    if doc.confidence is not None:
+        fm["confidence"] = doc.confidence
+    front = yaml.safe_dump(fm, sort_keys=False).strip()
+
+    parts: list[str] = [f"---\n{front}\n---", ""]
+    for s in doc.sections:
+        if s.heading:
+            parts.append(f"## {s.heading}")
+            parts.append(f"**Source:** {s.source}")
+            parts.append("")
+        if s.body:
+            parts.append(s.body)
+        parts.append("")
+    return "\n".join(parts).rstrip() + "\n"
