@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.profile_dataset import (
     _Output as ProfileOutput,  # pyright: ignore[reportPrivateUsage]
 )
+from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.db.base import Connection
 from labrat.maze.document import Section
 
@@ -79,3 +81,54 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
                 lines.append(f"- `{t.name}.{col.name}`: {', '.join(sorted(vals))}")
     body = "\n".join(lines) if lines else "No low-cardinality categorical columns detected."
     return Section(heading="Dimensions", body=body, source="verified")
+
+
+async def discover_joins(
+    ctx: ToolContext, profile: ProfileOutput, *, database: str
+) -> list[VerifiedJoin]:
+    """Find candidate joins by declared FKs + an ``<base>_id`` name heuristic, then
+    mechanically verify each with verify_join. Keeps only ``likely_valid`` joins and
+    excludes self-joins.
+    """
+    by_name = {t.name.lower(): t for t in profile.tables}
+    candidates: list[tuple[str, str, str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+
+    for t in profile.tables:
+        for col in t.columns:
+            cname = col.name.lower()
+            if not cname.endswith("_id"):
+                continue
+            base = cname[:-3]
+            for rt_name in (base, base + "s"):
+                rt = by_name.get(rt_name)
+                if rt is None or rt.name == t.name:  # missing table or self-join → skip
+                    continue
+                rt_cols = {rc.name.lower(): rc.name for rc in rt.columns}
+                for cand in (cname, "id"):
+                    if cand in rt_cols:
+                        key = (t.name, col.name, rt.name, rt_cols[cand])
+                        if key not in seen:
+                            seen.add(key)
+                            candidates.append(key)
+                        break
+
+    tool = VerifyJoinTool()
+    joins: list[VerifiedJoin] = []
+    for lt, lc, rt, rc in candidates:
+        verdict = await tool.execute(
+            ctx,
+            tool.input_model(
+                left_table=lt, left_column=lc, right_table=rt, right_column=rc, database=database
+            ),
+        )
+        if verdict.likely_valid:
+            joins.append(
+                VerifiedJoin(
+                    left=f"{lt}.{lc}",
+                    right=f"{rt}.{rc}",
+                    match_rate=verdict.match_rate,
+                    fanout=verdict.max_right_rows_per_key,
+                )
+            )
+    return joins
