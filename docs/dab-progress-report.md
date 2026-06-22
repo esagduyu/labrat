@@ -579,6 +579,20 @@ GPT‑5.5 is **not a free win** (≈ Sonnet), the **verifier doesn't help**, and
 
 ---
 
+## Phase 6b — GPT‑5.5 re-run after the Scent + workflow builds (2026-06-21)
+
+After shipping #26a/#26b (Scent) and #30 (the workflow skill + `run_sql` self-repair), re-ran GPT‑5.5 (`labrat-agent` driver, codex provider, reasoning medium) on the same 5 DuckDB/SQLite datasets, **unbounded turns, n=2**.
+
+**Score: 61.8% (21/34)** — up from Phase 6's ~49%. Per-dataset: deps_dev_v1 50% · github_repos 50% · music_brainz_20k 33% · **stockindex 100%** (↑↑ — Phase 6 mostly failed this dirty-date set) · stockmarket 70%. Caveat: n=2 is noisy, a dev measurement — the official leaderboard number stays Sonnet/claude-mcp **51.38%**. Note this path uses the DAB driver's *own* prompt (`_build_labrat_agent_system_prompt`), so it does **not** exercise #30's SOP/workflow tool; #30's value lives in the TUI/`run_task` path.
+
+**Turn-cap = a clean NEGATIVE result.** Trying `--max-turns 12` to chase prompt caching scored **0%** — the agent spends ~18–30 turns (median 26 tool calls, max 69) profiling/querying and gets starved of its final-answer turn → empty/rushed answers. Unbounded recovers to ~62% **and caches better** (44% vs the capped run's 18%): longer trials reuse the growing prefix more, so capping for cache is self-defeating. **Drop the turn-cap-for-cache lever.** (Confirmed against Phase 6: the codex cache is TTL/eviction-bound, not turn-cap-tunable.)
+
+**Rate limit confirmed (Phase 6's wall).** One heavy unbounded subset (~23M input tokens) exhausted the ChatGPT subscription limit mid-run (instant 0.0s `agent_error` on every subsequent call); resumed cleanly after reset. Subscription path stays benchmark-constrained — Sonnet/Max-plan remains the full-run path.
+
+**Cache fix shipped (commit `0bc1427`).** Per the [OpenAI prompt-caching 201 guide](https://developers.openai.com/cookbook/examples/prompt_caching_201): the provider already did `prompt_cache_key` + reasoning-item passback, but the key was a **fresh per-trial uuid** — so the n>1 trials of one task (byte-identical prompt prefix) routed to different machines and re-paid the cold prefix every trial. Now `build_provider` threads a `cache_key` and the DAB driver passes **`task.id`**, so a task's repeated trials reuse the same warm cache (sequential DAB trials run ~7 req/min, well under the guide's ~15-RPM/key scatter threshold). Routing-only; accuracy unchanged. Baseline (old per-trial key) deps_dev_v1 cache ≈ **36.3%**; the new-key A/B is being measured. (Also audited clean: no dynamic timestamp/id in the early prefix. Remaining untried lever: avoid context-window truncation on the longest trials via history pruning / a leaner `profile_dataset`.)
+
+---
+
 ## Gotchas and operational notes
 
 **Local repo has 5 unofficial extras.** `~/repos/DataAgentBench` has 17 directories, not 12. The extras (`civic_unstructured`, `cve`, `imdb`, `krama`, `usaspending`) are not in the official benchmark and must not be included in official runs.
