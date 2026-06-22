@@ -5,7 +5,7 @@
 **LabRat is a terminal-native AI data agent — and the start of "Claude Code for data scientists."** Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> **Status: feature-complete v0 alpha.** 578 tests passing, end-to-end against DuckDB. On the public [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) leaderboard at **51.4%** (rank #10/18) and **80%** on dbt Labs' [ADE-bench](https://github.com/dbt-labs/ade-bench) — see [Benchmark records](#benchmark-records).
+> **Status: feature-complete v0 alpha.** 659 tests passing, end-to-end against DuckDB. On the public [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) leaderboard at **51.4%** (rank #10/18) and **80%** on dbt Labs' [ADE-bench](https://github.com/dbt-labs/ade-bench) — see [Benchmark records](#benchmark-records).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -74,7 +74,7 @@ LabRat is feature-complete for v0 alpha.
 |---|---|---|
 | 7 warehouse adapters | ✅ | DuckDB, Postgres, Snowflake, BigQuery, Redshift, Trino, MySQL |
 | 4 LLM providers | ✅ | Anthropic API · Claude Code CLI (Mac OAuth, Max plan) · OpenAI-compatible · GPT-5.5 via ChatGPT subscription (Codex Responses API — personal/dev path) |
-| Agent tool loop | ✅ | 18 tools: `profile_dataset` grounding, `link_schema` / `verify_join`, schema exploration, SQL execution, safety gates (mutation + statement-stacking refusal), multi-DB routing, `attach_database` (cross-DB JOINs), `load_file` (CSV/TSV/JSON/Parquet), `load_mongo_collection`, opt-in LLM-as-judge verifier, configurable turn/tool-call caps |
+| Agent tool loop | ✅ | 20 tools: `profile_dataset` grounding, `link_schema` / `verify_join`, schema exploration, SQL execution, safety gates (mutation + statement-stacking refusal), multi-DB routing, `attach_database` (cross-DB JOINs), `load_file` (CSV/TSV/JSON/Parquet), `load_mongo_collection`, `search_reference_docs` (Scent retrieval), `workflow` (9-step data-analysis SOP), opt-in LLM-as-judge verifier, configurable turn/tool-call caps |
 | MCP server | ✅ | `python -m labrat.mcp.server` mounts the tool registry over MCP stdio — drop into Claude Code, Codex, Cursor, OpenCode, or any MCP host |
 | Query history | ✅ | always-on, PII-redacted JSONL per profile |
 | Personal context engine | ✅ | table relevance scoring (frequency × recency), LLM-generated descriptions |
@@ -86,7 +86,7 @@ LabRat is feature-complete for v0 alpha.
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts · HTML export · Audit log | ✅ | unicode + image-protocol charts; provenance-rich HTML findings; JSONL event sourcing |
 
-**Test coverage:** 578 tests (LLM-gated tests skipped without `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
+**Test coverage:** 659 tests (LLM-gated tests skipped without `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
 
 ## Architecture
 
@@ -137,13 +137,13 @@ LabRat explores your schema, samples data, consults your history and memories, s
 
 v0 alpha is feature-complete. The path forward follows the three pillars.
 
-**What this phase taught us — the lever is grounding, not the model.** A GPT‑5.5 experiment ([write-up](docs/dab-progress-report.md)) found GPT‑5.5 ≈ Sonnet (not a free win) and the opt-in verifier gave **no measured accuracy benefit** on DAB. Meanwhile the failures we root-caused were **ungrounded data handling** (e.g. a query that fails only because a `Date` column is dirty mixed-format text) — fixable for *any* model by a one-line reference-doc note. That, plus Anthropic's [21%→95% result](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude) and Altimate's leaderboard-topping AutoContext, points the roadmap squarely at the knowledge/grounding layer.
+**What this phase taught us — the lever is grounding, not the model.** A GPT‑5.5 experiment ([write-up](docs/dab-progress-report.md)) found GPT‑5.5 ≈ Sonnet (not a free win) and the opt-in verifier gave **no measured accuracy benefit** on DAB. Meanwhile the failures we root-caused were **ungrounded data handling** (e.g. a query that fails only because a `Date` column is dirty mixed-format text) — fixable for *any* model by a one-line reference-doc note. That, plus Anthropic's [21%→95% result](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude) and Altimate's leaderboard-topping AutoContext, points the roadmap squarely at the knowledge/grounding layer. **The grounding layer is now shipped.** The Cartographer pre-pass (Scent #26a/#26b) and benchmark-safe prompt levers are built and ablated: Cartographer alone **+8pp on Sonnet** (21%→29% on the tuning subset); levers **+8pp marginal** on top; stacked **21%→38%** (+17pp). The mechanism is provider-agnostic and proven — GPT‑5.5 consults `search_reference_docs` from the traces — but the effect is provider-dependent: +8pp on Sonnet, neutral on GPT‑5.5 (which already self-grounds exhaustively). The leaderboard path is Sonnet + Cartographer + levers.
 
-**Pillar 1 — find the cheese reliably (within-task reasoning).** Largely shipped: grounding profiler, schema-linking, mechanically-verified joins, the opt-in verifier. Remaining work is *cheap, grounding-shaped* prompt levers (a force-query rule for answer-from-memory failures; a dirty-data/date-parsing anti-pattern bullet — both proven needed this session), ablated against the smoke set — not more model or reasoning machinery.
+**Pillar 1 — find the cheese reliably (within-task reasoning).** Shipped: grounding profiler, schema-linking, mechanically-verified joins, the opt-in verifier, benchmark-safe prompt levers (force-query, SQL self-repair via `error_category`/`hint`, push-aggregation-into-SQL — ablated at **+8pp marginal** on the tuning subset), and a `workflow` tool encoding a 9-step data-analysis SOP.
 
 **Pillar 2 — spread the cheese (the workflow product).** The **Cheese** share artifact: every answer carries its SQL + reasoning, saveable and exportable as a reviewable unit; a provenance footer on every result; notebook (marimo) integration. This is the Figma-style adoption wedge — what makes LabRat a *workflow tool*, not a one-shot.
 
-**Pillar 3 — map the Rat Maze (the knowledge moat — the priority).** A scoped, optional **Scent** layer: reference docs written for LLM retrieval (`search_reference_docs` tool), an **auto-cartographer** that explores a new warehouse and drafts a curated, GT-firewalled grounding doc (structure verified, semantics flagged for a human to own), reusable analysis recipes, and a correction-harvesting loop that keeps it fresh — scoped per-user and per-team. This is the **21%→95% lever and the long-term differentiator**; the design (`FEATURE_ROADMAP.md` #26a/#26b) is locked and is the focus of the next build session.
+**Pillar 3 — map the Rat Maze (the knowledge moat — the priority).** The **Scent** layer and **Cartographer** are now shipped. `search_reference_docs` (#26a) gives the agent section-level lexical retrieval over reference docs. The **Cartographer** (#26b) is a deterministic, GT-firewalled first-contact pre-pass (`cartograph_prepass`) that explores a warehouse and writes Scent docs — table grain, columns, `verify_join`-confirmed joins, observed dimension values; structure is deterministic, an optional LLM "semantics" pass is flagged for a human to own. Wired into DAB via `--agent-cartograph` flag. The Cartographer is our brand; "AutoContext" is Altimate's (Altimate's AutoContext PR #53 set the precedent on the leaderboard at ~+8pp). Remaining Pillar 3 work: correction-harvesting loop, reusable analysis recipes, and the first-connect TUI path as a second Cartographer caller.
 
 **Foundations:** extract `labrat-core` as an installable embeddable package; testcontainers integration tests for the live warehouse adapters; v1 GA after a week of dogfooding.
 
@@ -158,7 +158,7 @@ AGPL-3.0. Use, modify, and redistribute LabRat for any purpose, including commer
 ## Development
 
 ```bash
-uv run pytest                        # full test suite (578 tests)
+uv run pytest                        # full test suite (659 tests)
 uv run ruff check . && uv run ruff format --check . && uv run pyright   # lint + types
 
 # Evals (see CLAUDE.md for the full matrix)

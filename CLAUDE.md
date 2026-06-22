@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Test
-uv run pytest                                    # full suite (~578 tests)
+uv run pytest                                    # full suite (~659 tests)
 uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
@@ -43,19 +43,21 @@ LLM-gated tests are skipped unless `ANTHROPIC_API_KEY` or `LABRAT_RUN_LLM_TESTS=
 
 ### Agent loop (`src/labrat/agent/`)
 
-`AgentLoop` in `loop.py` drives tool-use round-trips. It accepts a `ToolRegistry` and an LLM provider, sends messages, receives `TextBlock | ToolUseBlock` responses, dispatches tools, and feeds `ToolResultBlock`s back until the model stops calling tools. Optional `max_turns` and `max_tool_calls` cap the loop (both default `None` = unbounded). After `run()`, `loop.turns_used` and `loop.tool_calls_used` report what actually fired.
+`AgentLoop` in `loop.py` drives tool-use round-trips. It accepts a `ToolRegistry` and an LLM provider, sends messages, receives `TextBlock | ToolUseBlock` responses, dispatches tools, and feeds `ToolResultBlock`s back until the model stops calling tools. Optional `max_turns` and `max_tool_calls` cap the loop (both default `None` = unbounded). After `run()`, `loop.turns_used` and `loop.tool_calls_used` report what actually fired. `on_tool_call` (optional callback `(name, input, ok, output, latency_ms) → None`) fires per dispatch — the DAB `labrat-agent` path uses it to write per-call traces to `agent_tool_calls.jsonl`.
 
 **Verifier loop (opt-in):** at the would-be-final turn (no tool calls), an optional `verifier` judges whether the answer addresses the question; if "insufficient" the feedback is injected as a new user turn and the loop continues — bounded by `max_verify_rounds` (default 2) AND the remaining turn budget. **Fail-open** (an unparseable verdict counts as sufficient, so it can never trap the loop). Types live in `verifier.py` (`Verdict`, `Verifier`, `LLMVerifier`, `parse_verdict`, `provider_llm_fn`), mirroring `validations.ValidationChecker`. `provider_llm_fn` adapts the loop's own `ModelProvider` (same model + billing). Exposed via `run_agent_task(verify=False)` — default off (costs an extra LLM call per would-be-final answer). Status goes to `on_status`, separate from `on_text` so it never corrupts `final_text`. (Measured no-benefit on DAB GPT-5.5 — see `docs/dab-progress-report.md` §Phase 6.)
 
-`run_agent_task` in `runner.py` is the in-process wrapper turning a one-shot prompt into `AgentTaskResult(final_text, tool_calls, latency_seconds)`. Used by the DAB `labrat-agent` driver, `scripts/run_task.py`, and (eventually) the TUI chat path. Standard data tools come from `data_tools.py::build_data_tools_registry()` — `profile_dataset`, `list_tables`, `describe_table`, `search_columns`, `link_schema`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `verify_join`, `attach_database`, `load_file`, `load_mongo_collection`.
+`run_agent_task` in `runner.py` is the in-process wrapper turning a one-shot prompt into `AgentTaskResult(final_text, tool_calls, latency_seconds)`. Used by the DAB `labrat-agent` driver, `scripts/run_task.py`, and (eventually) the TUI chat path. Standard data tools come from `data_tools.py::build_data_tools_registry()` — `profile_dataset`, `list_tables`, `describe_table`, `search_columns`, `link_schema`, `sample_rows`, `column_stats`, `run_sql`, `explain_sql`, `verify_join`, `attach_database`, `load_file`, `load_mongo_collection`, `search_reference_docs`, `workflow`.
 
 Every tool subclasses `Tool[InputT]` (`tools/base.py`), declaring `name`/`description`/`input_model` (Pydantic). The registry validates inputs, calls `execute(ctx, input)`, wraps results in `DispatchResult`. `ToolContext` supports **multi-DB construction** — `connections: dict[str, Connection]` + `catalogs: dict[str, object]` + `primary: str` (single-DB `connection=`/`catalog=` kept as a back-compat shim). Tools with an optional `database: str | None` field route via `ctx.connections[args.database or ctx.primary]`.
 
-Current tools (18): `build_data_tools_registry()` registers the 13 above; the TUI adds 5 — `draft_sql`/`create_chart` (callbacks) and `run_validations`/`recall_memories`/`search_query_history` (profile-keyed). `link_schema` (NL→relevant-tables-only) and `verify_join` (probe a join's match-rate + fan-out before trusting it) are the FEATURE_ROADMAP #25 grounding tools — pure/deterministic, no LLM call.
+Current tools (20): `build_data_tools_registry()` registers the 15 above; the TUI adds 5 — `draft_sql`/`create_chart` (callbacks) and `run_validations`/`recall_memories`/`search_query_history` (profile-keyed). `link_schema` (NL→relevant-tables-only) and `verify_join` (probe a join's match-rate + fan-out before trusting it) are the FEATURE_ROADMAP #25 grounding tools — pure/deterministic, no LLM call. `search_reference_docs` (Scent retrieval, #26a SHIPPED) does section-level lexical lookup over reference docs. `workflow` (#30 SHIPPED) is a 9-step data-analysis SOP tool.
 
 `profile_dataset` (`tools/profile_dataset.py`) is a one-call profiler: per table, columns+types, row count, FKs, and a few sample rows. Size-budgeted via `max_tables`; reads structure from `ctx.catalogs[db]` and samples live rows from the connection (with a `COUNT(*)` fallback because DuckDB introspection leaves `Table.row_count` `None`). Requires the catalog populated. `load_file` loads CSV/TSV/JSON/Parquet into the DuckDB session as a TEMP table (works against a read-only primary; DuckDB-only, backed by `DuckDBConnection.load_file()`).
 
 The system prompt (`agent/prompts/system_base.md`) is **prescriptive**: profile first → numbered plan → execute step by step, reading each result → verify the answer addresses the question before finishing.
+
+**Cartographer / Scent (#26b SHIPPED):** `maze/cartographer.py` provides `generate_scent` (per-DB exploration) and `cartograph_prepass(...)` (idempotent first-contact pre-pass: structure-only, GT-firewalled, deterministic; optional LLM "semantics" pass left for a human to own). Dual store: project (`./labrat_maze/scent`) + user (`~/.labrat/maze/<profile>/scent`). DAB is the first consumer; the TUI first-connect path is planned as the second.
 
 ### Database layer (`src/labrat/db/`)
 
@@ -77,6 +79,7 @@ Built on Textual. `app.py` is the root `App`. Main screen is a 3-pane layout: ch
 
 | Package | Purpose |
 |---------|---------|
+| `maze/` | Scent grounding layer: `cartographer.py` (Cartographer pre-pass, `generate_scent`, `cartograph_prepass`); `search_reference_docs` tool retrieves from the store (#26a/#26b SHIPPED) |
 | `catalog/` | External catalog adapters: `DbtLoader` (manifest.json/schema.yml) and `McpCatalogAdapter` |
 | `context_engine/` | Personal domain: table relevance scoring (frequency × recency), `ContextBundle`, `ContextAnalyzer` |
 | `history/` | Always-on `QueryHistoryLog` (JSONL, PII-redacted). Singleton in `run_sql.py`, monkeypatched in tests |
@@ -103,6 +106,8 @@ Current score (claude-sonnet-4-6): **80% overall** (48/60) — 100% easy · 80% 
 [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 12 datasets / 54 queries / 4 DBMSes (DuckDB, SQLite, Postgres, Mongo). **LabRat is on the leaderboard at a stratified Pass@1 of 51.38%** (rank #10/18, claude-mcp, pass@5, claude-sonnet-4-6, accepted 2026-06-18). **Never cite 58.0% (contaminated) or 50.5% (interim recompute) — 51.38% is the official figure.**
 
 Three drivers via `--driver`: `raw-bash` (baseline), `labrat-agent` (`AgentLoop` + tools, any provider incl. `--agent-provider codex` for GPT‑5.5), `claude-mcp` (recommended full-benchmark path, Max-plan). **Two invariants that must not regress:** (1) **always `--datasets <12 official>`** — the suite enumerates 104 local queries incl. 5 unofficial extras; an unfiltered run pollutes the aggregate; (2) the **claude-mcp sandbox gate** (MCP-only `--allowedTools`, isolated `cwd`, `_detect_contamination` backstop) — it closes the Phase 5 answer-key-leak path by construction.
+
+`--agent-cartograph` (off by default): runs the deterministic Cartographer pre-pass before each trial (both `labrat-agent` and `claude-mcp` drivers); hermetic HOME; GT-firewalled by construction. The `labrat-agent` path writes per-call tool traces to `agent_tool_calls.jsonl` (schema-identical to `claude-mcp`'s `mcp_tool_calls.jsonl`, shared `append_tool_trace` writer); a submission is trace-valid on either provider. Feature-by-feature parity matrix: **`docs/dab-driver-parity.md`**. Per-trial wall-clock timeout via `asyncio.wait_for` → `infra:timeout` on expiry.
 
 Full reference (drivers, env.py/suite.py internals, sandbox-gate detail, scoring math, resume safety, codex/GPT‑5.5, and all DAB run gotchas): **`docs/dab-integration.md`**. Results/history/conclusions: **`docs/dab-progress-report.md`**. Memory: `project_dab_phase5_submission`, `project_dab_contamination`.
 

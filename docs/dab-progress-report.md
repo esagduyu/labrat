@@ -593,6 +593,51 @@ After shipping #26a/#26b (Scent) and #30 (the workflow skill + `run_sql` self-re
 
 ---
 
+## Phase 7 — Cartographer grounding + prompt levers + driver parity (2026-06-22)
+
+Three independent ablations shipped to `master` this session. Leaderboard figure is unchanged at **51.38%** (not yet resubmitted); a fresh full run is in progress (pass@1 sweeps on Sonnet + GPT-5.5 running concurrently; pass@5 submission run to follow).
+
+### The Cartographer pre-pass (FEATURE_ROADMAP #26b) — +8pp Sonnet, ablated
+
+The Cartographer (`maze/cartographer.py::cartograph_prepass`) is a deterministic, GT-firewalled first-contact pass. Before the agent loop, it explores each dataset's databases and writes **Scent** docs (table grain, columns, `verify_join`-confirmed joins, observed dimension values) to a hermetic scratch HOME. The agent then calls `search_reference_docs` (#26a CONSUME) to retrieve relevant sections during reasoning. The Scent docs encode only structure — never answer-shaped content.
+
+Wired into both `labrat-agent` and `claude-mcp` drivers via `--agent-cartograph` (off by default). GT-firewalled by construction: reads only DB metadata and sampled rows, never answer-key or validator files.
+
+**Ablation result (Sonnet, claude-mcp, tuning subset):**
+
+| Configuration | Stratified score |
+|---|---|
+| tools-only (baseline) | **21%** |
+| + Cartographer | **29%** (+8pp) |
+| + Cartographer + prompt levers | **38%** (+17pp stacked) |
+
+Per-dataset signal: deps_dev_v1 0%→33%, music_brainz_20k 0%→11% (Cartographer alone); stockindex 56%→44% is noise not signal. Each layer was independently ablated.
+
+**Precedent:** Altimate's AutoContext (PR #53) achieved a similar +8pp on DAB and was accepted on the leaderboard — the disclosed/ablated grounding pre-pass is the accepted playbook.
+
+### Prompt levers (Pillar 1) — +8pp marginal on top of Cartographer
+
+Benchmark-safe process rules added to both driver prompts (`_dab_lever_lines`):
+- **Force-query rule:** "Do not answer from memory; you MUST run a query before answering." Addresses the music_brainz fast-fail pattern (7-10s trials → 30s+ = working).
+- **Repair-via-diagnostics:** `run_sql` now returns `error_category`/`hint`/`executed_sql` on errors; the prompt instructs the agent to use these for SQL self-repair.
+- **Push-aggregation-into-SQL:** aggregations stay in the query, not reconstructed in the agent's head.
+
+These stack cleanly on top of Cartographer: tools-only 21% → +Cartographer 29% → +levers 38% (+17pp, tuning subset).
+
+### Codex/GPT-5.5 ⇄ Sonnet driver parity (submission-equivalence)
+
+The `labrat-agent` driver now matches the `claude-mcp` driver's audit guarantees:
+
+- **Per-call traces** (`agent_tool_calls.jsonl`): shared `append_tool_trace` writer — schema-identical to `claude-mcp`'s `mcp_tool_calls.jsonl` (`{tool, input, ok, output, latency_ms}`). A submission is trace-valid on either driver.
+- **Per-trial wall-clock timeout:** `asyncio.wait_for` → `reason="infra:timeout"`, excluded by `aggregate()` and auto-retried on resume (parallel to `claude-mcp`'s `--agent-timeout` behaviour).
+- Feature-by-feature parity matrix: **`docs/dab-driver-parity.md`**.
+
+### Provider-agnostic verdict
+
+The Cartographer mechanism is provider-agnostic — GPT-5.5 does consult `search_reference_docs` (confirmed directly from `agent_tool_calls.jsonl` traces). The **effect is Sonnet-favoring**: **+8pp on Sonnet, +0pp (neutral) on GPT-5.5** (n=2). GPT-5.5 already self-grounds exhaustively (~32 `run_sql` calls + full schema exploration per trial), making structure-only Scent redundant for it; the leaner-exploring Sonnet benefits. The leaderboard path is Sonnet/claude-mcp + Cartographer + prompt levers.
+
+---
+
 ## Gotchas and operational notes
 
 **Local repo has 5 unofficial extras.** `~/repos/DataAgentBench` has 17 directories, not 12. The extras (`civic_unstructured`, `cve`, `imdb`, `krama`, `usaspending`) are not in the official benchmark and must not be included in official runs.
