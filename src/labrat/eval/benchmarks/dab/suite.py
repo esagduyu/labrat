@@ -440,7 +440,7 @@ class DabSuite:
         try:
             if self._driver == "labrat-agent":
                 final_text, tool_calls, latency = await self._run_trial_labrat_agent(
-                    task, db_config_path
+                    task, db_config_path, scratch_dir
                 )
             elif self._driver == "claude-mcp":
                 final_text, tool_calls, latency = await self._run_trial_claude_mcp(
@@ -804,11 +804,16 @@ class DabSuite:
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
     async def _run_trial_labrat_agent(
-        self, task: BenchmarkTask, db_config_path: Path
+        self, task: BenchmarkTask, db_config_path: Path, scratch_dir: Path
     ) -> tuple[str, int, float]:
+        # P3 (sandbox note): this path is in-process. The registry exposes no
+        # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
+        # native Bash, so the agent cannot read answer keys. Only carry providers
+        # WITHOUT native filesystem/shell access here; claude-mcp is the path for Claude.
         from labrat.agent.data_tools import build_data_tools_registry
         from labrat.agent.providers import build_provider
         from labrat.agent.runner import run_agent_task
+        from labrat.agent.tool_trace import append_tool_trace
         from labrat.eval.benchmarks.dab.env import (
             build_dab_task_env,
             introspect_env_catalogs,
@@ -850,21 +855,45 @@ class DabSuite:
             if cartograph_root is not None:
                 system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
 
+            def _trace(
+                tool: str,
+                tool_input: dict[str, Any],
+                ok: bool,
+                output: str,
+                latency_ms: float,
+            ) -> None:
+                append_tool_trace(
+                    scratch_dir,
+                    "agent_tool_calls.jsonl",
+                    tool=tool,
+                    input=tool_input,
+                    ok=ok,
+                    output=output,
+                    latency_ms=latency_ms,
+                )
+
+            effective_timeout = (
+                self._agent_timeout if self._agent_timeout is not None else _DAB_TIMEOUT
+            )
+            run_kwargs: dict[str, Any] = dict(
+                prompt=task.prompt,
+                ctx=env.ctx,
+                registry=registry,
+                provider=provider,
+                system_prompt=system_prompt,
+                max_turns=self._agent_max_turns,
+                max_tool_calls=self._agent_max_tool_calls,
+                verify=self._agent_verify,
+                on_tool_call=_trace,
+            )
             if cartograph_root is not None:
                 (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)
                 saved = {k: os.environ.get(k) for k in ("LABRAT_MAZE_DIR", "HOME")}
                 os.environ["LABRAT_MAZE_DIR"] = str(cartograph_root)
                 os.environ["HOME"] = str(cartograph_root / "_home")
                 try:
-                    result = await run_agent_task(
-                        prompt=task.prompt,
-                        ctx=env.ctx,
-                        registry=registry,
-                        provider=provider,
-                        system_prompt=system_prompt,
-                        max_turns=self._agent_max_turns,
-                        max_tool_calls=self._agent_max_tool_calls,
-                        verify=self._agent_verify,
+                    result = await asyncio.wait_for(
+                        run_agent_task(**run_kwargs), timeout=effective_timeout
                     )
                 finally:
                     for k, v in saved.items():
@@ -873,15 +902,8 @@ class DabSuite:
                         else:
                             os.environ[k] = v
             else:
-                result = await run_agent_task(
-                    prompt=task.prompt,
-                    ctx=env.ctx,
-                    registry=registry,
-                    provider=provider,
-                    system_prompt=system_prompt,
-                    max_turns=self._agent_max_turns,
-                    max_tool_calls=self._agent_max_tool_calls,
-                    verify=self._agent_verify,
+                result = await asyncio.wait_for(
+                    run_agent_task(**run_kwargs), timeout=effective_timeout
                 )
             # Capture per-trial token usage if the provider tracks it (codex does);
             # run_trial folds it into TrialResult.meta so trials.jsonl records real

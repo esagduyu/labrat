@@ -52,3 +52,24 @@ def test_safe_name_handles_unsafe_and_dotty_names() -> None:
 def test_cartographer_prompt_line_mentions_search_reference_docs() -> None:
     line = _cartographer_prompt_line()
     assert "search_reference_docs" in line
+
+
+import pytest  # noqa: E402
+
+from labrat.eval.benchmarks.dab.suite import DabSuite  # noqa: E402
+
+
+async def test_labrat_agent_timeout_is_classified_infra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # run_trial must turn a TimeoutError from the driver into reason="infra:timeout"
+    suite = DabSuite(driver="labrat-agent")
+
+    async def _boom(*a: object, **k: object) -> None:
+        raise TimeoutError("simulated stall")
+
+    monkeypatch.setattr(suite, "_run_trial_labrat_agent", _boom)
+    task = next(iter(suite.tasks()))  # any task; the driver is stubbed so no real run
+    res = await suite.run_trial(task, 0, tmp_path / "scratch")
+    assert res.reason == "infra:timeout"
+    assert res.passed is False
