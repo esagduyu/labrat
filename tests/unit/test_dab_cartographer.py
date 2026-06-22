@@ -10,13 +10,13 @@ from labrat.agent.tools.base import ToolContext
 from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.eval.benchmarks.dab.env import DabTaskEnv
-from labrat.eval.types import BenchmarkTask
 from labrat.eval.benchmarks.dab.suite import (
     DabSuite,
     _cartographer_prompt_line,
     _run_cartographer,
     _safe_name,
 )
+from labrat.eval.types import BenchmarkTask
 
 
 def _env(ecommerce_db: Path) -> DabTaskEnv:
