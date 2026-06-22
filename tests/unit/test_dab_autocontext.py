@@ -8,7 +8,11 @@ from labrat.agent.tools.base import ToolContext
 from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.eval.benchmarks.dab.env import DabTaskEnv
-from labrat.eval.benchmarks.dab.suite import _autocontext_prepass, _safe_name
+from labrat.eval.benchmarks.dab.suite import (
+    _autocontext_prepass,
+    _autocontext_prompt_line,
+    _safe_name,
+)
 
 
 def _env(ecommerce_db: Path) -> DabTaskEnv:
@@ -43,3 +47,8 @@ def test_safe_name_handles_unsafe_and_dotty_names() -> None:
     assert _safe_name(".") == "dataset"
     assert _safe_name("..") == "dataset"
     assert _safe_name("") == "dataset"
+
+
+def test_autocontext_prompt_line_mentions_search_reference_docs() -> None:
+    line = _autocontext_prompt_line()
+    assert "search_reference_docs" in line

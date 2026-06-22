@@ -255,9 +255,15 @@ def _safe_name(name: str) -> str:
     return cleaned or "dataset"
 
 
-async def _autocontext_prepass(  # pyright: ignore[reportUnusedFunction]
-    env_spec: DabTaskEnv, dataset: str, cache_root: Path
-) -> Path:
+def _autocontext_prompt_line() -> str:
+    return (
+        "A curated reference doc for this database has been pre-generated. Call "
+        "search_reference_docs(question) FIRST for grounding (table grain, verified join "
+        "keys, observed dimension values) before profiling or writing SQL."
+    )
+
+
+async def _autocontext_prepass(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
 
@@ -586,6 +592,12 @@ class DabSuite:
                 f"{type(primary_conn).__name__} for {primary_name!r}."
             )
 
+        maze_root: Path | None = None
+        if self._autocontext:
+            dataset = task.id.split(":")[0]
+            maze_root = await _autocontext_prepass(env_spec, dataset, self._scent_cache_root)
+            (maze_root / "_home").mkdir(parents=True, exist_ok=True)
+
         mcp_config = {
             "mcpServers": {
                 "labrat": {
@@ -612,6 +624,16 @@ class DabSuite:
                         # (one mcp_tool_calls.jsonl line per dispatch) — first-class
                         # traces instead of reconstructing from ~/.claude after the fact.
                         "LABRAT_MCP_LOG_DIR": str(scratch_dir),
+                        **(
+                            {
+                                "LABRAT_MAZE_DIR": str(maze_root),
+                                # hermetic: the user Scent layer (~/.labrat) must not
+                                # contribute on the benchmark — point HOME at an empty dir.
+                                "HOME": str(maze_root / "_home"),
+                            }
+                            if maze_root is not None
+                            else {}
+                        ),
                     },
                 }
             }
@@ -628,6 +650,8 @@ class DabSuite:
             "relevant tables; before any multi-table JOIN call verify_join to confirm the "
             "keys match and won't fan out.",
         ]
+        if maze_root is not None:
+            prompt_lines.append(_autocontext_prompt_line())
         if env_spec.attachable:
             prompt_lines.append("")
             prompt_lines.append(
@@ -776,6 +800,16 @@ class DabSuite:
         # builds are empty; introspect now (post-connect) so the catalog-backed tools
         # (list_tables / describe_table / column_stats / search_columns) actually work.
         introspect_env_catalogs(env.ctx)
+
+        autocontext_root: Path | None = None
+        if self._autocontext:
+            from labrat.eval.benchmarks.dab.env import build_dab_task_env as _build_fresh_env
+
+            dataset = task.id.split(":")[0]
+            autocontext_root = await _autocontext_prepass(
+                _build_fresh_env(db_config_path), dataset, self._scent_cache_root
+            )
+
         try:
             registry = build_data_tools_registry()
             provider = build_provider(
@@ -790,16 +824,31 @@ class DabSuite:
                 cache_key=task.id,
             )
             system_prompt = _build_labrat_agent_system_prompt(env)
-            result = await run_agent_task(
-                prompt=task.prompt,
-                ctx=env.ctx,
-                registry=registry,
-                provider=provider,
-                system_prompt=system_prompt,
-                max_turns=self._agent_max_turns,
-                max_tool_calls=self._agent_max_tool_calls,
-                verify=self._agent_verify,
-            )
+            if autocontext_root is not None:
+                system_prompt = system_prompt + "\n" + _autocontext_prompt_line()
+
+            saved = {k: os.environ.get(k) for k in ("LABRAT_MAZE_DIR", "HOME")}
+            if autocontext_root is not None:
+                (autocontext_root / "_home").mkdir(parents=True, exist_ok=True)
+                os.environ["LABRAT_MAZE_DIR"] = str(autocontext_root)
+                os.environ["HOME"] = str(autocontext_root / "_home")
+            try:
+                result = await run_agent_task(
+                    prompt=task.prompt,
+                    ctx=env.ctx,
+                    registry=registry,
+                    provider=provider,
+                    system_prompt=system_prompt,
+                    max_turns=self._agent_max_turns,
+                    max_tool_calls=self._agent_max_tool_calls,
+                    verify=self._agent_verify,
+                )
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
             # Capture per-trial token usage if the provider tracks it (codex does);
             # run_trial folds it into TrialResult.meta so trials.jsonl records real
             # tokens + cache hit rate.
