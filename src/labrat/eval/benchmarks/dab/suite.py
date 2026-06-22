@@ -251,7 +251,8 @@ async def _invoke_agent(
 
 def _safe_name(name: str) -> str:
     """Filesystem-safe per-dataset dir name."""
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "dataset"
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", name).strip(".")
+    return cleaned or "dataset"
 
 
 async def _autocontext_prepass(  # pyright: ignore[reportUnusedFunction]
@@ -329,7 +330,9 @@ class DabSuite:
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
         self._autocontext = autocontext
-        self._scent_cache_root = Path(tempfile.mkdtemp(prefix="labrat-dab-scent-"))
+        self._scent_cache_root = (
+            Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if autocontext else Path()
+        )
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
