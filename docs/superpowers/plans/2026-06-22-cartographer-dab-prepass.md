@@ -4,7 +4,7 @@
 
 **Goal:** Run #26b's deterministic cartographer as a GT-firewalled first-contact pre-pass on each DAB dataset's primary DB, so the agent consults generated structure-only Scent (`search_reference_docs`) during Q&A — behind an ablation flag.
 
-**Architecture:** A reusable `cartograph_prepass(...)` (lazy first-contact cache over `generate_scent`) in `maze/cartographer.py`. A DAB helper `_autocontext_prepass(env_spec, dataset, cache_root)` connects the primary, introspects, runs the pre-pass into a per-dataset store, and returns the maze root. Both DAB drivers, gated by an `autocontext` flag, call it before the agent and point the agent at the store via `LABRAT_MAZE_DIR` (with a hermetic `HOME` so the user Scent layer can't leak in) plus a one-line "consult `search_reference_docs` first" prompt addition.
+**Architecture:** A reusable `cartograph_prepass(...)` (lazy first-contact cache over `generate_scent`) in `maze/cartographer.py`. A DAB helper `_run_cartographer(env_spec, dataset, cache_root)` connects the primary, introspects, runs the pre-pass into a per-dataset store, and returns the maze root. Both DAB drivers, gated by an `cartograph` flag, call it before the agent and point the agent at the store via `LABRAT_MAZE_DIR` (with a hermetic `HOME` so the user Scent layer can't leak in) plus a one-line "consult `search_reference_docs` first" prompt addition.
 
 **Tech Stack:** Python 3.12, Pydantic v2, DuckDB, pytest (`asyncio_mode = "auto"`), the `ecommerce_db` conftest fixture.
 
@@ -17,7 +17,7 @@
 - **Deterministic-only on DAB:** the DAB pre-pass calls `cartograph_prepass(..., with_semantics=False, llm_fn=None)` — **zero LLM calls**. (Asserted by test.)
 - **GT-firewalled by construction:** the pre-pass operates only on DB `Connection` objects + writes into its `scent_dir`; it never receives or opens benchmark answer-key paths (`validate.py`/`ground_truth.csv`).
 - **Per-dataset store isolation** + **hermetic HOME** for the agent/MCP subprocess (the user Scent layer must not contribute on DAB).
-- **Ablation flag:** the pre-pass is OFF by default; enabled via `--agent-autocontext` (suite `autocontext=True`). With the flag off, behavior is byte-identical to today (no store, no env var, no prompt line).
+- **Ablation flag:** the pre-pass is OFF by default; enabled via `--agent-cartograph` (suite `cartograph=True`). With the flag off, behavior is byte-identical to today (no store, no env var, no prompt line).
 - Tests use the **`ecommerce_db`** conftest fixture (never the gitignored `tests/fixtures/sample_dbs/ecommerce.duckdb`).
 - Full gate after every task: `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -q`.
 - Every commit message ends with these two trailer lines verbatim:
@@ -179,25 +179,25 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 
 ---
 
-### Task 2: DAB `_autocontext_prepass` helper + `autocontext` flag + CLI
+### Task 2: DAB `_run_cartographer` helper + `cartograph` flag + CLI
 
 **Files:**
 - Modify: `src/labrat/eval/benchmarks/dab/suite.py`
 - Modify: `scripts/eval_dab.py`
-- Test: `tests/unit/test_dab_autocontext.py`
+- Test: `tests/unit/test_dab_cartographer.py`
 
 **Interfaces:**
 - Consumes: `cartograph_prepass` (Task 1); `build_dab_task_env` / `introspect_env_catalogs` / `DabTaskEnv` (existing in `dab/env.py`).
 - Produces:
-  - module-level `async _autocontext_prepass(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path` in `suite.py` — connects the primary, introspects, runs the deterministic pre-pass into `<cache_root>/<dataset>/labrat_maze/scent`, disconnects, and returns the **maze root** `<cache_root>/<dataset>` (to set as `LABRAT_MAZE_DIR`).
-  - suite `__init__` gains `autocontext: bool = False`; the suite holds `self._autocontext` and `self._scent_cache_root` (a per-run temp dir).
-  - `eval_dab.py` gains `--agent-autocontext` (store_true) wired into the suite.
+  - module-level `async _run_cartographer(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path` in `suite.py` — connects the primary, introspects, runs the deterministic pre-pass into `<cache_root>/<dataset>/labrat_maze/scent`, disconnects, and returns the **maze root** `<cache_root>/<dataset>` (to set as `LABRAT_MAZE_DIR`).
+  - suite `__init__` gains `cartograph: bool = False`; the suite holds `self._cartograph` and `self._scent_cache_root` (a per-run temp dir).
+  - `eval_dab.py` gains `--agent-cartograph` (store_true) wired into the suite.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/unit/test_dab_autocontext.py
-"""DAB AutoContext pre-pass helper (FEATURE: cartographer DAB pre-pass)."""
+# tests/unit/test_dab_cartographer.py
+"""DAB Cartographer pre-pass helper (FEATURE: cartographer DAB pre-pass)."""
 
 from __future__ import annotations
 
@@ -207,7 +207,7 @@ from labrat.agent.tools.base import ToolContext
 from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.eval.benchmarks.dab.env import DabTaskEnv
-from labrat.eval.benchmarks.dab.suite import _autocontext_prepass
+from labrat.eval.benchmarks.dab.suite import _run_cartographer
 
 
 def _env(ecommerce_db: Path) -> DabTaskEnv:
@@ -221,16 +221,16 @@ def _env(ecommerce_db: Path) -> DabTaskEnv:
     return DabTaskEnv(ctx=ctx, attachable=[], mongo=[])
 
 
-async def test_autocontext_populates_per_dataset_store(ecommerce_db: Path, tmp_path: Path) -> None:
-    maze_root = await _autocontext_prepass(_env(ecommerce_db), "stockindex", tmp_path)
+async def test_cartograph_populates_per_dataset_store(ecommerce_db: Path, tmp_path: Path) -> None:
+    maze_root = await _run_cartographer(_env(ecommerce_db), "stockindex", tmp_path)
     assert maze_root == tmp_path / "stockindex"
     docs = list((maze_root / "labrat_maze" / "scent").glob("*.md"))
     assert docs, "pre-pass should have written at least one Scent doc"
 
 
-async def test_autocontext_isolates_datasets(ecommerce_db: Path, tmp_path: Path) -> None:
-    a = await _autocontext_prepass(_env(ecommerce_db), "ds_a", tmp_path)
-    b = await _autocontext_prepass(_env(ecommerce_db), "ds_b", tmp_path)
+async def test_cartograph_isolates_datasets(ecommerce_db: Path, tmp_path: Path) -> None:
+    a = await _run_cartographer(_env(ecommerce_db), "ds_a", tmp_path)
+    b = await _run_cartographer(_env(ecommerce_db), "ds_b", tmp_path)
     assert a != b  # different datasets -> different maze roots (no collision)
     assert (a / "labrat_maze" / "scent").exists()
     assert (b / "labrat_maze" / "scent").exists()
@@ -238,8 +238,8 @@ async def test_autocontext_isolates_datasets(ecommerce_db: Path, tmp_path: Path)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/unit/test_dab_autocontext.py -q`
-Expected: FAIL — `cannot import name '_autocontext_prepass'`.
+Run: `uv run pytest tests/unit/test_dab_cartographer.py -q`
+Expected: FAIL — `cannot import name '_run_cartographer'`.
 
 - [ ] **Step 3: Add the helper to `src/labrat/eval/benchmarks/dab/suite.py`**
 
@@ -263,7 +263,7 @@ def _safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "dataset"
 
 
-async def _autocontext_prepass(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
+async def _run_cartographer(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
 
@@ -292,38 +292,38 @@ async def _autocontext_prepass(env_spec: DabTaskEnv, dataset: str, cache_root: P
     return maze_root
 ```
 
-In the suite class `__init__`, add the parameter + state (place `autocontext: bool = False` among the existing keyword params, e.g. next to `hints`):
+In the suite class `__init__`, add the parameter + state (place `cartograph: bool = False` among the existing keyword params, e.g. next to `hints`):
 
 ```python
-        autocontext: bool = False,
+        cartograph: bool = False,
 ```
 and in the body:
 ```python
-        self._autocontext = autocontext
+        self._cartograph = cartograph
         self._scent_cache_root = Path(tempfile.mkdtemp(prefix="labrat-dab-scent-"))
 ```
 
-- [ ] **Step 4: Add the `--agent-autocontext` flag to `scripts/eval_dab.py`**
+- [ ] **Step 4: Add the `--agent-cartograph` flag to `scripts/eval_dab.py`**
 
 Add the argument (next to `--agent-verify`):
 
 ```python
     parser.add_argument(
-        "--agent-autocontext",
+        "--agent-cartograph",
         action="store_true",
         help=(
             "Run the deterministic cartographer pre-pass on each dataset's primary DB and "
             "let the agent consult the generated Scent via search_reference_docs "
-            "(GT-firewalled AutoContext; off by default — for ablation)."
+            "(GT-firewalled Cartographer; off by default — for ablation)."
         ),
     )
 ```
 
-Thread it into the suite construction wherever the suite is built (pass `autocontext=args.agent_autocontext`). If the suite is built via a config dict / resume config like the other agent flags, add `autocontext` alongside `agent_verify` in that config (mirror how `agent_verify` is plumbed), defaulting to `False` on resume.
+Thread it into the suite construction wherever the suite is built (pass `cartograph=args.agent_cartograph`). If the suite is built via a config dict / resume config like the other agent flags, add `cartograph` alongside `agent_verify` in that config (mirror how `agent_verify` is plumbed), defaulting to `False` on resume.
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/unit/test_dab_autocontext.py -q`
+Run: `uv run pytest tests/unit/test_dab_cartographer.py -q`
 Expected: PASS (2 tests).
 
 - [ ] **Step 6: Full gate**
@@ -334,8 +334,8 @@ Expected: clean + all green.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/labrat/eval/benchmarks/dab/suite.py scripts/eval_dab.py tests/unit/test_dab_autocontext.py
-git commit -m "feat(dab): AutoContext pre-pass helper + --agent-autocontext flag
+git add src/labrat/eval/benchmarks/dab/suite.py scripts/eval_dab.py tests/unit/test_dab_cartographer.py
+git commit -m "feat(dab): Cartographer pre-pass helper + --agent-cartograph flag
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
@@ -347,36 +347,36 @@ Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
 
 **Files:**
 - Modify: `src/labrat/eval/benchmarks/dab/suite.py`
-- Test: `tests/unit/test_dab_autocontext.py` (extend)
+- Test: `tests/unit/test_dab_cartographer.py` (extend)
 
 **Interfaces:**
-- Consumes: `_autocontext_prepass` (Task 2); `self._autocontext`, `self._scent_cache_root`.
-- Produces: when `self._autocontext` is True, both drivers run the pre-pass, expose `LABRAT_MAZE_DIR` (+ hermetic `HOME`) to the agent, and add a `search_reference_docs`-first prompt line. When False, no behavior change.
+- Consumes: `_run_cartographer` (Task 2); `self._cartograph`, `self._scent_cache_root`.
+- Produces: when `self._cartograph` is True, both drivers run the pre-pass, expose `LABRAT_MAZE_DIR` (+ hermetic `HOME`) to the agent, and add a `search_reference_docs`-first prompt line. When False, no behavior change.
 
 - [ ] **Step 1: Write the failing test (prompt line gated by the flag)**
 
-Append to `tests/unit/test_dab_autocontext.py`:
+Append to `tests/unit/test_dab_cartographer.py`:
 
 ```python
-from labrat.eval.benchmarks.dab.suite import _autocontext_prompt_line
+from labrat.eval.benchmarks.dab.suite import _cartographer_prompt_line
 
 
-def test_autocontext_prompt_line_mentions_search_reference_docs() -> None:
-    line = _autocontext_prompt_line()
+def test_cartographer_prompt_line_mentions_search_reference_docs() -> None:
+    line = _cartographer_prompt_line()
     assert "search_reference_docs" in line
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/unit/test_dab_autocontext.py::test_autocontext_prompt_line_mentions_search_reference_docs -q`
-Expected: FAIL — `cannot import name '_autocontext_prompt_line'`.
+Run: `uv run pytest tests/unit/test_dab_cartographer.py::test_cartographer_prompt_line_mentions_search_reference_docs -q`
+Expected: FAIL — `cannot import name '_cartographer_prompt_line'`.
 
 - [ ] **Step 3: Add the prompt-line helper + wire both drivers**
 
 Add the prompt-line helper (module level, so it's testable and shared):
 
 ```python
-def _autocontext_prompt_line() -> str:
+def _cartographer_prompt_line() -> str:
     return (
         "A curated reference doc for this database has been pre-generated. Call "
         "search_reference_docs(question) FIRST for grounding (table grain, verified join "
@@ -388,9 +388,9 @@ def _autocontext_prompt_line() -> str:
 
 ```python
         maze_root: Path | None = None
-        if self._autocontext:
+        if self._cartograph:
             dataset = task.id.split(":")[0]
-            maze_root = await _autocontext_prepass(env_spec, dataset, self._scent_cache_root)
+            maze_root = await _run_cartographer(env_spec, dataset, self._scent_cache_root)
 ```
 
 In the `mcp_config` server `"env"` dict (the one with `LABRAT_MCP_CONNECTIONS` / `LABRAT_MCP_PRIMARY` / `LABRAT_MCP_LOG_DIR`), append a conditional entry so the MCP server reads the store and the user Scent layer is hermetically empty:
@@ -414,16 +414,16 @@ Add the prompt line to `prompt_lines` when enabled — insert just before the ex
 
 ```python
         if maze_root is not None:
-            prompt_lines.append(_autocontext_prompt_line())
+            prompt_lines.append(_cartographer_prompt_line())
 ```
 
 **labrat-agent driver** (`_run_trial_labrat_agent`): the in-process agent reads the store via `MazeStore.from_env` (process env). After `introspect_env_catalogs(env.ctx)` and before `run_agent_task`, gate on the flag and set the env around the call:
 
 ```python
-        autocontext_root: Path | None = None
-        if self._autocontext:
+        cartograph_root: Path | None = None
+        if self._cartograph:
             dataset = task.id.split(":")[0]
-            autocontext_root = await _autocontext_prepass(env, dataset, self._scent_cache_root)
+            cartograph_root = await _run_cartographer(env, dataset, self._scent_cache_root)
 ```
 
 Wrap the `run_agent_task(...)` call so `LABRAT_MAZE_DIR` (+ hermetic `HOME`) are set only for it (sequential trials, restored after):
@@ -432,10 +432,10 @@ Wrap the `run_agent_task(...)` call so `LABRAT_MAZE_DIR` (+ hermetic `HOME`) are
         import os
 
         saved = {k: os.environ.get(k) for k in ("LABRAT_MAZE_DIR", "HOME")}
-        if autocontext_root is not None:
-            (autocontext_root / "_home").mkdir(parents=True, exist_ok=True)
-            os.environ["LABRAT_MAZE_DIR"] = str(autocontext_root)
-            os.environ["HOME"] = str(autocontext_root / "_home")
+        if cartograph_root is not None:
+            (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)
+            os.environ["LABRAT_MAZE_DIR"] = str(cartograph_root)
+            os.environ["HOME"] = str(cartograph_root / "_home")
         try:
             result = await run_agent_task(...)  # the existing call, unchanged
         finally:
@@ -446,28 +446,28 @@ Wrap the `run_agent_task(...)` call so `LABRAT_MAZE_DIR` (+ hermetic `HOME`) are
                     os.environ[k] = v
 ```
 
-Also add the prompt line to `_build_labrat_agent_system_prompt`'s output when autocontext is on — simplest: append `_autocontext_prompt_line()` to the system prompt in the driver when `autocontext_root is not None` (string-concat after the call), e.g.:
+Also add the prompt line to `_build_labrat_agent_system_prompt`'s output when cartograph is on — simplest: append `_cartographer_prompt_line()` to the system prompt in the driver when `cartograph_root is not None` (string-concat after the call), e.g.:
 
 ```python
         system_prompt = _build_labrat_agent_system_prompt(env)
-        if autocontext_root is not None:
-            system_prompt = system_prompt + "\n" + _autocontext_prompt_line()
+        if cartograph_root is not None:
+            system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
 ```
 
-> Note: `env` in the labrat-agent path is the `DabTaskEnv` (its `.ctx` is already connected + introspected by the existing code). `_autocontext_prepass` connects/introspects/disconnects its own pass; calling it on the already-connected `env` is safe because `connect()`/`introspect` are idempotent here, but to avoid double-connect surprises, pass `env` (the same object) — the pre-pass's `finally` disconnect would close the connections the driver still needs. **Therefore, in the labrat-agent path, run the pre-pass on a FRESH `build_dab_task_env(db_config_path)` instance**, not the live `env`:
+> Note: `env` in the labrat-agent path is the `DabTaskEnv` (its `.ctx` is already connected + introspected by the existing code). `_run_cartographer` connects/introspects/disconnects its own pass; calling it on the already-connected `env` is safe because `connect()`/`introspect` are idempotent here, but to avoid double-connect surprises, pass `env` (the same object) — the pre-pass's `finally` disconnect would close the connections the driver still needs. **Therefore, in the labrat-agent path, run the pre-pass on a FRESH `build_dab_task_env(db_config_path)` instance**, not the live `env`:
 
 ```python
-        if self._autocontext:
+        if self._cartograph:
             from labrat.eval.benchmarks.dab.env import build_dab_task_env
             dataset = task.id.split(":")[0]
-            autocontext_root = await _autocontext_prepass(
+            cartograph_root = await _run_cartographer(
                 build_dab_task_env(db_config_path), dataset, self._scent_cache_root
             )
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/unit/test_dab_autocontext.py -q`
+Run: `uv run pytest tests/unit/test_dab_cartographer.py -q`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Full gate**
@@ -478,8 +478,8 @@ Expected: clean + all green (existing DAB suite tests unaffected — the flag de
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/labrat/eval/benchmarks/dab/suite.py tests/unit/test_dab_autocontext.py
-git commit -m "feat(dab): wire AutoContext pre-pass into both drivers (flag-gated, hermetic)
+git add src/labrat/eval/benchmarks/dab/suite.py tests/unit/test_dab_cartographer.py
+git commit -m "feat(dab): wire Cartographer pre-pass into both drivers (flag-gated, hermetic)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01PpuX2GGj7mES1U9d83MRGj"
@@ -494,9 +494,9 @@ Once merged, measure with vs without on the tuning subset (deterministic pre-pas
 # without
 uv run python scripts/eval_dab.py --datasets deps_dev_v1,music_brainz_20k,stockindex --driver claude-mcp --n-trials 3 --output-dir runs/dab/ac-off
 # with
-uv run python scripts/eval_dab.py --datasets deps_dev_v1,music_brainz_20k,stockindex --driver claude-mcp --n-trials 3 --agent-autocontext --output-dir runs/dab/ac-on
+uv run python scripts/eval_dab.py --datasets deps_dev_v1,music_brainz_20k,stockindex --driver claude-mcp --n-trials 3 --agent-cartograph --output-dir runs/dab/ac-on
 ```
-Keep AutoContext for the full run **only if net-positive**; run the 9-task ADE smoke set as a regression check. Disclose AutoContext in the submission.
+Keep Cartographer for the full run **only if net-positive**; run the 9-task ADE smoke set as a regression check. Disclose Cartographer in the submission.
 
 ## Self-Review
 
@@ -510,4 +510,4 @@ Keep AutoContext for the full run **only if net-positive**; run the 9-task ADE s
 
 **2. Placeholder scan:** No TBD/TODO/"similar to". The `run_agent_task(...)  # the existing call, unchanged` references the already-present call (not new code to write). Path placeholders (`<cache_root>/<dataset>`) are illustrative; the code uses real expressions.
 
-**3. Type consistency:** `cartograph_prepass(connections, catalogs, primary, scent_dir, *, with_semantics=False, ...)` identical Task 1→2. `_autocontext_prepass(env_spec, dataset, cache_root) -> Path` (returns the maze root) identical Tasks 2→3. `_autocontext_prompt_line() -> str` Tasks 3. `self._autocontext` / `self._scent_cache_root` defined Task 2, used Task 3. The labrat-agent path runs the pre-pass on a **fresh** `build_dab_task_env` instance (not the live `env`) so the pre-pass's disconnect doesn't close the driver's live connections — called out explicitly in Task 3.
+**3. Type consistency:** `cartograph_prepass(connections, catalogs, primary, scent_dir, *, with_semantics=False, ...)` identical Task 1→2. `_run_cartographer(env_spec, dataset, cache_root) -> Path` (returns the maze root) identical Tasks 2→3. `_cartographer_prompt_line() -> str` Tasks 3. `self._cartograph` / `self._scent_cache_root` defined Task 2, used Task 3. The labrat-agent path runs the pre-pass on a **fresh** `build_dab_task_env` instance (not the live `env`) so the pre-pass's disconnect doesn't close the driver's live connections — called out explicitly in Task 3.

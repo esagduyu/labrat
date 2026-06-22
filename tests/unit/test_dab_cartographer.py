@@ -1,4 +1,4 @@
-"""DAB AutoContext pre-pass helper (FEATURE: cartographer DAB pre-pass)."""
+"""DAB Cartographer pre-pass helper (FEATURE: cartographer DAB pre-pass)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.eval.benchmarks.dab.env import DabTaskEnv
 from labrat.eval.benchmarks.dab.suite import (
-    _autocontext_prepass,
-    _autocontext_prompt_line,
+    _cartographer_prompt_line,
+    _run_cartographer,
     _safe_name,
 )
 
@@ -26,16 +26,16 @@ def _env(ecommerce_db: Path) -> DabTaskEnv:
     return DabTaskEnv(ctx=ctx, attachable=[], mongo=[])
 
 
-async def test_autocontext_populates_per_dataset_store(ecommerce_db: Path, tmp_path: Path) -> None:
-    maze_root = await _autocontext_prepass(_env(ecommerce_db), "stockindex", tmp_path)
+async def test_cartograph_populates_per_dataset_store(ecommerce_db: Path, tmp_path: Path) -> None:
+    maze_root = await _run_cartographer(_env(ecommerce_db), "stockindex", tmp_path)
     assert maze_root == tmp_path / "stockindex"
     docs = list((maze_root / "labrat_maze" / "scent").glob("*.md"))
     assert docs, "pre-pass should have written at least one Scent doc"
 
 
-async def test_autocontext_isolates_datasets(ecommerce_db: Path, tmp_path: Path) -> None:
-    a = await _autocontext_prepass(_env(ecommerce_db), "ds_a", tmp_path)
-    b = await _autocontext_prepass(_env(ecommerce_db), "ds_b", tmp_path)
+async def test_cartograph_isolates_datasets(ecommerce_db: Path, tmp_path: Path) -> None:
+    a = await _run_cartographer(_env(ecommerce_db), "ds_a", tmp_path)
+    b = await _run_cartographer(_env(ecommerce_db), "ds_b", tmp_path)
     assert a != b  # different datasets -> different maze roots (no collision)
     assert (a / "labrat_maze" / "scent").exists()
     assert (b / "labrat_maze" / "scent").exists()
@@ -49,6 +49,6 @@ def test_safe_name_handles_unsafe_and_dotty_names() -> None:
     assert _safe_name("") == "dataset"
 
 
-def test_autocontext_prompt_line_mentions_search_reference_docs() -> None:
-    line = _autocontext_prompt_line()
+def test_cartographer_prompt_line_mentions_search_reference_docs() -> None:
+    line = _cartographer_prompt_line()
     assert "search_reference_docs" in line

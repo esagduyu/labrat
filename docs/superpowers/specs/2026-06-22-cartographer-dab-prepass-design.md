@@ -1,4 +1,4 @@
-# Cartographer pre-pass for DAB — GT-firewalled AutoContext (FEATURE_ROADMAP #26b → first-contact)
+# Cartographer pre-pass for DAB — GT-firewalled grounding (FEATURE_ROADMAP #26b → first-contact)
 
 > **Status:** Design approved 2026-06-22. Wires the (already-shipped, #26b) Scent **cartographer**
 > into the DAB benchmark as a deterministic, GT-firewalled **first-contact pre-pass** — the honest,

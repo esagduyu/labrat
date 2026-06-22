@@ -259,7 +259,7 @@ def _safe_name(name: str) -> str:
     return cleaned or "dataset"
 
 
-def _autocontext_prompt_line() -> str:
+def _cartographer_prompt_line() -> str:
     return (
         "A curated reference doc for this database has been pre-generated. Call "
         "search_reference_docs(question) FIRST for grounding (table grain, verified join "
@@ -271,7 +271,7 @@ def _dab_lever_lines() -> list[str]:
     """Benchmark-safe process levers shared by both DAB driver prompts.
 
     Pure process/structure — no answer content, so safe on held-out datasets.
-    Target the failure classes AutoContext doesn't cover: answer-from-memory
+    Target the failure classes Cartographer doesn't cover: answer-from-memory
     (force-query), implementation errors (repair via run_sql diagnostics), and
     broad-fetch-then-tally (push aggregation into SQL).
     """
@@ -285,7 +285,7 @@ def _dab_lever_lines() -> list[str]:
     ]
 
 
-async def _autocontext_prepass(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
+async def _run_cartographer(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
 
@@ -335,7 +335,7 @@ class DabSuite:
         agent_verify: bool = False,
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
-        autocontext: bool = False,
+        cartograph: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -357,9 +357,9 @@ class DabSuite:
         self._agent_reasoning = agent_reasoning
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
-        self._autocontext = autocontext
+        self._cartograph = cartograph
         self._scent_cache_root = (
-            Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if autocontext else Path()
+            Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if cartograph else Path()
         )
         self._tasks_cache: list[BenchmarkTask] | None = None
 
@@ -615,9 +615,9 @@ class DabSuite:
             )
 
         maze_root: Path | None = None
-        if self._autocontext:
+        if self._cartograph:
             dataset = task.id.split(":")[0]
-            maze_root = await _autocontext_prepass(env_spec, dataset, self._scent_cache_root)
+            maze_root = await _run_cartographer(env_spec, dataset, self._scent_cache_root)
             (maze_root / "_home").mkdir(parents=True, exist_ok=True)
 
         mcp_config = {
@@ -673,7 +673,7 @@ class DabSuite:
             "keys match and won't fan out.",
         ]
         if maze_root is not None:
-            prompt_lines.insert(1, _autocontext_prompt_line())
+            prompt_lines.insert(1, _cartographer_prompt_line())
         prompt_lines.extend(_dab_lever_lines())
         if env_spec.attachable:
             prompt_lines.append("")
@@ -824,12 +824,12 @@ class DabSuite:
         # (list_tables / describe_table / column_stats / search_columns) actually work.
         introspect_env_catalogs(env.ctx)
 
-        autocontext_root: Path | None = None
-        if self._autocontext:
+        cartograph_root: Path | None = None
+        if self._cartograph:
             from labrat.eval.benchmarks.dab.env import build_dab_task_env as _build_fresh_env
 
             dataset = task.id.split(":")[0]
-            autocontext_root = await _autocontext_prepass(
+            cartograph_root = await _run_cartographer(
                 _build_fresh_env(db_config_path), dataset, self._scent_cache_root
             )
 
@@ -847,14 +847,14 @@ class DabSuite:
                 cache_key=task.id,
             )
             system_prompt = _build_labrat_agent_system_prompt(env)
-            if autocontext_root is not None:
-                system_prompt = system_prompt + "\n" + _autocontext_prompt_line()
+            if cartograph_root is not None:
+                system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
 
-            if autocontext_root is not None:
-                (autocontext_root / "_home").mkdir(parents=True, exist_ok=True)
+            if cartograph_root is not None:
+                (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)
                 saved = {k: os.environ.get(k) for k in ("LABRAT_MAZE_DIR", "HOME")}
-                os.environ["LABRAT_MAZE_DIR"] = str(autocontext_root)
-                os.environ["HOME"] = str(autocontext_root / "_home")
+                os.environ["LABRAT_MAZE_DIR"] = str(cartograph_root)
+                os.environ["HOME"] = str(cartograph_root / "_home")
                 try:
                     result = await run_agent_task(
                         prompt=task.prompt,
