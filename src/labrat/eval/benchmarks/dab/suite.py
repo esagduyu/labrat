@@ -19,18 +19,20 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from labrat.eval.benchmarks.dab.env import DabTaskEnv
+from labrat.eval.benchmarks.dab.env import DabTaskEnv, introspect_env_catalogs
 from labrat.eval.types import (
     AggregateScore,
     BenchmarkReport,
     BenchmarkTask,
     TrialResult,
 )
+from labrat.maze.cartographer import cartograph_prepass
 
 Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]
 
@@ -247,6 +249,42 @@ async def _invoke_agent(
     return {"final_text": final_text, "tool_calls": 0}
 
 
+def _safe_name(name: str) -> str:
+    """Filesystem-safe per-dataset dir name."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "dataset"
+
+
+async def _autocontext_prepass(  # pyright: ignore[reportUnusedFunction]
+    env_spec: DabTaskEnv, dataset: str, cache_root: Path
+) -> Path:
+    """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
+    return the maze root to expose as LABRAT_MAZE_DIR.
+
+    Per-dataset store under ``cache_root`` so datasets that share a connection key
+    (e.g. 'main') never collide; idempotent (cartograph_prepass caches on first contact).
+    Deterministic-only — never calls a model, never touches answer-key files.
+    """
+    maze_root = cache_root / _safe_name(dataset)
+    scent_dir = maze_root / "labrat_maze" / "scent"
+
+    ctx = env_spec.ctx
+    for conn in ctx.connections.values():
+        connect = getattr(conn, "connect", None)
+        if callable(connect):
+            connect()
+    try:
+        introspect_env_catalogs(ctx)
+        await cartograph_prepass(
+            ctx.connections, ctx.catalogs, ctx.primary, scent_dir, with_semantics=False
+        )
+    finally:
+        for conn in ctx.connections.values():
+            disconnect = getattr(conn, "disconnect", None)
+            if callable(disconnect):
+                disconnect()
+    return maze_root
+
+
 _DATASET_DIR_RE = re.compile(r"^query_(.+)$", re.IGNORECASE)
 _QUERY_DIR_RE = re.compile(r"^query(\d+)$")
 
@@ -268,6 +306,7 @@ class DabSuite:
         agent_verify: bool = False,
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
+        autocontext: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -287,6 +326,10 @@ class DabSuite:
         # Reasoning effort for the codex (GPT-5.5) provider; ignored by the others.
         # None = provider default (medium).
         self._agent_reasoning = agent_reasoning
+        # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
+        # into a per-run temp dir so the agent can consult them via search_reference_docs.
+        self._autocontext = autocontext
+        self._scent_cache_root = Path(tempfile.mkdtemp(prefix="labrat-dab-scent-"))
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property

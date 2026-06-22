@@ -210,6 +210,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-autocontext",
+        action="store_true",
+        default=None,
+        help=(
+            "Run the deterministic cartographer pre-pass on each dataset's primary DB and "
+            "let the agent consult the generated Scent via search_reference_docs "
+            "(GT-firewalled AutoContext; off by default — for ablation)."
+        ),
+    )
+    parser.add_argument(
         "--agent-timeout",
         type=int,
         default=None,
@@ -261,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_max_turns", args.max_turns),
         ("agent_max_tool_calls", args.max_tool_calls),
         ("agent_verify", args.agent_verify),
+        ("agent_autocontext", args.agent_autocontext),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
     ]:
@@ -293,6 +304,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_verify is not None
         else existing_cfg.get("agent_verify", False)
     )
+    effective_autocontext: bool = bool(
+        args.agent_autocontext
+        if args.agent_autocontext is not None
+        else existing_cfg.get("agent_autocontext", False)
+    )
     effective_timeout: int | None = (
         args.agent_timeout if args.agent_timeout is not None else existing_cfg.get("agent_timeout")
     )
@@ -313,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_verify=effective_verify,
         agent_timeout=effective_timeout,
         agent_reasoning=effective_reasoning,
+        autocontext=effective_autocontext,
     )
 
     task_filter: list[str] | None = None
@@ -341,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_max_turns": effective_max_turns,
                 "agent_max_tool_calls": effective_max_tool_calls,
                 "agent_verify": effective_verify,
+                "agent_autocontext": effective_autocontext,
                 "agent_timeout": effective_timeout,
                 "agent_reasoning": effective_reasoning,
                 "n_trials": args.n_trials,
