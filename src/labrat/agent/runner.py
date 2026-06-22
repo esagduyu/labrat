@@ -9,6 +9,8 @@ Used by:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -38,6 +40,7 @@ async def run_agent_task(
     max_tool_calls: int | None = None,
     verify: bool = False,
     max_verify_rounds: int = 2,
+    on_tool_call: Callable[[str, dict[str, Any], bool, str, float], None] | None = None,
 ) -> AgentTaskResult:
     """Run a single agent task and return the assistant's final text + tool count.
 
@@ -72,7 +75,7 @@ async def run_agent_task(
         max_verify_rounds=max_verify_rounds,
     )
     t0 = time.monotonic()
-    await loop.run(prompt, on_text=on_text)
+    await loop.run(prompt, on_text=on_text, on_tool_call=on_tool_call)
     latency = time.monotonic() - t0
 
     return AgentTaskResult(

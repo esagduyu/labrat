@@ -198,6 +198,42 @@ async def test_loop_handles_unknown_tool_gracefully(
     assert "recovered" in "".join(received)
 
 
+# ── on_tool_call hook ─────────────────────────────────────────────────────────
+
+
+def _make_loop_with_one_tool_call(registry: ToolRegistry, ctx: ToolContext) -> AgentLoop:
+    """Return a loop whose provider emits exactly one tool_use then a final text turn."""
+    tool_use = ToolUseBlock(id="call_hook", name="echo", input={"message": "hi"})
+    final_text = TextBlock(text="done")
+    provider = _MockProvider([[tool_use], [final_text]])
+    return AgentLoop(provider=provider, registry=registry, ctx=ctx)
+
+
+_EXPECTED_TOOL_NAME = "echo"
+
+
+async def test_on_tool_call_fires_once_per_dispatch(
+    registry: ToolRegistry, ctx: ToolContext
+) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    def on_tool_call(
+        name: str, tool_input: dict[str, object], ok: bool, output: str, latency_ms: float
+    ) -> None:
+        calls.append((name, ok))
+
+    loop = _make_loop_with_one_tool_call(registry, ctx)
+    await loop.run("question", on_tool_call=on_tool_call)
+    assert len(calls) == 1
+    assert calls[0][0] == _EXPECTED_TOOL_NAME
+    assert isinstance(calls[0][1], bool)
+
+
+async def test_on_tool_call_optional(registry: ToolRegistry, ctx: ToolContext) -> None:
+    loop = _make_loop_with_one_tool_call(registry, ctx)
+    await loop.run("question")  # on_tool_call omitted → no error, behaves as before
+
+
 # ── real API test (gated) ─────────────────────────────────────────────────────
 
 

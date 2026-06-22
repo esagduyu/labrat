@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -92,6 +93,7 @@ class AgentLoop:
         *,
         on_text: Callable[[str], None] | None = None,
         on_status: Callable[[str], None] | None = None,
+        on_tool_call: Callable[[str, dict[str, Any], bool, str, float], None] | None = None,
     ) -> None:
         """Process a single user turn, handling any tool call round-trips.
 
@@ -156,16 +158,19 @@ class AgentLoop:
                 ):
                     dispatched_all = False
                     break
+                _t0 = time.monotonic()
                 dispatch = await self._registry.dispatch(tu.name, tu.input, self._ctx)
+                latency_ms = (time.monotonic() - _t0) * 1000.0
+                output_str = str(dispatch.value) if dispatch.ok else f"Error: {dispatch.error}"
                 tool_result_content.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tu.id,
-                        "content": (
-                            str(dispatch.value) if dispatch.ok else f"Error: {dispatch.error}"
-                        ),
+                        "content": output_str,
                     }
                 )
+                if on_tool_call is not None:
+                    on_tool_call(tu.name, tu.input, dispatch.ok, output_str, latency_ms)
                 self.tool_calls_used += 1
 
             if tool_result_content:
