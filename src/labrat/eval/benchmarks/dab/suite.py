@@ -147,6 +147,7 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         for mspec in env.mongo:
             parts.append(f"  alias={mspec.alias} database={mspec.database}")
         parts.append("Materialized collections become DuckDB tables you query with run_sql.")
+    levers = _dab_lever_lines()
     parts.extend(
         [
             "",
@@ -160,6 +161,9 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
             "match and won't fan out.",
             "  4. Before answering, re-read the question and confirm your result actually "
             "answers it (check magnitudes, units, and that joins didn't drop or fan out rows).",
+            f"  5. {levers[0]}",
+            f"  6. {levers[1]}",
+            f"  7. {levers[2]}",
             "",
             "Run queries until you are confident, then respond with a single plain answer "
             "on the last line.",
@@ -261,6 +265,24 @@ def _autocontext_prompt_line() -> str:
         "search_reference_docs(question) FIRST for grounding (table grain, verified join "
         "keys, observed dimension values) before profiling or writing SQL."
     )
+
+
+def _dab_lever_lines() -> list[str]:
+    """Benchmark-safe process levers shared by both DAB driver prompts.
+
+    Pure process/structure — no answer content, so safe on held-out datasets.
+    Target the failure classes AutoContext doesn't cover: answer-from-memory
+    (force-query), implementation errors (repair via run_sql diagnostics), and
+    broad-fetch-then-tally (push aggregation into SQL).
+    """
+    return [
+        "Always derive the answer by querying the database — never answer from prior "
+        "knowledge or memory, even for facts you think you know.",
+        "If run_sql returns an error, read its error_category and hint and fix the query "
+        "— don't guess; re-run until it executes cleanly.",
+        "Compute counts/sums/aggregates in SQL (GROUP BY + aggregate functions), not by "
+        "fetching rows and tallying them yourself.",
+    ]
 
 
 async def _autocontext_prepass(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
@@ -652,6 +674,7 @@ class DabSuite:
         ]
         if maze_root is not None:
             prompt_lines.insert(1, _autocontext_prompt_line())
+        prompt_lines.extend(_dab_lever_lines())
         if env_spec.attachable:
             prompt_lines.append("")
             prompt_lines.append(
