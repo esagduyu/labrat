@@ -37,7 +37,6 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
 from mcp.server import NotificationOptions, Server
@@ -46,6 +45,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from labrat.agent.data_tools import build_data_tools_registry
+from labrat.agent.tool_trace import append_tool_trace
 from labrat.agent.tools.base import ToolContext, ToolRegistry
 from labrat.db.duckdb_engine import DuckDBConnection
 
@@ -62,24 +62,16 @@ def _log_tool_call(
     latency_ms: float,
 ) -> None:
     """Append one audit line per tool dispatch to ``<log_dir>/mcp_tool_calls.jsonl``.
-
-    No-op when ``log_dir`` is falsy. Enables audit-grade per-call traces (the gap
-    that made the DAB contamination only reconstructable after the fact). Gated on
-    the ``LABRAT_MCP_LOG_DIR`` env var so normal runs pay nothing.
-    """
-    if not log_dir:
-        return
-    record = {
-        "tool": name,
-        "input": arguments,
-        "ok": ok,
-        "output": output,
-        "latency_ms": latency_ms,
-    }
-    dest = Path(log_dir)
-    dest.mkdir(parents=True, exist_ok=True)
-    with (dest / _TOOL_LOG_FILENAME).open("a") as fh:
-        fh.write(json.dumps(record, default=str) + "\n")
+    No-op when ``log_dir`` is falsy (gated on ``LABRAT_MCP_LOG_DIR``)."""
+    append_tool_trace(
+        log_dir,
+        _TOOL_LOG_FILENAME,
+        tool=name,
+        input=arguments,
+        ok=ok,
+        output=output,
+        latency_ms=latency_ms,
+    )
 
 
 def _build_context_from_env() -> tuple[ToolContext, list[DuckDBConnection]]:
