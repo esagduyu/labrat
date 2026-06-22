@@ -19,6 +19,7 @@ def build_provider(
     model: str,
     timeout: int | None = None,
     reasoning: str | None = None,
+    cache_key: str | None = None,
 ) -> ModelProvider:
     """Map a CLI/config string to a concrete ModelProvider instance.
 
@@ -35,6 +36,9 @@ def build_provider(
     ``claude-code`` provider; the others manage their own HTTP timeouts and ignore
     it. ``reasoning`` sets the reasoning effort for the ``codex`` provider
     (default ``medium``); ignored by the others. ``None`` keeps provider defaults.
+    ``cache_key`` sets the ``codex`` provider's prompt-cache routing key (pass a
+    per-task key so a benchmark's repeated trials reuse the same warm cache);
+    ignored by the others.
     """
     if name == "anthropic":
         return AnthropicProvider(model=model)
@@ -45,7 +49,9 @@ def build_provider(
     if name == "openai":
         return OpenAICompatibleProvider(model=model)
     if name == "codex":
-        return CodexSubscriptionProvider(model=model, reasoning_effort=reasoning or "medium")
+        return CodexSubscriptionProvider(
+            model=model, reasoning_effort=reasoning or "medium", cache_key=cache_key
+        )
     raise ValueError(f"Unknown provider {name!r}. Use one of {PROVIDER_NAMES}.")
 
 

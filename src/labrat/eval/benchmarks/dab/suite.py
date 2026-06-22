@@ -737,6 +737,11 @@ class DabSuite:
                 self._agent_model,
                 timeout=self._agent_timeout,
                 reasoning=self._agent_reasoning,
+                # Per-task cache key: the provider is rebuilt per trial, so a stable
+                # per-task key lets a task's repeated trials (identical prompt prefix)
+                # reuse the same warm prompt cache instead of routing to fresh
+                # machines each time. Only the codex provider uses it.
+                cache_key=task.id,
             )
             system_prompt = _build_labrat_agent_system_prompt(env)
             result = await run_agent_task(

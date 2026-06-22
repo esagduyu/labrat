@@ -83,14 +83,17 @@ class CodexSubscriptionProvider(ModelProvider):
         model: str = _DEFAULT_MODEL,
         reasoning_effort: str = "medium",
         auth_path: Path | None = None,
+        cache_key: str | None = None,
     ) -> None:
         self._model = model
         self._reasoning_effort = reasoning_effort
         self._auth_path = auth_path or _DEFAULT_AUTH_PATH
-        # Stable per-instance (≈ per-trial) prompt-cache routing key: all turns of
-        # one trial share the growing prefix, so routing them to the same cache
-        # maximizes hit rate. A routing hint only — caching itself is automatic.
-        self._cache_key = uuid.uuid4().hex
+        # prompt-cache routing key. The caller should pass a key that is STABLE
+        # across requests sharing a prompt prefix — e.g. per-task in a benchmark, so
+        # the repeated trials of one task (identical prefix) route to the same warm
+        # cache and reuse it. Defaults to a fresh per-instance uuid when unset.
+        # A routing hint only — caching itself is automatic on the Responses API.
+        self._cache_key = cache_key or uuid.uuid4().hex
         # Encrypted reasoning items captured per function_call (keyed by call_id).
         # GPT-5.5 is a reasoning model; passing these back on the next turn is the
         # #1 fix for cache misses — omitting them makes the prefix diverge and the

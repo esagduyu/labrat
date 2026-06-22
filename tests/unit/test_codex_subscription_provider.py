@@ -432,3 +432,30 @@ def test_reasoning_passback_can_be_disabled_for_safety_fallback() -> None:
         it.get("type") == "reasoning"
         for it in provider._to_responses_request(messages, [], "")["input"]
     )
+
+
+# ---- prompt_cache_key routing (per-task, FEATURE: cache reuse across trials) --
+
+
+def test_cache_key_defaults_to_unique_value() -> None:
+    a = CodexSubscriptionProvider()
+    b = CodexSubscriptionProvider()
+    assert a._cache_key and b._cache_key
+    assert a._cache_key != b._cache_key  # fresh per-instance default
+
+
+def test_cache_key_can_be_set_explicitly() -> None:
+    p = CodexSubscriptionProvider(cache_key="stockindex:1")
+    assert p._cache_key == "stockindex:1"
+
+
+def test_build_provider_threads_cache_key() -> None:
+    p = build_provider("codex", "gpt-5.5", cache_key="stockindex:1")
+    assert isinstance(p, CodexSubscriptionProvider)
+    assert p._cache_key == "stockindex:1"
+
+
+def test_request_body_uses_cache_key() -> None:
+    p = CodexSubscriptionProvider(cache_key="stockindex:1")
+    body = p._to_responses_request([], [], "")
+    assert body["prompt_cache_key"] == "stockindex:1"
