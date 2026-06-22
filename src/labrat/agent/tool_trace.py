@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+__all__ = ["TOOL_TRACE_FIELDS", "append_tool_trace"]
+
 TOOL_TRACE_FIELDS = ("tool", "input", "ok", "output", "latency_ms")
 
 

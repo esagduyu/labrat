@@ -234,6 +234,57 @@ async def test_on_tool_call_optional(registry: ToolRegistry, ctx: ToolContext) -
     await loop.run("question")  # on_tool_call omitted → no error, behaves as before
 
 
+# ── hook→trace output invariant ───────────────────────────────────────────────
+
+
+async def test_run_agent_task_trace_collector_persists_output(
+    tmp_path: Path, registry: ToolRegistry, ctx: ToolContext
+) -> None:
+    """run_agent_task forwards on_tool_call to the loop; the trace file captures
+    the real tool output (the load-bearing DAB submission invariant)."""
+    import json
+
+    from labrat.agent.runner import run_agent_task
+    from labrat.agent.tool_trace import append_tool_trace
+
+    def _trace(
+        tool: str,
+        tool_input: dict[str, object],
+        ok: bool,
+        output: str,
+        latency_ms: float,
+    ) -> None:
+        append_tool_trace(
+            tmp_path,
+            "agent_tool_calls.jsonl",
+            tool=tool,
+            input=tool_input,
+            ok=ok,
+            output=output,
+            latency_ms=latency_ms,
+        )
+
+    tool_use = ToolUseBlock(id="call_trace", name="echo", input={"message": "hi"})
+    final_text = TextBlock(text="done")
+    provider = _MockProvider([[tool_use], [final_text]])
+
+    await run_agent_task(
+        prompt="hi",
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="s",
+        on_tool_call=_trace,
+    )
+
+    lines = (tmp_path / "agent_tool_calls.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["tool"] == "echo"
+    assert rec["output"] == "echoed: hi"  # real tool output, not a stub
+    assert set(rec.keys()) == {"tool", "input", "ok", "output", "latency_ms"}
+
+
 # ── real API test (gated) ─────────────────────────────────────────────────────
 
 

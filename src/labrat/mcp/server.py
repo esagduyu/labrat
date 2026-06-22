@@ -62,7 +62,9 @@ def _log_tool_call(
     latency_ms: float,
 ) -> None:
     """Append one audit line per tool dispatch to ``<log_dir>/mcp_tool_calls.jsonl``.
-    No-op when ``log_dir`` is falsy (gated on ``LABRAT_MCP_LOG_DIR``)."""
+    No-op when ``log_dir`` is falsy (gated on ``LABRAT_MCP_LOG_DIR``).
+    Enables audit-grade per-call traces (the gap that made the DAB contamination only
+    reconstructable after the fact)."""
     append_tool_trace(
         log_dir,
         _TOOL_LOG_FILENAME,
