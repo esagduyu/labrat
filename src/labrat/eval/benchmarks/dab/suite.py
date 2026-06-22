@@ -651,7 +651,7 @@ class DabSuite:
             "keys match and won't fan out.",
         ]
         if maze_root is not None:
-            prompt_lines.append(_autocontext_prompt_line())
+            prompt_lines.insert(1, _autocontext_prompt_line())
         if env_spec.attachable:
             prompt_lines.append("")
             prompt_lines.append(
@@ -827,12 +827,29 @@ class DabSuite:
             if autocontext_root is not None:
                 system_prompt = system_prompt + "\n" + _autocontext_prompt_line()
 
-            saved = {k: os.environ.get(k) for k in ("LABRAT_MAZE_DIR", "HOME")}
             if autocontext_root is not None:
                 (autocontext_root / "_home").mkdir(parents=True, exist_ok=True)
+                saved = {k: os.environ.get(k) for k in ("LABRAT_MAZE_DIR", "HOME")}
                 os.environ["LABRAT_MAZE_DIR"] = str(autocontext_root)
                 os.environ["HOME"] = str(autocontext_root / "_home")
-            try:
+                try:
+                    result = await run_agent_task(
+                        prompt=task.prompt,
+                        ctx=env.ctx,
+                        registry=registry,
+                        provider=provider,
+                        system_prompt=system_prompt,
+                        max_turns=self._agent_max_turns,
+                        max_tool_calls=self._agent_max_tool_calls,
+                        verify=self._agent_verify,
+                    )
+                finally:
+                    for k, v in saved.items():
+                        if v is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = v
+            else:
                 result = await run_agent_task(
                     prompt=task.prompt,
                     ctx=env.ctx,
@@ -843,12 +860,6 @@ class DabSuite:
                     max_tool_calls=self._agent_max_tool_calls,
                     verify=self._agent_verify,
                 )
-            finally:
-                for k, v in saved.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
             # Capture per-trial token usage if the provider tracks it (codex does);
             # run_trial folds it into TrialResult.meta so trials.jsonl records real
             # tokens + cache hit rate.
