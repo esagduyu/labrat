@@ -10,6 +10,7 @@ from labrat.agent.tools.base import ToolContext
 from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.eval.benchmarks.dab.env import DabTaskEnv
+from labrat.eval.types import BenchmarkTask
 from labrat.eval.benchmarks.dab.suite import (
     DabSuite,
     _cartographer_prompt_line,
@@ -67,7 +68,14 @@ async def test_labrat_agent_timeout_is_classified_infra(
         raise TimeoutError("simulated stall")
 
     monkeypatch.setattr(suite, "_run_trial_labrat_agent", _boom)
-    task = next(iter(suite.tasks()))  # any task; the driver is stubbed so no real run
+    # Synthetic task — the driver is stubbed (raises before touching these paths), so we
+    # don't enumerate suite.tasks() (which needs the DAB checkout, absent in CI).
+    task = BenchmarkTask(
+        id="synthetic:1",
+        benchmark="dab",
+        prompt="?",
+        config={"db_config_path": "unused", "validator_path": "unused"},
+    )
     res = await suite.run_trial(task, 0, tmp_path / "scratch")
     assert res.reason == "infra:timeout"
     assert res.passed is False
