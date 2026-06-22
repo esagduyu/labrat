@@ -268,3 +268,36 @@ def write_docs(docs: list[ScentDoc], out_dir: Path) -> list[Path]:
         path.write_text(render_document(doc), encoding="utf-8")
         paths.append(path)
     return paths
+
+
+async def cartograph_prepass(
+    connections: dict[str, object],
+    catalogs: dict[str, object],
+    primary: str,
+    scent_dir: Path,
+    *,
+    with_semantics: bool = False,
+    llm_fn: LLMFn | None = None,
+    table_budget: int = 40,
+    distinct_cap: int = 25,
+) -> list[Path]:
+    """First-contact Scent pre-pass: if ``scent_dir`` already holds docs, reuse them
+    (idempotent first-contact cache); otherwise generate_scent(...) and write them.
+
+    Deterministic by default (``with_semantics=False`` → no LLM). The reusable seam:
+    DAB calls this deterministic-only; the agent's first-connect path will later call it
+    with semantics + the dual store. Caller owns ``scent_dir`` isolation.
+    """
+    existing = sorted(scent_dir.glob("*.md")) if scent_dir.exists() else []
+    if existing:
+        return existing
+    docs = await generate_scent(
+        connections=connections,
+        catalogs=catalogs,
+        primary=primary,
+        with_semantics=with_semantics,
+        llm_fn=llm_fn,
+        table_budget=table_budget,
+        distinct_cap=distinct_cap,
+    )
+    return write_docs(docs, scent_dir)
