@@ -636,6 +636,19 @@ The `labrat-agent` driver now matches the `claude-mcp` driver's audit guarantees
 
 The Cartographer mechanism is provider-agnostic — GPT-5.5 does consult `search_reference_docs` (confirmed directly from `agent_tool_calls.jsonl` traces). The **effect is Sonnet-favoring**: **+8pp on Sonnet, +0pp (neutral) on GPT-5.5** (n=2). GPT-5.5 already self-grounds exhaustively (~32 `run_sql` calls + full schema exploration per trial), making structure-only Scent redundant for it; the leaner-exploring Sonnet benefits. The leaderboard path is Sonnet/claude-mcp + Cartographer + prompt levers.
 
+### Pre-submission: full pass@1 sweeps + lever ablations (2026-06-22)
+
+**Full-coverage pass@1 sweeps** (de-risk before the multi-day pass@5; Cartographer + levers on, all 12 official datasets, zero infra failures on either provider):
+
+- **Sonnet (claude-mcp): 50.1% stratified** (29/48 raw pass@1).
+- **GPT-5.5 (labrat-agent/codex): 53.0% stratified** (33/54 raw pass@1).
+
+A dead heat within n=1 noise — big per-dataset deltas are single-trial flips, consistent with "GPT-5.5 ≈ Sonnet". Both sitting ~50% at pass@1 vs the 51.38% pass@5 leaderboard → pass@5-with-Cartographer has headroom. The GPT-5.5 sweep only completed via the self-healing loop fighting 429 rate-limit bursts — not viable for a clean leaderboard run. **Decision: leaderboard run = claude-mcp/Sonnet.**
+
+**Plan-discipline lever (#12) ablation — NET-NEGATIVE, discarded.** Adding a brief-numbered-plan + verify-before-finish instruction to the claude-mcp prompt (parity with the labrat-agent prompt), ablated on top of Cartographer (n=3, tuning subset deps_dev_v1/music_brainz_20k/stockindex): **−12.5pp** (29%→17%), driven by stockindex 56%→11% (−44pp; over-planning wastes turns on a dataset already working). Branch deleted; do not retry on the claude-mcp path.
+
+**`--hints` bug fix + lever.** DAB ships `db_description_withhint.txt` per dataset (benchmark-provided data-quirk guidance, e.g. music_brainz "tracks has duplicates → entity resolution"); this is a declared leaderboard "Hints" axis and top teams including Altimate declare Hints: Yes, stacking it with their own AutoContext doc. Our `--hints` flag was broken — it loaded the hints file *instead of* the base description (dropping the schema); fixed to append (base + "\n\n" + hints) per DAB's `run_agent.py`. All prior runs, including the accepted 51.38%, were hints-off. A hints-on vs hints-off ablation on top of Cartographer is in progress; if net-positive the submission runs `--agent-cartograph --hints` and declares Hints: Yes — a distinct declared category from the hints-off 51.38%.
+
 ---
 
 ## Gotchas and operational notes
