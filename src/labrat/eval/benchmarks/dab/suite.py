@@ -387,10 +387,17 @@ class DabSuite:
             if not db_config.exists():
                 continue
 
-            desc_file = dataset_dir / (
-                "db_description_withhint.txt" if self._hints else "db_description.txt"
-            )
-            description = desc_file.read_text().strip() if desc_file.exists() else ""
+            # Base schema description, then APPEND the hints when --hints is on —
+            # mirroring DAB's own run_agent.py (`db_description += "\n\n" + hints`).
+            # The withhint file is hints-only (a few lines of data-quirk guidance), so
+            # loading it *instead of* the base would drop the entire schema.
+            base_file = dataset_dir / "db_description.txt"
+            description = base_file.read_text().strip() if base_file.exists() else ""
+            if self._hints:
+                hint_file = dataset_dir / "db_description_withhint.txt"
+                hint_text = hint_file.read_text().strip() if hint_file.exists() else ""
+                if hint_text:
+                    description = f"{description}\n\n{hint_text}".strip()
 
             for query_dir in sorted(dataset_dir.iterdir()):
                 qm = _QUERY_DIR_RE.match(query_dir.name)
