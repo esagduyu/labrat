@@ -20,17 +20,22 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 REPO="/Users/ege/repos/labrat"
-RUN_DIR="$REPO/runs/dab/dab-rerun-clean"
+# RUN_DIR / EXTRA_EVAL_FLAGS are env-overridable (defaults preserve the original
+# clean-rerun behaviour). The submission run sets RUN_DIR to a fresh dir and
+# EXTRA_EVAL_FLAGS="--agent-cartograph --hints".
+RUN_DIR="${RUN_DIR:-$REPO/runs/dab/dab-rerun-clean}"
+EXTRA_EVAL_FLAGS="${EXTRA_EVAL_FLAGS:-}"
+RUN_TAG="$(basename "$RUN_DIR")"
 cd "$REPO" || { echo "[tick] cannot cd to $REPO"; exit 1; }
 
-echo "[tick] $(date -u +%Y-%m-%dT%H:%M:%SZ) starting DAB clean re-run tick"
+echo "[tick] $(date -u +%Y-%m-%dT%H:%M:%SZ) starting DAB tick (RUN_DIR=$RUN_TAG flags='$EXTRA_EVAL_FLAGS')"
 
 # ── Concurrency guard ────────────────────────────────────────────────────────
 # Never run two eval_dab against the same run dir (e.g. a manual resume overlapping
 # the next 6h cron fire) — they'd race on trials.jsonl. If one is already running,
 # this tick is a no-op.
-if pgrep -f "eval_dab.py.*dab-rerun-clean" >/dev/null 2>&1; then
-  echo "[tick] an eval_dab for dab-rerun-clean is already running — skipping this tick."
+if pgrep -f "eval_dab.py.*$RUN_TAG" >/dev/null 2>&1; then
+  echo "[tick] an eval_dab for $RUN_TAG is already running — skipping this tick."
   exit 0
 fi
 
@@ -61,6 +66,7 @@ env -u ANTHROPIC_API_KEY -u CLAUDECODE uv run python scripts/eval_dab.py \
   --agent-model claude-sonnet-4-6 \
   --agent-timeout 1200 \
   --datasets "$OFFICIAL" \
+  $EXTRA_EVAL_FLAGS \
   --output-dir "$RUN_DIR"
 RC=$?
 
