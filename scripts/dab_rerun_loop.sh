@@ -13,10 +13,10 @@
 set -uo pipefail
 
 TICK="/Users/ege/repos/labrat/scripts/dab_rerun_tick.sh"
-# Poll every 30 min, not every 6h: the tick's Max-plan probe is cheap and skips
-# cleanly while the limit is active, so frequent ticks resume within ~30 min of
-# reset instead of waiting out a fixed window. Far less dead time on a multi-day run.
-SLEEP_SECONDS=1800
+# Poll cadence (env-overridable). The tick's Max-plan probe is cheap and skips
+# cleanly while the limit is active, so a tighter poll just resumes sooner after
+# each (hourly) session reset — less dead time on a multi-day run. Default 10 min.
+SLEEP_SECONDS="${SLEEP_SECONDS:-600}"
 
 while :; do
   echo "===== loop tick $(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
