@@ -64,6 +64,12 @@ _INFRA_PATTERNS: tuple[tuple[str, str], ...] = (
     ("You've hit your session limit", "session_limit"),
     ("Credit balance is too low", "no_api_credit"),
     ("[trial exceeded ", "timeout"),
+    # Server-side API outages (the claude CLI surfaces these as "API Error: <code> …").
+    # 5xx / overloaded are transient infra, NOT a real attempt — must be retried, not
+    # scored as a semantic fail. (A 2026-06-23 Claude outage miscounted 14 such trials.)
+    ("API Error: 5", "api_error"),
+    ("API Error: 429", "api_error"),
+    ("Overloaded", "api_error"),
 )
 
 
