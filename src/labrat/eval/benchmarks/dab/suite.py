@@ -404,6 +404,8 @@ class DabSuite:
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
         cartograph: bool = False,
+        consensus_k: int | None = None,
+        reverify: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -429,6 +431,8 @@ class DabSuite:
         self._scent_cache_root = (
             Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if cartograph else Path()
         )
+        self._consensus_k = consensus_k
+        self._reverify = reverify
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -576,7 +580,14 @@ class DabSuite:
             meta={"usage": self._last_usage} if self._last_usage else {},
         )
 
-    # ── verified dispatch (Task 3 hook; Task 4 replaces body) ────────────────
+    # ── verified dispatch (consensus + re-derive) ─────────────────────────────
+
+    def _verify_llm_fn(self) -> Any:
+        from labrat.agent.providers import build_provider
+        from labrat.agent.verifier import provider_llm_fn
+
+        provider = build_provider(self._agent_provider, self._agent_model)
+        return provider_llm_fn(provider)
 
     async def _run_trial_verified(
         self,
@@ -584,7 +595,58 @@ class DabSuite:
         db_config_path: Path,
         scratch_dir: Path,
     ) -> tuple[str, int, float]:
-        return await self._dispatch_driver_once(task, db_config_path, scratch_dir)
+        from labrat.agent.verification.agreement import answers_agree
+        from labrat.agent.verification.consensus import choose_modal
+
+        question = task.prompt
+        k = self._consensus_k or 1
+
+        async def _run_once(i: int, extra: str = "") -> tuple[str, int, float]:
+            sub = scratch_dir / f"subrun{i}" if (k > 1 or self._reverify) else scratch_dir
+            sub.mkdir(parents=True, exist_ok=True)
+            return await self._dispatch_driver_once(
+                task, db_config_path, sub, extra_instructions=extra
+            )
+
+        # ── Consensus: K sub-runs → modal ──────────────────────────────
+        if k > 1:
+            results: list[tuple[str, int, float]] = []
+            for i in range(k):
+                try:
+                    results.append(await _run_once(i))
+                except Exception:
+                    continue  # a failed sub-run is excluded from the vote
+            if not results:
+                return await _run_once(0)  # all failed → let run_trial's handler see it
+            llm_fn = self._verify_llm_fn()
+            idx, _low = await choose_modal(
+                [r[0] for r in results], question=question, llm_fn=llm_fn
+            )
+            primary = results[idx]
+        else:
+            primary = await _run_once(0)
+
+        # ── Re-derive: one independent run + reconcile on mismatch ──────
+        if self._reverify:
+            try:
+                rederived = await _run_once(900)  # distinct sub-scratch
+                llm_fn = self._verify_llm_fn()
+                if not await answers_agree(
+                    primary[0], rederived[0], question=question, llm_fn=llm_fn
+                ):
+                    reconcile = await _run_once(
+                        901,
+                        extra=(
+                            "An independent recomputation produced a DIFFERENT result:\n"
+                            f"  your answer: {primary[0]}\n  independent: {rederived[0]}\n"
+                            "Recompute carefully and give the single correct final answer "
+                            "on the last line."
+                        ),
+                    )
+                    return reconcile
+            except Exception:
+                pass  # fail-open: keep the primary answer
+        return primary
 
     async def _dispatch_driver_once(
         self,
