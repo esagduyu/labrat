@@ -65,6 +65,13 @@ _BLOCKED_NATIVE_TOOLS = "Bash,WebFetch,WebSearch,Task,Read,Write,Edit,NotebookEd
 # infra patterns individually.
 _INFRA_PATTERNS: tuple[tuple[str, str], ...] = (
     ("You've hit your session limit", "session_limit"),
+    # Per-model / usage quota (e.g. "You've hit your Sonnet limit · resets 5am"). The
+    # claude CLI surfaces these as plain text with exit 0, so without this pattern they
+    # were miscounted as semantic FAILs — a 2026-06-25 ablation lost 3 of 4 arms this way.
+    ("hit your Sonnet limit", "rate_limit"),
+    ("hit your Opus limit", "rate_limit"),
+    ("hit your Haiku limit", "rate_limit"),
+    ("hit your usage limit", "rate_limit"),
     ("Credit balance is too low", "no_api_credit"),
     ("[trial exceeded ", "timeout"),
     # Server-side API outages (the claude CLI surfaces these as "API Error: <code> …").

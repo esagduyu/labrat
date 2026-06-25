@@ -25,6 +25,21 @@ def test_api_outage_text_is_infra(text: str) -> None:
     assert _detect_infra_failure(text) == "api_error"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "You've hit your Sonnet limit · resets 5am (America/Vancouver)",
+        "You've hit your Opus limit · resets 5am",
+        "You've hit your usage limit",
+    ],
+)
+def test_model_rate_limit_text_is_infra(text: str) -> None:
+    # The claude CLI surfaces a per-model/usage quota as plain text with exit 0, so
+    # without this pattern it was miscounted as a semantic FAIL (score 0) — a 2026-06-25
+    # ablation lost 3 of 4 arms this way. Must classify as infra so it's excluded/retried.
+    assert _detect_infra_failure(text) == "rate_limit"
+
+
 def test_existing_infra_tags_unchanged() -> None:
     assert _detect_infra_failure("You've hit your session limit") == "session_limit"
     assert _detect_infra_failure("[trial exceeded 1200s timeout]") == "timeout"
