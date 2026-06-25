@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Test
-uv run pytest                                    # full suite (~659 tests)
+uv run pytest                                    # full suite (~670 tests)
 uv run pytest tests/unit/test_agent_loop.py      # single file
 uv run pytest -k "test_smoke"                    # by name
 uv run pytest --co -q                            # list tests without running
@@ -103,11 +103,13 @@ Current score (claude-sonnet-4-6): **80% overall** (48/60) — 100% easy · 80% 
 
 ### DAB integration (`src/labrat/eval/benchmarks/dab/`)
 
-[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 12 datasets / 54 queries / 4 DBMSes (DuckDB, SQLite, Postgres, Mongo). **LabRat is on the leaderboard at a stratified Pass@1 of 51.38%** (rank #10/18, claude-mcp, pass@5, claude-sonnet-4-6, accepted 2026-06-18). **Never cite 58.0% (contaminated) or 50.5% (interim recompute) — 51.38% is the official figure.**
+[DataAgentBench](https://ucbepic.github.io/DataAgentBench/) — 12 datasets / 54 queries / 4 DBMSes (DuckDB, SQLite, Postgres, Mongo). **LabRat is #8 of 21 on the leaderboard at stratified Pass@1 60.88%** (current entry "Claude Sonnet 4.6 + Cartographer", PR #65, claude-mcp + `--agent-cartograph` + `--hints`, pass@5, 2026-06-24) — the only top-10 entry on a single mid-tier model. The **prior** entry (Sonnet, no grounding) is still on the board at 51.38% / #13. **Cite 60.88% as current; never 58.0% (contaminated) or 50.5% (interim recompute).** DAB scores are versioned against the **current upstream ground truth** — the leaderboard re-scores all rows when GTs change (patents was globally-broken / 0% for every team until upstream PR #59 fixed it; syncing the checkout + re-running patents lifted us 54.34%→60.88%).
 
 Three drivers via `--driver`: `raw-bash` (baseline), `labrat-agent` (`AgentLoop` + tools, any provider incl. `--agent-provider codex` for GPT‑5.5), `claude-mcp` (recommended full-benchmark path, Max-plan). **Two invariants that must not regress:** (1) **always `--datasets <12 official>`** — the suite enumerates 104 local queries incl. 5 unofficial extras; an unfiltered run pollutes the aggregate; (2) the **claude-mcp sandbox gate** (MCP-only `--allowedTools`, isolated `cwd`, `_detect_contamination` backstop) — it closes the Phase 5 answer-key-leak path by construction.
 
-`--agent-cartograph` (off by default): runs the deterministic Cartographer pre-pass before each trial (both `labrat-agent` and `claude-mcp` drivers); hermetic HOME; GT-firewalled by construction. The `labrat-agent` path writes per-call tool traces to `agent_tool_calls.jsonl` (schema-identical to `claude-mcp`'s `mcp_tool_calls.jsonl`, shared `append_tool_trace` writer); a submission is trace-valid on either provider. Feature-by-feature parity matrix: **`docs/dab-driver-parity.md`**. Per-trial wall-clock timeout via `asyncio.wait_for` → `infra:timeout` on expiry.
+`--agent-cartograph` (off by default): runs the deterministic Cartographer pre-pass before each trial (both `labrat-agent` and `claude-mcp` drivers); hermetic HOME; GT-firewalled by construction; **deterministic-only on DAB** (`with_semantics=False` — no LLM authoring; structure-only Scent so nothing answer-shaped). The `labrat-agent` path writes per-call tool traces to `agent_tool_calls.jsonl` (schema-identical to `claude-mcp`'s `mcp_tool_calls.jsonl`, shared `append_tool_trace` writer); a submission is trace-valid on either provider. Feature-by-feature parity matrix: **`docs/dab-driver-parity.md`**. Per-trial wall-clock timeout via `asyncio.wait_for` → `infra:timeout` on expiry.
+
+`--hints` (declared `Hints: Yes`): **appends** the benchmark's `db_description_withhint.txt` to the base description (`base + "\n\n" + hints`, matching DAB's `run_agent.py`) — it is hints-only data-quirk guidance, so loading it *instead of* the base would drop the schema. Benchmark-provided + a declared leaderboard axis (not contamination). **Score levers, all ablated net-positive ~+8pp each and shipped:** the Cartographer pre-pass, `_dab_lever_lines` (force-query / repair-via-error_category / push-aggregation), and `--hints`. `_build_claude_mcp_prompt` is the extracted claude-mcp opening-prompt builder (emit via `scripts/dump_dab_prompts.py` for prompt-leakage audits). `_INFRA_PATTERNS` classifies API 5xx/429/overloaded as `infra:` (auto-retry outages, don't miscount as semantic fails).
 
 Full reference (drivers, env.py/suite.py internals, sandbox-gate detail, scoring math, resume safety, codex/GPT‑5.5, and all DAB run gotchas): **`docs/dab-integration.md`**. Results/history/conclusions: **`docs/dab-progress-report.md`**. Memory: `project_dab_phase5_submission`, `project_dab_contamination`.
 
