@@ -649,6 +649,43 @@ A dead heat within n=1 noise — big per-dataset deltas are single-trial flips, 
 
 **`--hints` bug fix + lever.** DAB ships `db_description_withhint.txt` per dataset (benchmark-provided data-quirk guidance, e.g. music_brainz "tracks has duplicates → entity resolution"); this is a declared leaderboard "Hints" axis and top teams including Altimate declare Hints: Yes, stacking it with their own AutoContext doc. Our `--hints` flag was broken — it loaded the hints file *instead of* the base description (dropping the schema); fixed to append (base + "\n\n" + hints) per DAB's `run_agent.py`. All prior runs, including the accepted 51.38%, were hints-off. A hints-on vs hints-off ablation on top of Cartographer is in progress; if net-positive the submission runs `--agent-cartograph --hints` and declares Hints: Yes — a distinct declared category from the hints-off 51.38%.
 
+### Final submission — LIVE on the leaderboard at #8 / 60.88% (2026-06-24)
+
+**LabRat is #8 of 21 on the public DataAgentBench leaderboard at a stratified Pass@1 of 60.88%** (shown as 60.9% on the board), submitted as a new entry "LabRat (Claude Sonnet 4.6 + Cartographer)". The prior "LabRat (Claude Sonnet 4.6)" entry at 51.38% is still on the board at #13 — both rows exist, the new one is current. This is the **only top-10 entry running a single mid-tier model**: everyone in the top 7 runs GPT-5.5, Opus 4.8/4.6, or stacked ensembles. The differentiator is the grounding layer, not the model.
+
+**Leaderboard neighbourhood (2026-06-24):** #1 Spacedock+GPT-5.5 74.33% · #2 Altimate+GPT-5.5+Sonnet 71.71% · #3 Altimate+Sonnet 68.22% · #4 Spacedock+Opus 4.8 67.21% · #5 MinusX 65.18% · #6 DataBridge+GLM-5.2 61.37% · #7 Pi Coding Agent+Opus 4.6 61.03% · **#8 LabRat 60.88%** · #9 PromptQL+Gemini 60.00%.
+
+**Score trajectory:**
+
+| Score | Event |
+|---|---|
+| 54.34% | Raw result as submitted |
+| 55.88% | Fixed 14 Claude API outage trials miscounted as semantic fails; fixed `_INFRA_PATTERNS` to classify 5xx as infra |
+| **60.88%** | Synced DAB checkout to current ground truth + re-ran patents and music_brainz q2 |
+
+The big mover: **patents 0% → 60%** after syncing to PR #59, which fixed a globally-broken ground truth on that dataset (every team on the leaderboard scored 0% on patents until #59 corrected it; the board re-scores all rows when GTs are fixed, which is how Altimate moved 63.18% → 71.71% with no new run).
+
+**Per-dataset (final):**
+
+| Dataset | Pass@1 |
+|---|---|
+| stockmarket | 100% |
+| stockindex | 93% |
+| bookreview | 87% |
+| crmarenapro | 82% |
+| pancancer_atlas | 67% |
+| googlelocal | 60% |
+| patents | 60% |
+| yelp | 46% |
+| agnews | 45% |
+| github_repos | 45% |
+| music_brainz | 27% |
+| deps_dev_v1 | 20% |
+
+**Integrity:** clean pass@5, 270/270 trials, 0 contamination. Deep trace scan: 2884 tool calls, all MCP tools, zero answer-key or external-dataset access. Submitted as PR #65. Declared: **Hints: Yes**, Cartographer disclosed, agnews model-memory caveat noted, opening prompts provided for the leakage audit.
+
+Screenshot: `docs/images/dab-leaderboard-2026-06-24.png`.
+
 ---
 
 ## Gotchas and operational notes

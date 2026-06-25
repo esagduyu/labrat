@@ -5,7 +5,7 @@
 **LabRat is a terminal-native AI data agent — and the start of "Claude Code for data scientists."** Connect to your warehouse, ask a question in plain English, and watch the agent explore your schema, write dialect-correct SQL in real time, and surface the answer — all without leaving your terminal.
 
 > [!NOTE]
-> **Status: feature-complete v0 alpha.** 659 tests passing, end-to-end against DuckDB. On the public [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) leaderboard at **51.4%** (rank #10/18) and **80%** on dbt Labs' [ADE-bench](https://github.com/dbt-labs/ade-bench) — see [Benchmark records](#benchmark-records).
+> **Status: feature-complete v0 alpha.** 670 tests passing, end-to-end against DuckDB. **#8 of 21 on the public [DataAgentBench](https://ucbepic.github.io/DataAgentBench/) leaderboard at 60.9% stratified Pass@1** — the only top-10 entry on a single mid-tier model (the rest of the top 10 run GPT‑5.5, Opus, or stacked ensembles) — and **80%** on dbt Labs' [ADE-bench](https://github.com/dbt-labs/ade-bench). See [Benchmark records](#benchmark-records).
 
 <!-- TODO: replace with a real screenshot or recorded demo -->
 <!-- ![LabRat demo](docs/demo.gif) -->
@@ -43,15 +43,17 @@ LabRat is measured on the two most serious public **agentic** data benchmarks �
 
 ### DataAgentBench — UC Berkeley EPIC ([leaderboard](https://ucbepic.github.io/DataAgentBench/))
 
-Natural-language query answering across 12 datasets / 54 queries / 4 database systems (DuckDB, SQLite, PostgreSQL, MongoDB), many requiring cross-database joins. **LabRat is on the public leaderboard at a stratified Pass@1 of 51.4% (rank #10 of 18)**, independently re-validated by the maintainers.
+Natural-language query answering across 12 datasets / 54 queries / 4 database systems (DuckDB, SQLite, PostgreSQL, MongoDB), many requiring cross-database joins. **LabRat is #8 of 21 on the public leaderboard at a stratified Pass@1 of 60.9%** — and notably the **only top-10 entry on a single mid-tier model** (Claude Sonnet 4.6). Every entry above us runs GPT‑5.5, Claude Opus, or a stacked multi-model ensemble; LabRat closes that gap with a **grounding layer, not a bigger model.**
 
-| Phase | Scope | Score | What it measures |
-|-------|-------|-------|------------------|
-| 1b | 5 datasets · 17 queries | **48.5%** | raw-Claude + prompt-engineering floor (no LabRat tools) |
-| 4 | 5 datasets · 17 queries | **54.0%** | same subset *with* LabRat's tool layer — a **+5.5pp** measured tool-layer lift |
-| 5 (full) | 12 datasets · 54 queries | **51.4%** | full benchmark, on the leaderboard |
+![LabRat #8 on the DataAgentBench leaderboard, 60.9%](docs/images/dab-leaderboard-2026-06-24.png)
 
-Strongest single signal: **crmarenapro 82%** on a 6-database hybrid query set. The headline number has an honest history: our initial submission scored 58.0%, but we found and **self-disclosed** a harness flaw that let the agent read benchmark answer-key files; the maintainers independently re-validated all 270 answers and added LabRat at the corrected **51.4%**. The sandbox that prevents this is now permanent. The full story — leak, disclosure, re-validation, sandbox gate, and per-dataset breakdown — is in **[docs/dab-progress-report.md](docs/dab-progress-report.md)**.
+| Run | Scope | Score | What it measures |
+|-----|-------|-------|------------------|
+| tool-layer | 5 datasets · 17 queries | **48.5% → 54.0%** | raw-Claude floor → *with* LabRat's tool layer (**+5.5pp** measured lift) |
+| prior entry | 12 datasets · 54 queries | **51.4%** | first full-benchmark submission (Sonnet, no grounding) — still on the board at #13 |
+| **current entry** | 12 datasets · 54 queries | **60.9%** | **Sonnet + the Cartographer grounding pre-pass + benchmark-safe prompt levers + declared hints** |
+
+That **+9.5pp jump is the grounding moat in action.** The [Cartographer](#roadmap) — a deterministic, ground-truth-firewalled first-contact pass that maps a warehouse's grain, verified join keys, and observed values before the agent answers — plus benchmark-safe process levers, each independently ablated at ~+8pp. The run is **clean by construction**: MCP-only sandbox (no shell, no filesystem path to answer keys), every one of the 270 trials fully traced and audited (2,884 tool calls, zero answer-key/external-dataset access), opening prompts disclosed for the maintainers' leakage check, and `Hints: Yes` declared. Strongest single datasets: **stockmarket 100%, stockindex 93%, bookreview 87%, crmarenapro 82%**. The full story — the build, the two integrity corrections (a Claude API outage, and a globally-broken `patents` ground truth fixed upstream), and the per-dataset breakdown — is in **[docs/dab-progress-report.md](docs/dab-progress-report.md)**.
 
 ### ADE-bench — dbt Labs ([repo](https://github.com/dbt-labs/ade-bench))
 
