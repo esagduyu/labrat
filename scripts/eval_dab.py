@@ -220,6 +220,21 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-consensus",
+        type=int,
+        default=None,
+        help=(
+            "K-of-N self-consistency: run each trial K times and take the modal answer "
+            "(off by default)."
+        ),
+    )
+    parser.add_argument(
+        "--agent-reverify",
+        action="store_true",
+        default=None,
+        help="Independent re-derive + reconcile-on-mismatch verify stage (off by default).",
+    )
+    parser.add_argument(
         "--agent-timeout",
         type=int,
         default=None,
@@ -272,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_max_tool_calls", args.max_tool_calls),
         ("agent_verify", args.agent_verify),
         ("agent_cartograph", args.agent_cartograph),
+        ("agent_consensus", args.agent_consensus),
+        ("agent_reverify", args.agent_reverify),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
     ]:
@@ -309,6 +326,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_cartograph is not None
         else existing_cfg.get("agent_cartograph", False)
     )
+    effective_consensus: int | None = (
+        args.agent_consensus
+        if args.agent_consensus is not None
+        else existing_cfg.get("agent_consensus")
+    )
+    effective_reverify: bool = bool(
+        args.agent_reverify
+        if args.agent_reverify is not None
+        else existing_cfg.get("agent_reverify", False)
+    )
     effective_timeout: int | None = (
         args.agent_timeout if args.agent_timeout is not None else existing_cfg.get("agent_timeout")
     )
@@ -330,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
         agent_timeout=effective_timeout,
         agent_reasoning=effective_reasoning,
         cartograph=effective_cartograph,
+        consensus_k=effective_consensus,
+        reverify=effective_reverify,
     )
 
     task_filter: list[str] | None = None
@@ -359,6 +388,8 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_max_tool_calls": effective_max_tool_calls,
                 "agent_verify": effective_verify,
                 "agent_cartograph": effective_cartograph,
+                "agent_consensus": effective_consensus,
+                "agent_reverify": effective_reverify,
                 "agent_timeout": effective_timeout,
                 "agent_reasoning": effective_reasoning,
                 "n_trials": args.n_trials,

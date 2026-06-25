@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from labrat.eval.benchmarks.dab.suite import DabSuite
-from labrat.eval.types import BenchmarkTask
+from labrat.eval.types import AggregateScore, BenchmarkReport, BenchmarkTask
 
 
 def _task() -> BenchmarkTask:
@@ -58,3 +59,49 @@ async def test_off_path_single_dispatch(tmp_path: Path, monkeypatch) -> None:
 
 async def _never_same(prompt: str) -> str:
     return "different"
+
+
+def test_eval_dab_threads_verification_flags(monkeypatch: Any, tmp_path: Path) -> None:
+    """--agent-consensus and --agent-reverify must reach DabSuite(consensus_k=, reverify=)."""
+    import scripts.eval_dab as ed
+
+    captured: dict[str, Any] = {}
+
+    class _FakeSuite:
+        name = "dab"
+
+        def __init__(self, **kw: Any) -> None:
+            captured.update(kw)
+
+        def tasks(self) -> list[Any]:
+            return []
+
+        def write_submission(self, report: Any, output_dir: Any) -> None:
+            pass
+
+    async def _fake_interim(*a: Any, **kw: Any) -> BenchmarkReport:
+        return BenchmarkReport(
+            benchmark="dab",
+            run_id="test",
+            score=AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0),
+            trials=[],
+            config={},
+        )
+
+    monkeypatch.setattr(ed, "DabSuite", _FakeSuite)
+    monkeypatch.setattr(ed, "_run_interim", _fake_interim)
+    ed.main(
+        [
+            "--driver",
+            "claude-mcp",
+            "--agent-consensus",
+            "3",
+            "--agent-reverify",
+            "--output-dir",
+            str(tmp_path / "r"),
+            "--datasets",
+            "deps_dev_v1",
+        ]
+    )
+    assert captured.get("consensus_k") == 3
+    assert captured.get("reverify") is True
