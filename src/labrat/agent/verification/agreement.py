@@ -15,7 +15,7 @@ def _parse_agreement(raw: str) -> bool:
     """True unless the judge clearly says the answers differ. Fail-open."""
     s = raw.strip().lower()
     # accept only an explicit, unambiguous "different" verdict as disagreement
-    if s.startswith("different") or s.startswith("no"):
+    if s.startswith("different"):
         return False
     return True
 

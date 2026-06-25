@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from labrat.eval.benchmarks.dab.suite import DabSuite
 from labrat.eval.types import AggregateScore, BenchmarkReport, BenchmarkTask
@@ -59,6 +62,107 @@ async def test_off_path_single_dispatch(tmp_path: Path, monkeypatch) -> None:
 
 async def _never_same(prompt: str) -> str:
     return "different"
+
+
+# ── FIX 1: judge provider routing ────────────────────────────────────────────
+
+
+async def test_verify_judge_uses_claude_code_on_mcp(monkeypatch: Any) -> None:
+    """claude-mcp driver must route the judge through claude-code (Max-plan OAuth)."""
+    import labrat.agent.providers as _providers_mod
+
+    captured: dict[str, str] = {}
+
+    def _fake_build(name: str, model: str, *a: Any, **k: Any) -> Any:
+        captured["name"] = name
+
+        class _P:
+            pass
+
+        return _P()
+
+    monkeypatch.setattr(_providers_mod, "build_provider", _fake_build)
+    # provider_llm_fn only wraps the provider in a closure — no .stream() call yet
+    DabSuite(driver="claude-mcp")._verify_llm_fn()
+    assert captured["name"] == "claude-code"
+
+
+async def test_verify_judge_uses_agent_provider_on_labrat(monkeypatch: Any) -> None:
+    """Non-mcp drivers keep the agent's own provider for the judge."""
+    import labrat.agent.providers as _providers_mod
+
+    captured: dict[str, str] = {}
+
+    def _fake_build(name: str, model: str, *a: Any, **k: Any) -> Any:
+        captured["name"] = name
+
+        class _P:
+            pass
+
+        return _P()
+
+    monkeypatch.setattr(_providers_mod, "build_provider", _fake_build)
+    DabSuite(driver="labrat-agent", agent_provider="anthropic")._verify_llm_fn()
+    assert captured["name"] == "anthropic"
+
+
+# ── FIX 2: verification.json persistence ────────────────────────────────────
+
+
+async def test_verification_json_written(tmp_path: Path, monkeypatch: Any) -> None:
+    """With consensus_k=2, verification.json must appear in the trial scratch dir."""
+    suite = DabSuite(driver="claude-mcp", consensus_k=2)
+    answers = iter([("A", 5, 1.0), ("B", 5, 1.0)])
+
+    async def _disp(
+        self: Any, task: Any, dbp: Any, sd: Any, *, extra_instructions: str = ""
+    ) -> tuple[str, int, float]:
+        return next(answers)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    monkeypatch.setattr(suite, "_verify_llm_fn", lambda: _never_same)
+    await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    vfile = tmp_path / "verification.json"
+    assert vfile.exists(), "verification.json should be written when consensus_k=2"
+    vdata = json.loads(vfile.read_text())
+    assert "modal_index" in vdata
+    assert "low_confidence" in vdata
+    assert vdata["consensus_k"] == 2
+
+
+async def test_no_verification_json_on_off_path(tmp_path: Path, monkeypatch: Any) -> None:
+    """With both flags off, NO verification.json must be written (off-path invariant)."""
+    suite = DabSuite(driver="claude-mcp")  # consensus_k=None, reverify=False
+
+    async def _disp(
+        self: Any, task: Any, dbp: Any, sd: Any, *, extra_instructions: str = ""
+    ) -> tuple[str, int, float]:
+        return ("once", 1, 0.5)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    assert not (tmp_path / "verification.json").exists()
+
+
+# ── FIX 4: summed latency ────────────────────────────────────────────────────
+
+
+async def test_summed_latency_across_sub_runs(tmp_path: Path, monkeypatch: Any) -> None:
+    """Returned latency for consensus_k=2 must equal the sum of both sub-run latencies."""
+    suite = DabSuite(driver="claude-mcp", consensus_k=2)
+    answers = iter([("A", 5, 1.5), ("A", 5, 2.5)])  # both agree → modal = A
+
+    async def _disp(
+        self: Any, task: Any, dbp: Any, sd: Any, *, extra_instructions: str = ""
+    ) -> tuple[str, int, float]:
+        return next(answers)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    # both answers are "A" → exact-equal short-circuit in answers_agree → no LLM judge needed
+    monkeypatch.setattr(suite, "_verify_llm_fn", lambda: _never_same)
+    _text, _tc, latency = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    assert latency == pytest.approx(4.0)  # 1.5 + 2.5
 
 
 def test_eval_dab_threads_verification_flags(monkeypatch: Any, tmp_path: Path) -> None:
