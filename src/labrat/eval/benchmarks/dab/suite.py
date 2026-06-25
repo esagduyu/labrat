@@ -513,18 +513,9 @@ class DabSuite:
         self._last_usage: dict[str, int] | None = None
 
         try:
-            if self._driver == "labrat-agent":
-                final_text, tool_calls, latency = await self._run_trial_labrat_agent(
-                    task, db_config_path, scratch_dir
-                )
-            elif self._driver == "claude-mcp":
-                final_text, tool_calls, latency = await self._run_trial_claude_mcp(
-                    task, db_config_path, scratch_dir
-                )
-            else:
-                final_text, tool_calls, latency = await self._run_trial_raw_bash(
-                    task, db_config_path
-                )
+            final_text, tool_calls, latency = await self._run_trial_verified(
+                task, db_config_path, scratch_dir
+            )
         except Exception as exc:
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
             # fail only THIS trial, not crash the whole run. Record it as an infra failure
@@ -584,6 +575,34 @@ class DabSuite:
             artifact={"type": "text", "payload": final_text},
             meta={"usage": self._last_usage} if self._last_usage else {},
         )
+
+    # ── verified dispatch (Task 3 hook; Task 4 replaces body) ────────────────
+
+    async def _run_trial_verified(
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+    ) -> tuple[str, int, float]:
+        return await self._dispatch_driver_once(task, db_config_path, scratch_dir)
+
+    async def _dispatch_driver_once(
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
+    ) -> tuple[str, int, float]:
+        if self._driver == "labrat-agent":
+            return await self._run_trial_labrat_agent(
+                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+            )
+        if self._driver == "claude-mcp":
+            return await self._run_trial_claude_mcp(
+                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+            )
+        return await self._run_trial_raw_bash(task, db_config_path)
 
     # ── raw-bash driver (Phase 1b baseline) ──────────────────────────────────
 
@@ -652,7 +671,12 @@ class DabSuite:
     # ── claude-mcp driver (Phase 4 on Max-plan billing) ──────────────────────
 
     async def _run_trial_claude_mcp(
-        self, task: BenchmarkTask, db_config_path: Path, scratch_dir: Path
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
     ) -> tuple[str, int, float]:
         """Phase 4 driver that uses the LabRat MCP server inside `claude --print`.
 
@@ -745,6 +769,8 @@ class DabSuite:
             include_cartographer_line=maze_root is not None,
             max_tool_calls=self._agent_max_tool_calls,
         )
+        if extra_instructions:
+            prompt = f"{prompt}\n\n{extra_instructions}"
 
         # max_turns under claude-mcp maps to claude CLI's --max-turns. If
         # unbounded (None), pass a high ceiling (200) so the CLI doesn't apply
@@ -839,7 +865,12 @@ class DabSuite:
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
     async def _run_trial_labrat_agent(
-        self, task: BenchmarkTask, db_config_path: Path, scratch_dir: Path
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
     ) -> tuple[str, int, float]:
         # P3 (sandbox note): this path is in-process. The registry exposes no
         # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
@@ -889,6 +920,8 @@ class DabSuite:
             system_prompt = _build_labrat_agent_system_prompt(env)
             if cartograph_root is not None:
                 system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
+            if extra_instructions:
+                system_prompt = f"{system_prompt}\n\n{extra_instructions}"
 
             def _trace(
                 tool: str,
