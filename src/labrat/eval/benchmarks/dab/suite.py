@@ -23,7 +23,10 @@ import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+if TYPE_CHECKING:
+    from labrat.agent.verifier import LLMFn
 
 from labrat.eval.benchmarks.dab.env import DabTaskEnv, introspect_env_catalogs
 from labrat.eval.types import (
@@ -404,6 +407,8 @@ class DabSuite:
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
         cartograph: bool = False,
+        consensus_k: int | None = None,
+        reverify: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -429,6 +434,8 @@ class DabSuite:
         self._scent_cache_root = (
             Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if cartograph else Path()
         )
+        self._consensus_k = consensus_k
+        self._reverify = reverify
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -513,18 +520,9 @@ class DabSuite:
         self._last_usage: dict[str, int] | None = None
 
         try:
-            if self._driver == "labrat-agent":
-                final_text, tool_calls, latency = await self._run_trial_labrat_agent(
-                    task, db_config_path, scratch_dir
-                )
-            elif self._driver == "claude-mcp":
-                final_text, tool_calls, latency = await self._run_trial_claude_mcp(
-                    task, db_config_path, scratch_dir
-                )
-            else:
-                final_text, tool_calls, latency = await self._run_trial_raw_bash(
-                    task, db_config_path
-                )
+            final_text, tool_calls, latency = await self._run_trial_verified(
+                task, db_config_path, scratch_dir
+            )
         except Exception as exc:
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
             # fail only THIS trial, not crash the whole run. Record it as an infra failure
@@ -584,6 +582,157 @@ class DabSuite:
             artifact={"type": "text", "payload": final_text},
             meta={"usage": self._last_usage} if self._last_usage else {},
         )
+
+    # ── verified dispatch (consensus + re-derive) ─────────────────────────────
+
+    def _verify_llm_fn(self) -> LLMFn:
+        from labrat.agent.providers import build_provider
+        from labrat.agent.verifier import provider_llm_fn
+
+        # The claude-mcp driver runs on Max-plan OAuth with ANTHROPIC_API_KEY stripped,
+        # so the in-process "anthropic" judge can't authenticate there. Route the judge
+        # through the claude-code provider (same OAuth) on that path; otherwise reuse
+        # the provider the agent itself runs on.
+        judge_provider = "claude-code" if self._driver == "claude-mcp" else self._agent_provider
+        provider = build_provider(judge_provider, self._agent_model)
+        return provider_llm_fn(provider)
+
+    async def _run_trial_verified(
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+    ) -> tuple[str, int, float]:
+        from labrat.agent.verification.agreement import answers_agree
+        from labrat.agent.verification.consensus import choose_modal
+
+        question = task.prompt
+        k = self._consensus_k or 1
+        verification_active = k > 1 or self._reverify
+
+        async def _run_once(i: int, extra: str = "") -> tuple[str, int, float]:
+            sub = scratch_dir / f"subrun{i}" if verification_active else scratch_dir
+            sub.mkdir(parents=True, exist_ok=True)
+            return await self._dispatch_driver_once(
+                task, db_config_path, sub, extra_instructions=extra
+            )
+
+        total_latency = 0.0
+
+        # ── Consensus: K sub-runs → modal ──────────────────────────────
+        modal_index: int | None = None
+        low_confidence: bool | None = None
+        consensus_answers: list[str] | None = None
+        chosen_subdir_i: int | None = None
+
+        if k > 1:
+            results: list[tuple[str, int, float]] = []
+            for i in range(k):
+                try:
+                    r = await _run_once(i)
+                    results.append(r)
+                    total_latency += r[2]
+                except Exception:
+                    continue  # a failed sub-run is excluded from the vote
+            if not results:
+                return await _run_once(0)  # all failed → let run_trial's handler see it
+            llm_fn = self._verify_llm_fn()
+            idx, low = await choose_modal([r[0] for r in results], question=question, llm_fn=llm_fn)
+            modal_index = idx
+            low_confidence = low
+            consensus_answers = [r[0] for r in results]
+            primary = results[idx]
+            chosen_subdir_i = idx
+        else:
+            primary = await _run_once(0)
+            total_latency += primary[2]
+            if verification_active:  # reverify-only path
+                chosen_subdir_i = 0
+
+        # Track re-derive metadata for persistence
+        rederived_answer: str | None = None
+        agreed: bool | None = None
+        reconcile_used = False
+        final_answer = primary
+
+        # ── Re-derive: one independent run + reconcile on mismatch ──────
+        if self._reverify:
+            try:
+                rederived = await _run_once(900)  # distinct sub-scratch
+                total_latency += rederived[2]
+                rederived_answer = rederived[0]
+                llm_fn = self._verify_llm_fn()
+                agreed = await answers_agree(
+                    primary[0], rederived[0], question=question, llm_fn=llm_fn
+                )
+                if not agreed:
+                    reconcile = await _run_once(
+                        901,
+                        extra=(
+                            "An independent recomputation produced a DIFFERENT result:\n"
+                            f"  your answer: {primary[0]}\n  independent: {rederived[0]}\n"
+                            "Recompute carefully and give the single correct final answer "
+                            "on the last line."
+                        ),
+                    )
+                    total_latency += reconcile[2]
+                    reconcile_used = True
+                    final_answer = reconcile
+                    chosen_subdir_i = 901
+            except Exception:
+                pass  # fail-open: keep the primary answer
+
+        # ── Persist verification traces (spec §6) ───────────────────────
+        if verification_active:
+            try:
+                vdata: dict[str, Any] = {
+                    "consensus_k": self._consensus_k,
+                    "reverify": self._reverify,
+                    "consensus_answers": consensus_answers,
+                    "modal_index": modal_index,
+                    "low_confidence": low_confidence,
+                    "rederived_answer": rederived_answer,
+                    "agreed": agreed,
+                    "reconcile_used": reconcile_used,
+                    "chosen_answer": final_answer[0],
+                }
+                (scratch_dir / "verification.json").write_text(json.dumps(vdata, indent=2))
+            except Exception:
+                pass  # fail-open: a write error must never trap the trial
+
+            # Best-effort: promote chosen sub-run's trace file to scratch root
+            if chosen_subdir_i is not None:
+                try:
+                    import shutil
+
+                    chosen_sub = scratch_dir / f"subrun{chosen_subdir_i}"
+                    for src in chosen_sub.glob("*_tool_calls.jsonl"):
+                        dst = scratch_dir / src.name
+                        if not dst.exists():
+                            shutil.copy2(src, dst)
+                        break  # only one trace file expected per sub-run
+                except Exception:
+                    pass  # fail-open
+
+        return (final_answer[0], final_answer[1], total_latency)
+
+    async def _dispatch_driver_once(
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
+    ) -> tuple[str, int, float]:
+        if self._driver == "labrat-agent":
+            return await self._run_trial_labrat_agent(
+                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+            )
+        if self._driver == "claude-mcp":
+            return await self._run_trial_claude_mcp(
+                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+            )
+        return await self._run_trial_raw_bash(task, db_config_path)
 
     # ── raw-bash driver (Phase 1b baseline) ──────────────────────────────────
 
@@ -652,7 +801,12 @@ class DabSuite:
     # ── claude-mcp driver (Phase 4 on Max-plan billing) ──────────────────────
 
     async def _run_trial_claude_mcp(
-        self, task: BenchmarkTask, db_config_path: Path, scratch_dir: Path
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
     ) -> tuple[str, int, float]:
         """Phase 4 driver that uses the LabRat MCP server inside `claude --print`.
 
@@ -745,6 +899,8 @@ class DabSuite:
             include_cartographer_line=maze_root is not None,
             max_tool_calls=self._agent_max_tool_calls,
         )
+        if extra_instructions:
+            prompt = f"{prompt}\n\n{extra_instructions}"
 
         # max_turns under claude-mcp maps to claude CLI's --max-turns. If
         # unbounded (None), pass a high ceiling (200) so the CLI doesn't apply
@@ -839,7 +995,12 @@ class DabSuite:
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
     async def _run_trial_labrat_agent(
-        self, task: BenchmarkTask, db_config_path: Path, scratch_dir: Path
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
     ) -> tuple[str, int, float]:
         # P3 (sandbox note): this path is in-process. The registry exposes no
         # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
@@ -889,6 +1050,8 @@ class DabSuite:
             system_prompt = _build_labrat_agent_system_prompt(env)
             if cartograph_root is not None:
                 system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
+            if extra_instructions:
+                system_prompt = f"{system_prompt}\n\n{extra_instructions}"
 
             def _trace(
                 tool: str,
