@@ -291,6 +291,68 @@ def _dab_lever_lines() -> list[str]:
     ]
 
 
+def _build_claude_mcp_prompt(
+    primary_name: str,
+    env_spec: DabTaskEnv,
+    task: BenchmarkTask,
+    *,
+    include_cartographer_line: bool,
+    max_tool_calls: int | None,
+) -> str:
+    """Build the claude-mcp driver's opening user message.
+
+    Pure function of the task + flags — extracted from `_run_trial_claude_mcp` so the
+    exact opening prompt can be emitted for audit (e.g. the leaderboard prompt-leakage
+    check) without re-running the agent. The model also receives the stock Claude Code
+    CLI system prompt (the driver passes no custom `--system-prompt`).
+    """
+    prompt_lines = [
+        "You have a labrat MCP server connected. It exposes data tools "
+        "(link_schema, list_tables, describe_table, sample_rows, run_sql, "
+        "verify_join, attach_database, load_mongo_collection, …) against "
+        f"the primary DuckDB database '{primary_name}'.",
+        "On a wide/unfamiliar schema call link_schema(question) first to find the "
+        "relevant tables; before any multi-table JOIN call verify_join to confirm the "
+        "keys match and won't fan out.",
+    ]
+    if include_cartographer_line:
+        prompt_lines.insert(1, _cartographer_prompt_line())
+    prompt_lines.extend(_dab_lever_lines())
+    if env_spec.attachable:
+        prompt_lines.append("")
+        prompt_lines.append(
+            "Secondary databases you can bring in via attach_database (alias / path / db_type):"
+        )
+        for spec in env_spec.attachable:
+            prompt_lines.append(f"  {spec.alias} / {spec.path} / {spec.db_type}")
+        prompt_lines.append("After attach, query tables as <alias>.<table_name> in run_sql.")
+    if env_spec.mongo:
+        prompt_lines.append("")
+        prompt_lines.append(
+            "MongoDB databases you can pull into DuckDB via load_mongo_collection "
+            "(alias / database):"
+        )
+        for mspec in env_spec.mongo:
+            prompt_lines.append(f"  {mspec.alias} / {mspec.database}")
+        prompt_lines.append(
+            "Each call materializes one collection into a DuckDB table you query with run_sql."
+        )
+    prompt_lines.extend(
+        [
+            "",
+            "Question:",
+            task.prompt,
+            "",
+            "When confident, respond with the final answer on the last line.",
+        ]
+    )
+    # max_tool_calls is advisory under claude-mcp (the CLI has no native cap);
+    # surface it in the prompt so the model self-regulates.
+    if max_tool_calls is not None:
+        prompt_lines.append(f"\nBudget: at most {max_tool_calls} tool calls. Plan accordingly.")
+    return "\n".join(prompt_lines)
+
+
 async def _run_cartographer(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
@@ -676,53 +738,13 @@ class DabSuite:
         mcp_config_path = scratch_dir / "mcp-config.json"
         mcp_config_path.write_text(json.dumps(mcp_config))
 
-        prompt_lines = [
-            "You have a labrat MCP server connected. It exposes data tools "
-            "(link_schema, list_tables, describe_table, sample_rows, run_sql, "
-            "verify_join, attach_database, load_mongo_collection, …) against "
-            f"the primary DuckDB database '{primary_name}'.",
-            "On a wide/unfamiliar schema call link_schema(question) first to find the "
-            "relevant tables; before any multi-table JOIN call verify_join to confirm the "
-            "keys match and won't fan out.",
-        ]
-        if maze_root is not None:
-            prompt_lines.insert(1, _cartographer_prompt_line())
-        prompt_lines.extend(_dab_lever_lines())
-        if env_spec.attachable:
-            prompt_lines.append("")
-            prompt_lines.append(
-                "Secondary databases you can bring in via attach_database (alias / path / db_type):"
-            )
-            for spec in env_spec.attachable:
-                prompt_lines.append(f"  {spec.alias} / {spec.path} / {spec.db_type}")
-            prompt_lines.append("After attach, query tables as <alias>.<table_name> in run_sql.")
-        if env_spec.mongo:
-            prompt_lines.append("")
-            prompt_lines.append(
-                "MongoDB databases you can pull into DuckDB via load_mongo_collection "
-                "(alias / database):"
-            )
-            for mspec in env_spec.mongo:
-                prompt_lines.append(f"  {mspec.alias} / {mspec.database}")
-            prompt_lines.append(
-                "Each call materializes one collection into a DuckDB table you query with run_sql."
-            )
-        prompt_lines.extend(
-            [
-                "",
-                "Question:",
-                task.prompt,
-                "",
-                "When confident, respond with the final answer on the last line.",
-            ]
+        prompt = _build_claude_mcp_prompt(
+            primary_name,
+            env_spec,
+            task,
+            include_cartographer_line=maze_root is not None,
+            max_tool_calls=self._agent_max_tool_calls,
         )
-        # max_tool_calls is advisory under claude-mcp (the CLI has no native cap);
-        # surface it in the prompt so the model self-regulates.
-        if self._agent_max_tool_calls is not None:
-            prompt_lines.append(
-                f"\nBudget: at most {self._agent_max_tool_calls} tool calls. Plan accordingly."
-            )
-        prompt = "\n".join(prompt_lines)
 
         # max_turns under claude-mcp maps to claude CLI's --max-turns. If
         # unbounded (None), pass a high ceiling (200) so the CLI doesn't apply
