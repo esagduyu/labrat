@@ -366,6 +366,20 @@ def main(argv: list[str] | None = None) -> int:
         args.cartograph_semantics_provider
         or existing_cfg.get("cartograph_semantics_provider", "anthropic")
     )
+    if effective_cartograph_semantics and not effective_cartograph:
+        raise SystemExit(
+            "--cartograph-semantics requires --agent-cartograph (the semantics pass runs "
+            "inside the cartographer pre-pass)."
+        )
+    effective_cartograph_scent_dir: Path | None = (
+        args.cartograph_scent_dir
+        if args.cartograph_scent_dir is not None
+        else (
+            Path(existing_cfg["cartograph_scent_dir"])
+            if existing_cfg.get("cartograph_scent_dir")
+            else None
+        )
+    )
     effective_consensus: int | None = (
         args.agent_consensus
         if args.agent_consensus is not None
@@ -400,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         cartograph_semantics=effective_cartograph_semantics,
         cartograph_semantics_model=effective_cartograph_semantics_model,
         cartograph_semantics_provider=effective_cartograph_semantics_provider,
-        cartograph_scent_root=args.cartograph_scent_dir,
+        cartograph_scent_root=effective_cartograph_scent_dir,
         consensus_k=effective_consensus,
         reverify=effective_reverify,
     )
@@ -435,6 +449,9 @@ def main(argv: list[str] | None = None) -> int:
                 "cartograph_semantics": effective_cartograph_semantics,
                 "cartograph_semantics_model": effective_cartograph_semantics_model,
                 "cartograph_semantics_provider": effective_cartograph_semantics_provider,
+                "cartograph_scent_dir": (
+                    str(effective_cartograph_scent_dir) if effective_cartograph_scent_dir else None
+                ),
                 "agent_consensus": effective_consensus,
                 "agent_reverify": effective_reverify,
                 "agent_timeout": effective_timeout,

@@ -591,9 +591,6 @@ class DabSuite:
     # ── verified dispatch (consensus + re-derive) ─────────────────────────────
 
     def _verify_llm_fn(self) -> LLMFn:
-        from labrat.agent.providers import build_provider
-        from labrat.agent.verifier import provider_llm_fn
-
         # The claude-mcp driver runs on Max-plan OAuth with ANTHROPIC_API_KEY stripped,
         # so the in-process "anthropic" judge can't authenticate there. Route the judge
         # through the claude-code provider (same OAuth) on that path; otherwise reuse

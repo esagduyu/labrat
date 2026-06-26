@@ -144,3 +144,75 @@ def test_eval_dab_threads_semantic_flags(monkeypatch, tmp_path: Path) -> None:
     assert captured.get("cartograph_semantics") is True
     assert captured.get("cartograph_semantics_model") == "claude-sonnet-4-6"
     assert captured.get("cartograph_semantics_provider") == "anthropic"
+
+
+def test_semantics_without_cartograph_errors(monkeypatch, tmp_path: Path) -> None:
+    import pytest
+
+    import scripts.eval_dab as ed
+
+    monkeypatch.setattr(ed, "DabSuite", object)  # must never be constructed
+    with pytest.raises(SystemExit):
+        ed.main(
+            [
+                "--driver",
+                "claude-mcp",
+                "--cartograph-semantics",  # no --agent-cartograph
+                "--datasets",
+                "deps_dev_v1",
+                "--output-dir",
+                str(tmp_path / "r"),
+            ]
+        )
+
+
+def test_scent_dir_inherited_on_bare_resume(monkeypatch, tmp_path: Path) -> None:
+    """A bare resume (no --cartograph-scent-dir) inherits the frozen dir from config.json."""
+    import json
+
+    import scripts.eval_dab as ed
+
+    captured: dict[str, object] = {}
+
+    class _FakeSuite:
+        name = "dab"
+
+        def __init__(self, **kw: object) -> None:
+            captured.update(kw)
+
+        def tasks(self):
+            return []
+
+        def write_submission(self, report, output_dir):
+            pass
+
+    async def _fake_interim(suite, n_trials, output_dir, task_filter):
+        from labrat.eval.types import AggregateScore, BenchmarkReport
+
+        return BenchmarkReport(
+            benchmark="dab",
+            run_id="test",
+            score=AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0),
+            trials=[],
+            config={},
+        )
+
+    monkeypatch.setattr(ed, "DabSuite", _FakeSuite)
+    monkeypatch.setattr(ed, "_run_interim", _fake_interim)
+
+    frozen = tmp_path / "frozen"
+    output_dir = tmp_path / "r"
+    output_dir.mkdir(parents=True)
+    (output_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "driver": "claude-mcp",
+                "agent_cartograph": True,
+                "cartograph_semantics": True,
+                "cartograph_scent_dir": str(frozen),
+            }
+        )
+    )
+
+    ed.main(["--output-dir", str(output_dir)])  # no --cartograph-scent-dir
+    assert captured.get("cartograph_scent_root") == frozen

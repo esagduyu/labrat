@@ -255,6 +255,9 @@ async def generate_scent(
         if with_semantics and llm_fn is not None:
             drafted = await draft_semantics(doc, llm_fn)
             doc = doc.model_copy(update={"sections": merge_sections(doc.sections, drafted)})
+            # Audit the full merged doc (skeleton + drafted): fail-loud is the safe default,
+            # and a sampled dimension value that happens to match a pattern is better caught
+            # than a real leak missed.
             tag = audit_scent_doc(doc)
             if tag is not None:
                 raise ScentContaminationError(
