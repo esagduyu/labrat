@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from labrat.agent.verifier import LLMFn
 
+from labrat.agent.providers import build_provider
+from labrat.agent.verifier import provider_llm_fn
 from labrat.eval.benchmarks.dab.env import DabTaskEnv, introspect_env_catalogs
 from labrat.eval.types import (
     AggregateScore,
@@ -36,6 +38,7 @@ from labrat.eval.types import (
     TrialResult,
 )
 from labrat.maze.cartographer import cartograph_prepass
+from labrat.maze.scent_audit import detect_contamination as _detect_contamination
 
 Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]
 
@@ -92,41 +95,11 @@ def _detect_infra_failure(final_text: str) -> str | None:
     return None
 
 
-# Substrings that mark a trial as contaminated by data leakage — the agent read
-# the benchmark's answer key (validate.py / ground_truth.csv) off disk, or pulled
-# external labels (HuggingFace `load_dataset`). With the claude-mcp driver properly
-# sandboxed (MCP-only --allowedTools, isolated cwd) this is structurally impossible,
-# so this is a loud backstop: any hit means the sandbox regressed. Contaminated
-# trials are withdrawn from aggregate scoring (see aggregate()), never counted as
-# a pass. Tags are checked in order; answer-key access is the more severe signal.
-_CONTAMINATION_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("validate.py", "answer_key"),
-    ("ground_truth", "answer_key"),
-    # Natural-language gold-answer assertions. The DAB maintainers (PR #54) caught
-    # three leaks our filename-only scan missed: the access happened inside a Task
-    # subagent (whose internal calls aren't in the transcript) and only its English
-    # summary survives — e.g. "confirmed from the ground truth file", "matches the
-    # ground truth answer 2020". In a DAB analysis trace these phrases only appear
-    # when the agent reached the answer key, so they're high-signal markers.
-    ("ground truth", "answer_key"),
-    ("ground-truth", "answer_key"),
-    ("answer key", "answer_key"),
-    ("gold answer", "answer_key"),
-    ("load_dataset", "external_dataset"),
-    ("huggingface", "external_dataset"),
-    ("fancyzhx/ag_news", "external_dataset"),
-)
-
-
-def _detect_contamination(text: str) -> str | None:
-    """Return a contamination tag ('answer_key' / 'external_dataset') if the trace
-    text shows the agent reached the answer key or an external labelled dataset;
-    otherwise None. Case-insensitive."""
-    low = text.lower()
-    for needle, tag in _CONTAMINATION_PATTERNS:
-        if needle in low:
-            return tag
-    return None
+# Contamination detection (answer-key / external-dataset leakage) is shared with the
+# Scent-authoring guard — see labrat.maze.scent_audit. The `as` aliases preserve the
+# module-local names so the rest of this module (and existing tests) are untouched.
+# Contaminated trials are withdrawn from aggregate scoring (see aggregate()), never
+# counted as a pass.
 
 
 def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
@@ -363,7 +336,14 @@ def _build_claude_mcp_prompt(
     return "\n".join(prompt_lines)
 
 
-async def _run_cartographer(env_spec: DabTaskEnv, dataset: str, cache_root: Path) -> Path:
+async def _run_cartographer(
+    env_spec: DabTaskEnv,
+    dataset: str,
+    cache_root: Path,
+    *,
+    with_semantics: bool = False,
+    llm_fn: LLMFn | None = None,
+) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
 
@@ -382,7 +362,12 @@ async def _run_cartographer(env_spec: DabTaskEnv, dataset: str, cache_root: Path
     try:
         introspect_env_catalogs(ctx)
         await cartograph_prepass(
-            ctx.connections, ctx.catalogs, ctx.primary, scent_dir, with_semantics=False
+            ctx.connections,
+            ctx.catalogs,
+            ctx.primary,
+            scent_dir,
+            with_semantics=with_semantics,
+            llm_fn=llm_fn,
         )
     finally:
         for conn in ctx.connections.values():
@@ -414,6 +399,10 @@ class DabSuite:
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
         cartograph: bool = False,
+        cartograph_semantics: bool = False,
+        cartograph_semantics_model: str = "claude-sonnet-4-6",
+        cartograph_semantics_provider: str = "anthropic",
+        cartograph_scent_root: Path | None = None,
         consensus_k: int | None = None,
         reverify: bool = False,
     ) -> None:
@@ -438,8 +427,17 @@ class DabSuite:
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
         self._cartograph = cartograph
+        # Opt-in LLM-semantic authoring on the cartographer pre-pass. The authoring model
+        # is independent of the agent/trial model and routed via _cartograph_llm_fn.
+        self._cartograph_semantics = cartograph_semantics
+        self._cartograph_semantics_model = cartograph_semantics_model
+        self._cartograph_semantics_provider = cartograph_semantics_provider
+        # An explicit persistent dir overrides the per-run tmpdir (enables freeze-and-commit
+        # of authored Scent for submissions); default unchanged.
         self._scent_cache_root = (
-            Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if cartograph else Path()
+            cartograph_scent_root
+            if cartograph_scent_root is not None
+            else (Path(tempfile.mkdtemp(prefix="labrat-dab-scent-")) if cartograph else Path())
         )
         self._consensus_k = consensus_k
         self._reverify = reverify
@@ -593,9 +591,6 @@ class DabSuite:
     # ── verified dispatch (consensus + re-derive) ─────────────────────────────
 
     def _verify_llm_fn(self) -> LLMFn:
-        from labrat.agent.providers import build_provider
-        from labrat.agent.verifier import provider_llm_fn
-
         # The claude-mcp driver runs on Max-plan OAuth with ANTHROPIC_API_KEY stripped,
         # so the in-process "anthropic" judge can't authenticate there. Route the judge
         # through the claude-code provider (same OAuth) on that path; otherwise reuse
@@ -603,6 +598,16 @@ class DabSuite:
         judge_provider = "claude-code" if self._driver == "claude-mcp" else self._agent_provider
         provider = build_provider(judge_provider, self._agent_model)
         return provider_llm_fn(provider)
+
+    def _cartograph_llm_fn(self) -> LLMFn:
+        # Author the semantics pass with the independent semantics model. Route to the
+        # claude-code provider on the claude-mcp path (Max-plan OAuth; ANTHROPIC_API_KEY
+        # is stripped there), mirroring _verify_llm_fn; honor the configured provider
+        # on the other drivers.
+        provider = (
+            "claude-code" if self._driver == "claude-mcp" else self._cartograph_semantics_provider
+        )
+        return provider_llm_fn(build_provider(provider, self._cartograph_semantics_model))
 
     async def _run_trial_verified(
         self,
@@ -853,7 +858,13 @@ class DabSuite:
         maze_root: Path | None = None
         if self._cartograph:
             dataset = task.id.split(":")[0]
-            maze_root = await _run_cartographer(env_spec, dataset, self._scent_cache_root)
+            maze_root = await _run_cartographer(
+                env_spec,
+                dataset,
+                self._scent_cache_root,
+                with_semantics=self._cartograph_semantics,
+                llm_fn=self._cartograph_llm_fn() if self._cartograph_semantics else None,
+            )
             (maze_root / "_home").mkdir(parents=True, exist_ok=True)
 
         mcp_config = {
@@ -1038,7 +1049,11 @@ class DabSuite:
 
             dataset = task.id.split(":")[0]
             cartograph_root = await _run_cartographer(
-                _build_fresh_env(db_config_path), dataset, self._scent_cache_root
+                _build_fresh_env(db_config_path),
+                dataset,
+                self._scent_cache_root,
+                with_semantics=self._cartograph_semantics,
+                llm_fn=self._cartograph_llm_fn() if self._cartograph_semantics else None,
             )
 
         try:

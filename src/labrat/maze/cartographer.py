@@ -24,6 +24,7 @@ from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.agent.verifier import LLMFn
 from labrat.db.base import Connection
 from labrat.maze.document import ScentDoc, Section, parse_document, render_document
+from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc
 
 _STRINGY = ("CHAR", "TEXT", "STRING", "VARCHAR")
 
@@ -254,6 +255,15 @@ async def generate_scent(
         if with_semantics and llm_fn is not None:
             drafted = await draft_semantics(doc, llm_fn)
             doc = doc.model_copy(update={"sections": merge_sections(doc.sections, drafted)})
+            # Audit the full merged doc (skeleton + drafted): fail-loud is the safe default,
+            # and a sampled dimension value that happens to match a pattern is better caught
+            # than a real leak missed.
+            tag = audit_scent_doc(doc)
+            if tag is not None:
+                raise ScentContaminationError(
+                    f"Scent doc for {name!r} failed contamination audit ({tag}); "
+                    "refusing to freeze LLM-authored semantics."
+                )
         docs.append(doc)
 
     return docs

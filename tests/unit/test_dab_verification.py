@@ -69,7 +69,7 @@ async def _never_same(prompt: str) -> str:
 
 async def test_verify_judge_uses_claude_code_on_mcp(monkeypatch: Any) -> None:
     """claude-mcp driver must route the judge through claude-code (Max-plan OAuth)."""
-    import labrat.agent.providers as _providers_mod
+    import labrat.eval.benchmarks.dab.suite as _suite_mod
 
     captured: dict[str, str] = {}
 
@@ -81,7 +81,7 @@ async def test_verify_judge_uses_claude_code_on_mcp(monkeypatch: Any) -> None:
 
         return _P()
 
-    monkeypatch.setattr(_providers_mod, "build_provider", _fake_build)
+    monkeypatch.setattr(_suite_mod, "build_provider", _fake_build)
     # provider_llm_fn only wraps the provider in a closure — no .stream() call yet
     DabSuite(driver="claude-mcp")._verify_llm_fn()
     assert captured["name"] == "claude-code"
@@ -89,7 +89,7 @@ async def test_verify_judge_uses_claude_code_on_mcp(monkeypatch: Any) -> None:
 
 async def test_verify_judge_uses_agent_provider_on_labrat(monkeypatch: Any) -> None:
     """Non-mcp drivers keep the agent's own provider for the judge."""
-    import labrat.agent.providers as _providers_mod
+    import labrat.eval.benchmarks.dab.suite as _suite_mod
 
     captured: dict[str, str] = {}
 
@@ -101,7 +101,7 @@ async def test_verify_judge_uses_agent_provider_on_labrat(monkeypatch: Any) -> N
 
         return _P()
 
-    monkeypatch.setattr(_providers_mod, "build_provider", _fake_build)
+    monkeypatch.setattr(_suite_mod, "build_provider", _fake_build)
     DabSuite(driver="labrat-agent", agent_provider="anthropic")._verify_llm_fn()
     assert captured["name"] == "anthropic"
 

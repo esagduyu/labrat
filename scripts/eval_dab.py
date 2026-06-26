@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from labrat.agent.providers import PROVIDER_NAMES
 from labrat.eval.benchmarks.dab.suite import DabSuite, Driver
 from labrat.eval.reporting import report_to_markdown
 from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
@@ -220,6 +221,32 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--cartograph-semantics",
+        action="store_true",
+        default=None,
+        help="Enable the LLM semantics pass for the cartographer pre-pass (requires "
+        "--agent-cartograph). Author-once, audited, frozen. Off by default.",
+    )
+    parser.add_argument(
+        "--cartograph-semantics-model",
+        default="claude-sonnet-4-6",
+        help="Model used to author the semantics pass (independent of --agent-model).",
+    )
+    parser.add_argument(
+        "--cartograph-semantics-provider",
+        choices=list(PROVIDER_NAMES),
+        default="anthropic",
+        help="Provider for the semantics authoring model. Auto-routed to claude-code on "
+        "the claude-mcp driver (Max-plan auth); honored as-is on other drivers.",
+    )
+    parser.add_argument(
+        "--cartograph-scent-dir",
+        type=Path,
+        default=None,
+        help="Persistent dir for authored Scent docs (enables freeze-and-commit for a "
+        "submission). Default: a per-run temp dir.",
+    )
+    parser.add_argument(
         "--agent-consensus",
         type=int,
         default=None,
@@ -287,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_max_tool_calls", args.max_tool_calls),
         ("agent_verify", args.agent_verify),
         ("agent_cartograph", args.agent_cartograph),
+        ("cartograph_semantics", args.cartograph_semantics),
         ("agent_consensus", args.agent_consensus),
         ("agent_reverify", args.agent_reverify),
         ("agent_timeout", args.agent_timeout),
@@ -326,6 +354,32 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_cartograph is not None
         else existing_cfg.get("agent_cartograph", False)
     )
+    effective_cartograph_semantics: bool = bool(
+        args.cartograph_semantics
+        if args.cartograph_semantics is not None
+        else existing_cfg.get("cartograph_semantics", False)
+    )
+    effective_cartograph_semantics_model: str = args.cartograph_semantics_model or existing_cfg.get(
+        "cartograph_semantics_model", "claude-sonnet-4-6"
+    )
+    effective_cartograph_semantics_provider: str = (
+        args.cartograph_semantics_provider
+        or existing_cfg.get("cartograph_semantics_provider", "anthropic")
+    )
+    if effective_cartograph_semantics and not effective_cartograph:
+        raise SystemExit(
+            "--cartograph-semantics requires --agent-cartograph (the semantics pass runs "
+            "inside the cartographer pre-pass)."
+        )
+    effective_cartograph_scent_dir: Path | None = (
+        args.cartograph_scent_dir
+        if args.cartograph_scent_dir is not None
+        else (
+            Path(existing_cfg["cartograph_scent_dir"])
+            if existing_cfg.get("cartograph_scent_dir")
+            else None
+        )
+    )
     effective_consensus: int | None = (
         args.agent_consensus
         if args.agent_consensus is not None
@@ -357,6 +411,10 @@ def main(argv: list[str] | None = None) -> int:
         agent_timeout=effective_timeout,
         agent_reasoning=effective_reasoning,
         cartograph=effective_cartograph,
+        cartograph_semantics=effective_cartograph_semantics,
+        cartograph_semantics_model=effective_cartograph_semantics_model,
+        cartograph_semantics_provider=effective_cartograph_semantics_provider,
+        cartograph_scent_root=effective_cartograph_scent_dir,
         consensus_k=effective_consensus,
         reverify=effective_reverify,
     )
@@ -388,6 +446,12 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_max_tool_calls": effective_max_tool_calls,
                 "agent_verify": effective_verify,
                 "agent_cartograph": effective_cartograph,
+                "cartograph_semantics": effective_cartograph_semantics,
+                "cartograph_semantics_model": effective_cartograph_semantics_model,
+                "cartograph_semantics_provider": effective_cartograph_semantics_provider,
+                "cartograph_scent_dir": (
+                    str(effective_cartograph_scent_dir) if effective_cartograph_scent_dir else None
+                ),
                 "agent_consensus": effective_consensus,
                 "agent_reverify": effective_reverify,
                 "agent_timeout": effective_timeout,
