@@ -36,6 +36,7 @@ from labrat.eval.types import (
     TrialResult,
 )
 from labrat.maze.cartographer import cartograph_prepass
+from labrat.maze.scent_audit import detect_contamination as _detect_contamination
 
 Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]
 
@@ -92,41 +93,11 @@ def _detect_infra_failure(final_text: str) -> str | None:
     return None
 
 
-# Substrings that mark a trial as contaminated by data leakage — the agent read
-# the benchmark's answer key (validate.py / ground_truth.csv) off disk, or pulled
-# external labels (HuggingFace `load_dataset`). With the claude-mcp driver properly
-# sandboxed (MCP-only --allowedTools, isolated cwd) this is structurally impossible,
-# so this is a loud backstop: any hit means the sandbox regressed. Contaminated
-# trials are withdrawn from aggregate scoring (see aggregate()), never counted as
-# a pass. Tags are checked in order; answer-key access is the more severe signal.
-_CONTAMINATION_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("validate.py", "answer_key"),
-    ("ground_truth", "answer_key"),
-    # Natural-language gold-answer assertions. The DAB maintainers (PR #54) caught
-    # three leaks our filename-only scan missed: the access happened inside a Task
-    # subagent (whose internal calls aren't in the transcript) and only its English
-    # summary survives — e.g. "confirmed from the ground truth file", "matches the
-    # ground truth answer 2020". In a DAB analysis trace these phrases only appear
-    # when the agent reached the answer key, so they're high-signal markers.
-    ("ground truth", "answer_key"),
-    ("ground-truth", "answer_key"),
-    ("answer key", "answer_key"),
-    ("gold answer", "answer_key"),
-    ("load_dataset", "external_dataset"),
-    ("huggingface", "external_dataset"),
-    ("fancyzhx/ag_news", "external_dataset"),
-)
-
-
-def _detect_contamination(text: str) -> str | None:
-    """Return a contamination tag ('answer_key' / 'external_dataset') if the trace
-    text shows the agent reached the answer key or an external labelled dataset;
-    otherwise None. Case-insensitive."""
-    low = text.lower()
-    for needle, tag in _CONTAMINATION_PATTERNS:
-        if needle in low:
-            return tag
-    return None
+# Contamination detection (answer-key / external-dataset leakage) is shared with the
+# Scent-authoring guard — see labrat.maze.scent_audit. The `as` aliases preserve the
+# module-local names so the rest of this module (and existing tests) are untouched.
+# Contaminated trials are withdrawn from aggregate scoring (see aggregate()), never
+# counted as a pass.
 
 
 def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
