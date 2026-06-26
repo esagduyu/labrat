@@ -93,3 +93,54 @@ def test_cartograph_llm_fn_honors_provider_off_mcp(monkeypatch) -> None:
     )
     suite._cartograph_llm_fn()
     assert captured["name"] == "anthropic"  # non-mcp path honors the configured provider
+
+
+def test_eval_dab_threads_semantic_flags(monkeypatch, tmp_path: Path) -> None:
+    import scripts.eval_dab as ed
+
+    captured: dict[str, object] = {}
+
+    class _FakeSuite:
+        name = "dab"
+
+        def __init__(self, **kw: object) -> None:
+            captured.update(kw)
+
+        def tasks(self):
+            return []
+
+        def write_submission(self, report, output_dir):
+            pass
+
+    async def _fake_interim(suite, n_trials, output_dir, task_filter):
+        from labrat.eval.types import AggregateScore, BenchmarkReport
+
+        return BenchmarkReport(
+            benchmark="dab",
+            run_id="test",
+            score=AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0),
+            trials=[],
+            config={},
+        )
+
+    monkeypatch.setattr(ed, "DabSuite", _FakeSuite)
+    monkeypatch.setattr(ed, "_run_interim", _fake_interim)
+    ed.main(
+        [
+            "--driver",
+            "claude-mcp",
+            "--agent-cartograph",
+            "--cartograph-semantics",
+            "--cartograph-semantics-model",
+            "claude-sonnet-4-6",
+            "--cartograph-semantics-provider",
+            "anthropic",
+            "--datasets",
+            "deps_dev_v1",
+            "--output-dir",
+            str(tmp_path / "r"),
+        ]
+    )
+    assert captured.get("cartograph_semantics") is True
+    assert captured.get("cartograph_semantics_model") == "claude-sonnet-4-6"
+    assert captured.get("cartograph_semantics_provider") == "anthropic"
