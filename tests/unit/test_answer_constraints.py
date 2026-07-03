@@ -42,3 +42,18 @@ def test_five_item_and_list_satisfies() -> None:
 
 def test_proportion_bare_decimal_not_flagged() -> None:
     assert check_answer_constraints("What proportion of users churned?", "0.42") == []
+
+
+def test_preamble_line_plus_list_line_not_flagged() -> None:
+    # FIX 2: a preamble line + a comma-separated list line on the next line must count
+    # as 5 items (the list-line split), not 2 lines — was a false positive before.
+    v = check_answer_constraints(
+        "What are the top 5 products?",
+        "The top 5 products are:\nWidget, Gadget, Gizmo, Doohickey, Thingamajig",
+    )
+    assert v == []
+
+
+def test_preamble_line_plus_three_item_list_line_satisfies_top_3() -> None:
+    v = check_answer_constraints("top 3 products", "Here are the top 3:\nA, B, C")
+    assert v == []
