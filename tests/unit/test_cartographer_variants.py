@@ -38,3 +38,43 @@ async def test_variant_seed_zero_is_stable(tmp_path) -> None:
         == build_dimensions(prof, conn, variant_seed=0).body
     )
     conn.disconnect()
+
+
+class _RecordingConnProxy:
+    """Wraps a Connection and records every SQL string passed to execute()."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.queries: list[str] = []
+
+    def execute(self, sql: str):
+        self.queries.append(sql)
+        return self._inner.execute(sql)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+async def test_variant_seed_zero_emits_legacy_sql_no_order_by(tmp_path) -> None:
+    """FIX 1 regression: seed=0 must reproduce the pre-M1 SQL byte-for-byte —
+    no ORDER BY hash(...) clause on either the low-cardinality DISTINCT scan or
+    the unusual-structure LIMIT-200 scan. The ORDER BY is only for variant_seed > 0.
+    """
+    conn, prof = await _profile(tmp_path)
+    proxy = _RecordingConnProxy(conn)
+    build_dimensions(prof, proxy, variant_seed=0)
+    assert proxy.queries, "expected at least one query to be recorded"
+    for sql in proxy.queries:
+        assert "ORDER BY" not in sql, f"seed=0 query unexpectedly ordered: {sql!r}"
+    conn.disconnect()
+
+
+async def test_variant_seed_nonzero_emits_order_by(tmp_path) -> None:
+    """Sanity check: variant_seed > 0 still adds the ORDER BY hash(...) clause
+    that decorrelates consensus sub-runs' Scent."""
+    conn, prof = await _profile(tmp_path)
+    proxy = _RecordingConnProxy(conn)
+    build_dimensions(prof, proxy, variant_seed=1)
+    assert proxy.queries, "expected at least one query to be recorded"
+    assert any("ORDER BY hash" in sql for sql in proxy.queries)
+    conn.disconnect()

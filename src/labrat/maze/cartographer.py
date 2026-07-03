@@ -225,11 +225,16 @@ def build_dimensions(
         for col in t.columns:
             if not _is_stringy(col.data_type):
                 continue
+            order_clause = (
+                f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                if variant_seed > 0
+                else ""
+            )
             try:
                 df = conn.execute(
                     f"SELECT DISTINCT {col.name} FROM {t.name} "
                     f"WHERE {col.name} IS NOT NULL "
-                    f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                    f"{order_clause}"
                     f"LIMIT {cap + 1}"
                 )
             except Exception:
@@ -253,11 +258,16 @@ def build_dimensions(
                     pass
             # unusual-structure sample for stringy cols
             elif _is_stringy(col.data_type):
+                order_clause = (
+                    f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                    if variant_seed > 0
+                    else ""
+                )
                 try:
                     df = conn.execute(
                         f"SELECT DISTINCT {col.name} FROM {t.name} "
                         f"WHERE {col.name} IS NOT NULL "
-                        f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                        f"{order_clause}"
                         f"LIMIT 200"
                     )
                     odd = [
