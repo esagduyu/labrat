@@ -115,6 +115,65 @@ def _candidate_joins(profile: ProfileOutput) -> list[tuple[str, str, str, str]]:
     return candidates
 
 
+_JOIN_XFORM_MIN = 0.5
+# (label, SQL template applied to a column expr) — deterministic, symmetric on both sides
+_JOIN_TRANSFORMS: list[tuple[str, str]] = [
+    ("extract-digits", "regexp_replace(CAST({c} AS VARCHAR), '[^0-9]', '', 'g')"),
+    ("lower-trim", "lower(trim(CAST({c} AS VARCHAR)))"),
+    ("strip-leading-num", "regexp_replace(CAST({c} AS VARCHAR), '^[0-9]+[-.]', '')"),
+]
+
+
+def _match_rate(conn: Connection, lt: str, lexpr: str, rt: str, rexpr: str) -> float:
+    def _scalar(sql: str) -> int:
+        v = conn.execute(sql).row(0)[0]
+        return int(v) if v is not None else 0
+
+    denom = _scalar(f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IS NOT NULL")
+    if denom == 0:
+        return 0.0
+    matched = _scalar(
+        f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IN "
+        f"(SELECT {rexpr} FROM {rt} WHERE {rexpr} IS NOT NULL)"
+    )
+    return matched / denom
+
+
+def build_join_keys(
+    profile: ProfileOutput, conn: Connection, verified: list[VerifiedJoin]
+) -> Section | None:
+    """For candidate joins that don't match raw, detect a normalizing transform and
+    emit the exact normalization SQL. Deterministic (bounded COUNT probes)."""
+    verified_pairs = {(j.left, j.right) for j in verified}
+    lines: list[str] = []
+    for lt, lc, rt, rc in _candidate_joins(profile):
+        if (f"{lt}.{lc}", f"{rt}.{rc}") in verified_pairs:
+            continue
+        raw = _match_rate(conn, lt, lc, rt, rc)
+        if raw >= 0.95:
+            continue  # already clean; discover_joins handles it
+        best: tuple[str, str, float] | None = None
+        for label, tmpl in _JOIN_TRANSFORMS:
+            lexpr, rexpr = tmpl.format(c=lc), tmpl.format(c=rc)
+            try:
+                rate = _match_rate(conn, lt, lexpr, rt, rexpr)
+            except Exception:
+                continue
+            if rate >= _JOIN_XFORM_MIN and rate > raw and (best is None or rate > best[2]):
+                best = (label, tmpl, rate)
+        if best is not None:
+            label, tmpl, rate = best
+            lexpr, rexpr = tmpl.format(c=f"{lt}.{lc}"), tmpl.format(c=f"{rt}.{rc}")
+            lines.append(
+                f"- `{lt}.{lc}` ↔ `{rt}.{rc}` needs **{label}** "
+                f"({round(rate * 100, 1)}% after transform). Join on: "
+                f"`{lexpr} = {rexpr}`"
+            )
+    if not lines:
+        return None
+    return Section(heading="Join Keys", body="\n".join(lines), source="verified")
+
+
 def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> Section:
     lines: list[str] = []
     for t in profile.tables:
@@ -243,8 +302,11 @@ async def generate_scent(
         sections = [
             build_quick_reference(profile),
             build_key_tables(profile, joins),
-            build_dimensions(profile, cast(Connection, conn), cap=distinct_cap),
         ]
+        jk = build_join_keys(profile, cast(Connection, conn), joins)
+        if jk is not None:
+            sections.append(jk)
+        sections.append(build_dimensions(profile, cast(Connection, conn), cap=distinct_cap))
         doc = ScentDoc(
             domain=name,
             kind="scent",
