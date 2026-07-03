@@ -325,12 +325,29 @@ async def discover_joins(
 _SEMANTICS_INSTRUCTION = (
     "You are a senior data analyst writing a reference doc for an LLM data agent.\n"
     "The VERIFIED FACTS below are mechanically confirmed ground truth — DO NOT alter, "
-    "repeat, or contradict them. Write ONLY the interpretive sections a senior analyst "
-    "would add: ## Gotchas (wrong-answer modes, dirty-data warnings), ## Best Practices "
-    "(canonical metric definitions, preferred columns), and ## Cross-References. Use short, "
-    "retrieval-oriented bullets and routing-trigger phrasing. If you are unsure about a "
-    "business rule, say so rather than invent. Output GitHub-flavored markdown with ## "
-    "headings only; do not emit a ## Quick Reference, ## Dimensions, or ## Key Tables "
+    "repeat, or contradict them.\n\n"
+    "First, emit a ## Semantic Claims block: one machine-checkable claim per line, no "
+    "prose, using ONLY these two grammars:\n"
+    "  JOIN <left_table>.<left_col> = <right_table>.<right_col>   (a join that is "
+    "meaningful for answering questions, beyond what is already verified)\n"
+    "  ROLE <table>.<code_col> CODES <table>.<name_col>   (when one column holds a coded "
+    "value — an id, abbreviation, or enum — and another column on the same table holds the "
+    "human-readable display name for that same concept)\n"
+    "Only claim what you can support from the verified facts; omit a claim rather than "
+    "guess.\n\n"
+    "Then write the interpretive sections a senior analyst would add: ## Gotchas "
+    "(wrong-answer modes, dirty-data warnings) and ## Best Practices (canonical metric "
+    "definitions, preferred columns), plus ## Cross-References if useful. Every bullet in "
+    'these sections MUST be conditional — phrase it as "WHEN the question asks for X, use '
+    'Y" (or "WHEN <condition>, ..."), tied to a specific trigger. NEVER write an '
+    'unconditional rule like "use X not Y" — an unconditional rule silently overrides '
+    "cases the analyst didn't anticipate. Before finishing, self-check every bullet: if it "
+    "merely restates a column's name or type (something already visible in the verified "
+    "facts) with no added interpretation, drop it — only keep high-signal, non-obvious "
+    "guidance.\n\n"
+    "Use short, retrieval-oriented bullets and routing-trigger phrasing. If you are unsure "
+    "about a business rule, say so rather than invent. Output GitHub-flavored markdown with "
+    "## headings only; do not emit a ## Quick Reference, ## Dimensions, or ## Key Tables "
     "section (those are already verified)."
 )
 
@@ -340,20 +357,52 @@ def _semantics_prompt(skeleton: ScentDoc) -> str:
     return f"{_SEMANTICS_INSTRUCTION}\n\n--- VERIFIED FACTS ---\n{facts}\n--- END FACTS ---\n"
 
 
-async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> list[Section]:
-    """Single LLM pass: draft the interpretive sections, tagged Source: draft."""
+async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> tuple[list[Section], str]:
+    """Single LLM pass → (conditional prose sections tagged draft, raw claims-block text).
+
+    Two safety nets against unverified claim lines reaching the doc as prose:
+    (1) a fuzzy heading match catches renamed/drifted "Semantic Claims" sections (e.g.
+    "Semantic Claims:"), and (2) any claim-shaped line found stray inside an otherwise
+    legitimate prose section (e.g. a JOIN/ROLE line under "## Gotchas") is rerouted into
+    the claims text so it still goes through verification instead of being emitted raw.
+    """
+    # Lazy import: draft_semantics is only called from the with_semantics branch of
+    # generate_scent, so this never runs on the deterministic path (byte-identity kept).
+    from labrat.maze.semantic_claims import is_claim_line
+
     raw = await llm_fn(_semantics_prompt(skeleton))
     parsed = parse_document(raw, domain="_draft")
-    return [
-        Section(heading=s.heading, body=s.body, source="draft")
-        for s in parsed.sections
-        if s.heading
-    ]
+    prose: list[Section] = []
+    claims_text = ""
+    for s in parsed.sections:
+        if not s.heading:
+            continue
+        if s.heading.strip().lower().startswith("semantic claims"):
+            claims_text += s.body + "\n"
+            continue
+        claim_lines: list[str] = []
+        prose_lines: list[str] = []
+        for line in s.body.splitlines():
+            (claim_lines if is_claim_line(line) else prose_lines).append(line)
+        if claim_lines:
+            claims_text += "\n".join(claim_lines) + "\n"
+        remaining_body = "\n".join(prose_lines).strip()
+        if remaining_body:
+            prose.append(Section(heading=s.heading, body=remaining_body, source="draft"))
+    return prose, claims_text
+
+
+_RESERVED_HEADINGS = {"verified semantics", "semantic claims"}
 
 
 def merge_sections(verified: list[Section], drafted: list[Section]) -> list[Section]:
-    """Append drafted sections whose heading does not collide with a verified one."""
-    taken = {s.heading.strip().lower() for s in verified}
+    """Append drafted sections whose heading does not collide with a verified one.
+
+    "verified semantics" and "semantic claims" headings are always reserved — an
+    LLM-authored prose section can't spoof a verified-looking heading even when no real
+    verified section exists (e.g. verify_semantic_claims returned None).
+    """
+    taken = {s.heading.strip().lower() for s in verified} | _RESERVED_HEADINGS
     return list(verified) + [d for d in drafted if d.heading.strip().lower() not in taken]
 
 
@@ -419,11 +468,19 @@ async def generate_scent(
             sections=sections,
         )
         if with_semantics and llm_fn is not None:
-            drafted = await draft_semantics(doc, llm_fn)
-            doc = doc.model_copy(update={"sections": merge_sections(doc.sections, drafted)})
-            # Audit the full merged doc (skeleton + drafted): fail-loud is the safe default,
-            # and a sampled dimension value that happens to match a pattern is better caught
-            # than a real leak missed.
+            from labrat.maze.semantic_claims import parse_semantic_claims, verify_semantic_claims
+
+            prose, raw_claims = await draft_semantics(doc, llm_fn)
+            claims = parse_semantic_claims(raw_claims)
+            verified = await verify_semantic_claims(claims, ctx, database=name)
+            new_sections = list(doc.sections)
+            if verified is not None:
+                new_sections.append(verified)
+            new_sections = merge_sections(new_sections, prose)
+            doc = doc.model_copy(update={"sections": new_sections})
+            # Audit the full merged doc (skeleton + verified claims + drafted prose):
+            # fail-loud is the safe default, and a sampled dimension value that happens
+            # to match a pattern is better caught than a real leak missed.
             tag = audit_scent_doc(doc)
             if tag is not None:
                 raise ScentContaminationError(
