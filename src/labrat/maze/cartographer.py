@@ -217,7 +217,9 @@ def build_join_keys(
     return Section(heading="Join Keys", body="\n".join(lines), source="verified")
 
 
-def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> Section:
+def build_dimensions(
+    profile: ProfileOutput, conn: Connection, *, cap: int = 25, variant_seed: int = 0
+) -> Section:
     lines: list[str] = []
     for t in profile.tables:
         for col in t.columns:
@@ -226,7 +228,9 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
             try:
                 df = conn.execute(
                     f"SELECT DISTINCT {col.name} FROM {t.name} "
-                    f"WHERE {col.name} IS NOT NULL LIMIT {cap + 1}"
+                    f"WHERE {col.name} IS NOT NULL "
+                    f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                    f"LIMIT {cap + 1}"
                 )
             except Exception:
                 continue
@@ -252,7 +256,9 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
                 try:
                     df = conn.execute(
                         f"SELECT DISTINCT {col.name} FROM {t.name} "
-                        f"WHERE {col.name} IS NOT NULL LIMIT 200"
+                        f"WHERE {col.name} IS NOT NULL "
+                        f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                        f"LIMIT 200"
                     )
                     odd = [
                         str(v[0])
@@ -351,6 +357,7 @@ async def generate_scent(
     table_budget: int = 40,
     distinct_cap: int = 25,
     relevance: dict[str, float] | None = None,
+    variant_seed: int = 0,
 ) -> list[ScentDoc]:
     """Generate one Scent doc per connection: a verified deterministic skeleton plus,
     when ``with_semantics`` and ``llm_fn`` are given, an LLM-drafted semantics pass.
@@ -389,7 +396,11 @@ async def generate_scent(
         jk = build_join_keys(profile, cast(Connection, conn), joins)
         if jk is not None:
             sections.append(jk)
-        sections.append(build_dimensions(profile, cast(Connection, conn), cap=distinct_cap))
+        sections.append(
+            build_dimensions(
+                profile, cast(Connection, conn), cap=distinct_cap, variant_seed=variant_seed
+            )
+        )
         doc = ScentDoc(
             domain=name,
             kind="scent",
