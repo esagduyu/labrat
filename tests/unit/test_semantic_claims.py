@@ -231,11 +231,13 @@ def test_role_claim_genuine_digit_bearing_code_still_survives(tmp_path) -> None:
 
 
 def test_role_claim_name_ceiling_drops_when_both_sides_code_shaped(tmp_path) -> None:
-    # IMPORTANT-2: name side itself scores >= _NAME_CEILING code-shaped → direction ambiguous.
+    # IMPORTANT-2: name side itself scores > _NAME_CEILING code-shaped → direction ambiguous.
+    # code_col scores 1.0, name_col scores 0.5 (2 of 4 code-shaped) — the OLD relative-only gate
+    # (code_score > name_score) would KEEP this (1.0 > 0.5); the ceiling drops it (0.5 > 0.4).
     p = str(tmp_path / "codes.duckdb")
     raw = duckdb.connect(p)
     raw.execute("CREATE TABLE t(num_code VARCHAR, alt_code VARCHAR)")
-    raw.execute("INSERT INTO t VALUES ('840','124'),('826','276'),('392','392')")
+    raw.execute("INSERT INTO t VALUES ('840','A1'),('826','B2'),('392','Alpha'),('118','Beta')")
     raw.close()
     conn = DuckDBConnection(path=p, read_only=False)
     conn.connect()
