@@ -15,7 +15,8 @@ from labrat.db.base import Connection
 
 _JOIN_RE = re.compile(r"^\s*JOIN\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)\s*$", re.IGNORECASE)
 _ROLE_RE = re.compile(r"^\s*ROLE\s+(\w+)\.(\w+)\s+CODES\s+(\w+)\.(\w+)\s*$", re.IGNORECASE)
-_CODE_SHAPE_RE = re.compile(r"(\d.*[/\-._]|^\[.*\]$|^[A-Za-z0-9]{1,10}$)")
+_CODE_SHAPE_RE = re.compile(r"(\d.*[/\-._]|^\[.*\]$|^(?=.*\d)[A-Za-z0-9]{1,10}$)")
+_SAFE_IDENT = re.compile(r"\w+")
 _SAMPLE = 200
 _SHAPE_THRESHOLD = 0.6
 
@@ -64,6 +65,8 @@ def _looks_like_code(values: list[str]) -> float:
 def verify_role_claim(conn: Connection, claim: RoleClaim) -> bool:
     """True iff code_col holds code-shaped values and name_col does NOT (name-shaped).
     Conservative: any probe error or ambiguity → False (drop)."""
+    if not all(_SAFE_IDENT.fullmatch(x) for x in (claim.table, claim.code_col, claim.name_col)):
+        return False
     try:
 
         def _vals(col: str) -> list[str]:

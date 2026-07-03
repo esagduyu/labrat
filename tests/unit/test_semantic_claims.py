@@ -75,3 +75,46 @@ def test_role_claim_reversed_direction_dropped(tmp_path) -> None:
         is False
     )
     conn.disconnect()
+
+
+def test_role_claim_short_wordy_names_not_false_kept(tmp_path) -> None:
+    # reversed/spurious: a short single-word CATEGORY column must NOT be accepted as the code column
+    import duckdb
+
+    from labrat.db.duckdb_engine import DuckDBConnection
+
+    p = str(tmp_path / "cat.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE t(category VARCHAR, description VARCHAR)")
+    raw.execute(
+        "INSERT INTO t VALUES ('Alpha','the alpha group'),('Beta','the beta group'),"
+        "('Gamma','the gamma group')"
+    )
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+    # claim: category is codes (WRONG — they're short words with no digits) → must DROP
+    assert (
+        verify_role_claim(conn, RoleClaim(table="t", code_col="category", name_col="description"))
+        is False
+    )
+    conn.disconnect()
+
+
+def test_role_claim_rejects_non_identifier(tmp_path) -> None:
+    import duckdb
+
+    from labrat.db.duckdb_engine import DuckDBConnection
+
+    p = str(tmp_path / "id.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE t(a INT)")
+    raw.execute("INSERT INTO t VALUES (1)")
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+    assert (
+        verify_role_claim(conn, RoleClaim(table="t; DROP TABLE t", code_col="a", name_col="a"))
+        is False
+    )
+    conn.disconnect()
