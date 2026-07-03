@@ -67,3 +67,46 @@ async def test_draft_returns_prose_and_claims_separately() -> None:
 def test_instruction_forbids_unconditional_rules() -> None:
     low = _SEMANTICS_INSTRUCTION.lower()
     assert "conditional" in low and "semantic claims" in low
+
+
+async def test_generate_scent_persists_only_verified_claims(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import duckdb
+
+    from labrat.db.duckdb_engine import DuckDBConnection
+    from labrat.maze.cartographer import generate_scent
+
+    p = str(tmp_path / "g.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE customers(id INT, name VARCHAR)")
+    raw.execute("INSERT INTO customers VALUES (1,'a'),(2,'b')")
+    raw.execute("CREATE TABLE orders(customer_id INT, amt INT)")
+    raw.execute("INSERT INTO orders VALUES (1,10),(2,20)")
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+
+    async def _llm(_prompt: str) -> str:
+        return (
+            "## Semantic Claims\n"
+            "JOIN orders.customer_id = customers.id\n"  # real → survives
+            "JOIN orders.amt = customers.id\n\n"  # bogus → dropped
+            "## Gotchas\n- When joining orders to customers, use customer_id.\n"
+        )
+
+    docs = await generate_scent(
+        connections={"main": conn},
+        catalogs={"main": conn.introspect_catalog()},
+        primary="main",
+        with_semantics=True,
+        llm_fn=_llm,
+    )
+    body = "\n".join(s.body for s in docs[0].sections)
+    assert "orders.customer_id = customers.id" in body  # verified claim persisted
+    assert "orders.amt = customers.id" not in body  # bogus claim dropped
+    assert any(
+        s.heading == "Verified Semantics" and s.source == "verified" for s in docs[0].sections
+    )
+    assert any(
+        s.heading.strip().lower() == "gotchas" and s.source == "draft" for s in docs[0].sections
+    )
+    conn.disconnect()

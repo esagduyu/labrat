@@ -441,13 +441,19 @@ async def generate_scent(
             sections=sections,
         )
         if with_semantics and llm_fn is not None:
-            # TODO(Task 5): wire the raw claims text through claim-verify before merging;
-            # for now only the conditional prose is merged (claims text discarded here).
-            prose, _claims_text = await draft_semantics(doc, llm_fn)
-            doc = doc.model_copy(update={"sections": merge_sections(doc.sections, prose)})
-            # Audit the full merged doc (skeleton + drafted): fail-loud is the safe default,
-            # and a sampled dimension value that happens to match a pattern is better caught
-            # than a real leak missed.
+            from labrat.maze.semantic_claims import parse_semantic_claims, verify_semantic_claims
+
+            prose, raw_claims = await draft_semantics(doc, llm_fn)
+            claims = parse_semantic_claims(raw_claims)
+            verified = await verify_semantic_claims(claims, ctx, database=name)
+            new_sections = list(doc.sections)
+            if verified is not None:
+                new_sections.append(verified)
+            new_sections = merge_sections(new_sections, prose)
+            doc = doc.model_copy(update={"sections": new_sections})
+            # Audit the full merged doc (skeleton + verified claims + drafted prose):
+            # fail-loud is the safe default, and a sampled dimension value that happens
+            # to match a pattern is better caught than a real leak missed.
             tag = audit_scent_doc(doc)
             if tag is not None:
                 raise ScentContaminationError(
