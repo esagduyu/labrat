@@ -24,3 +24,21 @@ def test_percentage_present_no_flag() -> None:
 
 def test_no_extractable_constraint_no_flag() -> None:
     assert check_answer_constraints("Which city has the most stores?", "Chicago") == []
+
+
+def test_city_state_answer_not_flagged() -> None:
+    # "Chicago, IL" is one answer, not 2 items — top-3 question must not flag
+    assert check_answer_constraints("top 3 cities", "Chicago, IL") == []
+
+
+def test_prose_enumeration_with_and_satisfies_count() -> None:
+    # "A, B and C" is 3 items → top-3 satisfied, no flag
+    assert check_answer_constraints("top 3 products", "A, B and C") == []
+
+
+def test_five_item_and_list_satisfies() -> None:
+    assert check_answer_constraints("top 5 products", "A, B, C, D and E") == []
+
+
+def test_proportion_bare_decimal_not_flagged() -> None:
+    assert check_answer_constraints("What proportion of users churned?", "0.42") == []
