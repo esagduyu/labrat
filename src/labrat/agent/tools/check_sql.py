@@ -85,6 +85,10 @@ class CheckSqlTool(Tool[_Input]):
         except ParseError as e:
             return _Output(valid=False, unknown_tables=[], unknown_columns=[], parse_error=str(e))
 
+        # CTE names are not base tables — never flag them, and don't resolve their
+        # projected columns (fail-open: we don't track what a CTE actually selects).
+        cte_names = {c.alias.lower() for c in tree.find_all(exp.CTE) if c.alias}
+
         # alias -> real table name, for tables in scope
         alias_map: dict[str, str] = {}
         in_scope: list[str] = []
@@ -92,6 +96,8 @@ class CheckSqlTool(Tool[_Input]):
         for tbl in tree.find_all(exp.Table):
             tname = tbl.name
             if not tname:
+                continue
+            if tname.lower() in cte_names:
                 continue
             alias = tbl.alias or tname
             alias_map[alias.lower()] = tname.lower()
@@ -109,6 +115,8 @@ class CheckSqlTool(Tool[_Input]):
                 continue
             qualifier = col.table  # alias or table, '' if unqualified
             if qualifier:
+                if qualifier.lower() in cte_names:
+                    continue  # can't resolve a CTE's projected columns — fail-open
                 real = alias_map.get(qualifier.lower())
                 if real is None or real not in idx:
                     continue  # unknown/foreign qualifier — table already flagged or out of scope
@@ -120,12 +128,13 @@ class CheckSqlTool(Tool[_Input]):
                     )
             else:
                 owners = [t for t in in_scope if cname.lower() in idx.get(t, set())]
-                if len(owners) == 0 and in_scope:
+                if len(owners) == 0 and in_scope and not cte_names:
                     pool = sorted({c for t in in_scope for c in idx.get(t, set())})
                     unknown_cols.append(
                         _UnknownCol(table=None, ref=cname, suggestions=_suggest(cname, pool))
                     )
-                # len>=1 (resolved) or ambiguous(len>1) -> don't flag
+                # len>=1 (resolved), ambiguous(len>1), or query references a CTE
+                # (unqualified col may come from CTE projection) -> don't flag
 
         valid = not unknown_tables and not unknown_cols
         return _Output(

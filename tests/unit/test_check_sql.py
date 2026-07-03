@@ -74,3 +74,13 @@ async def test_ambiguous_unqualified_column_not_flagged() -> None:
 async def test_malformed_sql_returns_parse_error_not_raise() -> None:
     out = await CheckSqlTool().execute(_ctx(), CheckSqlTool().input_model(sql="SELECT FROM WHERE"))
     assert out.valid is False and out.parse_error is not None
+
+
+async def test_cte_reference_not_flagged() -> None:
+    out = await CheckSqlTool().execute(
+        _ctx(),
+        CheckSqlTool().input_model(
+            sql="WITH recent AS (SELECT id, total FROM orders) SELECT id, total FROM recent"
+        ),
+    )
+    assert out.valid, (out.unknown_tables, out.unknown_columns)
