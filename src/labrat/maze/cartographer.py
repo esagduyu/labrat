@@ -121,6 +121,11 @@ _JOIN_TRANSFORMS: list[tuple[str, str]] = [
     ("extract-digits", "regexp_replace(CAST({c} AS VARCHAR), '[^0-9]', '', 'g')"),
     ("lower-trim", "lower(trim(CAST({c} AS VARCHAR)))"),
     ("strip-leading-num", "regexp_replace(CAST({c} AS VARCHAR), '^[0-9]+[-.]', '')"),
+    (
+        "numeric-id",
+        "CAST(TRY_CAST(regexp_replace(CAST({c} AS VARCHAR), '[^0-9]', '', 'g') "
+        "AS BIGINT) AS VARCHAR)",
+    ),
 ]
 
 
@@ -129,12 +134,12 @@ def _match_rate(conn: Connection, lt: str, lexpr: str, rt: str, rexpr: str) -> f
         v = conn.execute(sql).row(0)[0]
         return int(v) if v is not None else 0
 
-    denom = _scalar(f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IS NOT NULL")
+    denom = _scalar(f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IS NOT NULL AND {lexpr} <> ''")
     if denom == 0:
         return 0.0
     matched = _scalar(
         f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IN "
-        f"(SELECT {rexpr} FROM {rt} WHERE {rexpr} IS NOT NULL)"
+        f"(SELECT {rexpr} FROM {rt} WHERE {rexpr} IS NOT NULL AND {rexpr} <> '')"
     )
     return matched / denom
 
@@ -149,7 +154,10 @@ def build_join_keys(
     for lt, lc, rt, rc in _candidate_joins(profile):
         if (f"{lt}.{lc}", f"{rt}.{rc}") in verified_pairs:
             continue
-        raw = _match_rate(conn, lt, lc, rt, rc)
+        try:
+            raw = _match_rate(conn, lt, lc, rt, rc)
+        except Exception:
+            continue
         if raw >= 0.95:
             continue  # already clean; discover_joins handles it
         best: tuple[str, str, float] | None = None
