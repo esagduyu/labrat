@@ -438,6 +438,7 @@ class DabSuite:
         consensus_k: int | None = None,
         reverify: bool = False,
         consensus_diversity: bool = True,
+        argue_rounds: int = 0,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -479,6 +480,11 @@ class DabSuite:
         # _run_trial_claude_mcp). False = the null-baseline A/B for the ablation
         # (all sub-runs identical, diversity_index=None throughout).
         self._consensus_diversity = consensus_diversity
+        # Bounded argumentation rounds run only when the K-run consensus vote above
+        # comes back low_confidence (a split vote) — see _run_trial_verified. 0 (default)
+        # disables the loop entirely, leaving the existing consensus/reverify behavior
+        # byte-identical.
+        self._argue_rounds = argue_rounds
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -680,9 +686,9 @@ class DabSuite:
         low_confidence: bool | None = None
         consensus_answers: list[str] | None = None
         chosen_subdir_i: int | None = None
+        results: list[tuple[str, int, float]] = []
 
         if k > 1:
-            results: list[tuple[str, int, float]] = []
             for i in range(k):
                 try:
                     r = await _run_once(
@@ -706,6 +712,53 @@ class DabSuite:
             total_latency += primary[2]
             if verification_active:  # reverify-only path
                 chosen_subdir_i = 0
+
+        # ── Argumentation: bounded rounds on a split vote ────────────────
+        # Only fires when the K-run vote above came back low_confidence AND the
+        # caller opted in via --agent-argue-rounds. Each round re-dispatches every
+        # sub-run with the OTHER sub-runs' answers appended ("Other analysts
+        # concluded: ..."), then re-votes. Stops early once a majority forms.
+        # Fail-open: any dispatch/judge error mid-round keeps the current best
+        # (modal) answer from before that round and stops arguing.
+        argue_rounds_used = 0
+        if k > 1 and low_confidence and self._argue_rounds > 0:
+            for round_num in range(self._argue_rounds):
+                try:
+                    argued: list[tuple[str, int, float]] = []
+                    for i in range(len(results)):
+                        block_lines = ["Other analysts concluded:"]
+                        for j, r in enumerate(results):
+                            if j == i:
+                                continue
+                            block_lines.append(f"- {r[0][:1500]}")
+                        block_lines.append(
+                            "Reconsider your answer in light of the above. If you still "
+                            "believe your answer is correct, restate it; otherwise revise. "
+                            "Give the single final answer clearly."
+                        )
+                        argue_extra = "\n".join(block_lines)
+                        r = await _run_once(
+                            i,
+                            extra=argue_extra,
+                            diversity_index=(i if self._consensus_diversity else None),
+                        )
+                        argued.append(r)
+                    total_latency += sum(r[2] for r in argued)
+                    results = argued
+                    argue_rounds_used = round_num + 1
+                    llm_fn = self._verify_llm_fn()
+                    idx, low = await choose_modal(
+                        [r[0] for r in results], question=question, llm_fn=llm_fn
+                    )
+                    modal_index = idx
+                    low_confidence = low
+                    consensus_answers = [r[0] for r in results]
+                    primary = results[idx]
+                    chosen_subdir_i = idx
+                    if not low_confidence:
+                        break
+                except Exception:
+                    break  # fail-open: keep the current best (modal) answer
 
         # Track re-derive metadata for persistence
         rederived_answer: str | None = None
@@ -750,6 +803,8 @@ class DabSuite:
                     "consensus_answers": consensus_answers,
                     "modal_index": modal_index,
                     "low_confidence": low_confidence,
+                    "argue_rounds": self._argue_rounds,
+                    "argue_rounds_used": argue_rounds_used,
                     "rederived_answer": rederived_answer,
                     "agreed": agreed,
                     "reconcile_used": reconcile_used,

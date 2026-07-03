@@ -228,6 +228,54 @@ def test_eval_dab_threads_verification_flags(monkeypatch: Any, tmp_path: Path) -
     assert captured.get("consensus_k") == 3
     assert captured.get("reverify") is True
     assert captured.get("consensus_diversity") is True  # default on, no --no-consensus-diversity
+    assert captured.get("argue_rounds") == 0  # default off, no --agent-argue-rounds
+
+
+def test_eval_dab_threads_argue_rounds(monkeypatch: Any, tmp_path: Path) -> None:
+    """--agent-argue-rounds must reach DabSuite(argue_rounds=)."""
+    import scripts.eval_dab as ed
+
+    captured: dict[str, Any] = {}
+
+    class _FakeSuite:
+        name = "dab"
+
+        def __init__(self, **kw: Any) -> None:
+            captured.update(kw)
+
+        def tasks(self) -> list[Any]:
+            return []
+
+        def write_submission(self, report: Any, output_dir: Any) -> None:
+            pass
+
+    async def _fake_interim(*a: Any, **kw: Any) -> BenchmarkReport:
+        return BenchmarkReport(
+            benchmark="dab",
+            run_id="test",
+            score=AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0),
+            trials=[],
+            config={},
+        )
+
+    monkeypatch.setattr(ed, "DabSuite", _FakeSuite)
+    monkeypatch.setattr(ed, "_run_interim", _fake_interim)
+    ed.main(
+        [
+            "--driver",
+            "claude-mcp",
+            "--agent-consensus",
+            "3",
+            "--agent-argue-rounds",
+            "2",
+            "--output-dir",
+            str(tmp_path / "r"),
+            "--datasets",
+            "deps_dev_v1",
+        ]
+    )
+    assert captured.get("consensus_k") == 3
+    assert captured.get("argue_rounds") == 2
 
 
 def test_eval_dab_threads_no_consensus_diversity(monkeypatch: Any, tmp_path: Path) -> None:
@@ -343,6 +391,110 @@ async def test_consensus_passes_none_diversity_index_when_off(
     await suite._run_trial_verified(_task(), Path("x"), tmp_path)
 
     assert seen == [None, None]
+
+
+# ── Argumentation rounds on a split vote (M1 Unit 2) ─────────────────────────
+
+
+async def test_argue_round_resolves_split(tmp_path: Path, monkeypatch: Any) -> None:
+    """A split (low-confidence) vote resolves once argue rounds surface the other
+    sub-runs' answers and the sub-runs converge."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        argued = "Other analysts concluded" in extra_instructions
+        return ("CONVERGED" if argued else f"ans{diversity_index}", 1, 0.1)
+
+    async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
+        distinct = set(answers)
+        return (0, len(distinct) > 1)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2, argue_rounds=2)
+    final, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert final == "CONVERGED"
+
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["argue_rounds_used"] == 1
+    assert vdata["low_confidence"] is False
+
+
+async def test_argue_round_fail_open_never_converges(tmp_path: Path, monkeypatch: Any) -> None:
+    """If the argue rounds never converge within the cap, the trial returns the
+    current modal answer without raising (fail-open, bounded)."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        # Always disagreeing, whether or not an argue block was appended.
+        return (f"ans{diversity_index}", 1, 0.1)
+
+    async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
+        distinct = set(answers)
+        return (0, len(distinct) > 1)  # always low_confidence — never converges
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2, argue_rounds=2)
+    final, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert final == "ans0"  # modal (index 0) from the final, still-split round
+
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["argue_rounds_used"] == 2
+    assert vdata["low_confidence"] is True
+
+
+async def test_argue_rounds_zero_no_argue_loop(tmp_path: Path, monkeypatch: Any) -> None:
+    """argue_rounds=0 (default) must never invoke the argue loop, even on a split
+    vote — byte-identical to pre-argue-loop behavior."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    calls = {"n": 0}
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        calls["n"] += 1
+        return (f"ans{diversity_index}", 1, 0.1)
+
+    async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
+        return (0, True)  # always low_confidence
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2)  # argue_rounds defaults to 0
+    _final, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert calls["n"] == 2  # only the initial K=2 sub-runs, no argue dispatches
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["argue_rounds_used"] == 0
 
 
 async def test_reverify_rederive_diversity_index_always_none(

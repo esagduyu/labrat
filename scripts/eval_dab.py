@@ -263,6 +263,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Independent re-derive + reconcile-on-mismatch verify stage (off by default).",
     )
     parser.add_argument(
+        "--agent-argue-rounds",
+        type=int,
+        default=None,
+        help=(
+            "Bounded argumentation rounds on a split K-of-N consensus vote (requires "
+            "--agent-consensus). When the vote comes back low_confidence, re-dispatch "
+            "each sub-run with the other sub-runs' answers appended and re-vote, up to "
+            "N rounds, stopping early once a majority forms. Off (0) by default."
+        ),
+    )
+    parser.add_argument(
         "--no-consensus-diversity",
         dest="no_consensus_diversity",
         action="store_true",
@@ -336,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         ("cartograph_semantics", args.cartograph_semantics),
         ("agent_consensus", args.agent_consensus),
         ("agent_reverify", args.agent_reverify),
+        ("agent_argue_rounds", args.agent_argue_rounds),
         ("consensus_diversity", cli_consensus_diversity),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
@@ -410,6 +422,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_reverify is not None
         else existing_cfg.get("agent_reverify", False)
     )
+    effective_argue_rounds: int = (
+        args.agent_argue_rounds
+        if args.agent_argue_rounds is not None
+        else existing_cfg.get("agent_argue_rounds", 0)
+    )
     effective_consensus_diversity: bool = bool(
         cli_consensus_diversity
         if cli_consensus_diversity is not None
@@ -443,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         consensus_k=effective_consensus,
         reverify=effective_reverify,
         consensus_diversity=effective_consensus_diversity,
+        argue_rounds=effective_argue_rounds,
     )
 
     task_filter: list[str] | None = None
@@ -480,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "agent_consensus": effective_consensus,
                 "agent_reverify": effective_reverify,
+                "agent_argue_rounds": effective_argue_rounds,
                 "consensus_diversity": effective_consensus_diversity,
                 "agent_timeout": effective_timeout,
                 "agent_reasoning": effective_reasoning,
