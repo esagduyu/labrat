@@ -24,6 +24,7 @@ from typing import Any
 
 from labrat.agent.providers import PROVIDER_NAMES
 from labrat.eval.benchmarks.dab.suite import DabSuite, Driver
+from labrat.eval.benchmarks.dab.taint import audit_run, gate
 from labrat.eval.reporting import report_to_markdown
 from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
 
@@ -464,6 +465,26 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     report = asyncio.run(_run_interim(suite, args.n_trials, output_dir, task_filter))
+
+    # Pre-submission taint-audit gate: classify every trial (answer text + MCP
+    # trace) for answer-key / external-dataset leakage before assembling
+    # submission.json. Refuse to write a submission from an unaudited run — see
+    # taint.py. The detection-only backstop at suite.py's run_trial seam
+    # (_detect_contamination) stays; this is the second, submission-time gate.
+    trials_jsonl = output_dir / "trials.jsonl"
+    scratch_dir = output_dir / "scratch"
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+    ok, offenders = gate(verdicts)
+    if not ok:
+        print(
+            f"\nTaint audit FAILED: {len(offenders)} trial(s) flagged as "
+            "external-oracle-cheating. Refusing to write submission.json.",
+            file=sys.stderr,
+        )
+        for key in offenders:
+            print(f"  - {key}", file=sys.stderr)
+        print(f"See {output_dir / 'taint.json'} for full verdicts.", file=sys.stderr)
+        return 3
 
     suite.write_submission(report, output_dir)
     (output_dir / "report.md").write_text(report_to_markdown(report))

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from labrat.agent.tools.attach_database import AttachDatabaseTool
 from labrat.agent.tools.base import ToolRegistry
+from labrat.agent.tools.check_sql import CheckSqlTool
 from labrat.agent.tools.column_stats import ColumnStatsTool
 from labrat.agent.tools.describe_table import DescribeTableTool
 from labrat.agent.tools.explain_sql import ExplainSqlTool
@@ -50,6 +51,7 @@ def build_data_tools_registry() -> ToolRegistry:
     registry.register(RunSqlTool())
     registry.register(ExplainSqlTool())
     registry.register(VerifyJoinTool())
+    registry.register(CheckSqlTool())
     registry.register(AttachDatabaseTool())
     registry.register(LoadFileTool())
     registry.register(LoadMongoCollectionTool())

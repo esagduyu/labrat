@@ -181,7 +181,10 @@ class RunSqlTool(Tool[_Input]):
             "Execute a SELECT query and return the results. "
             "Submit ONE statement per call (statement-stacking is refused). "
             "DDL and DML statements (INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE) "
-            "are refused unless force=True. A LIMIT is automatically applied when missing."
+            "are refused unless force=True. A LIMIT is automatically applied when missing. "
+            "A `normalize_text(col)` SQL function is available on the DuckDB session for "
+            "case/diacritic/whitespace-insensitive matching (e.g. "
+            "`WHERE normalize_text(name) = normalize_text('...')`)."
         )
 
     @property

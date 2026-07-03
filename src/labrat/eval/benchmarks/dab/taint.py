@@ -1,0 +1,89 @@
+"""Pre-submission taint gate: classify each DAB trial as clean / external-oracle-cheating /
+audit-error, and refuse to assemble a submission from an unaudited run. Uses the single
+contamination pattern list in maze/scent_audit."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, cast
+
+from labrat.maze.scent_audit import detect_contamination
+
+CLEAN = "clean"
+CHEATING = "external-oracle-cheating"
+AUDIT_ERROR = "audit-error"
+
+
+def classify_trial(text: str) -> str:
+    return CHEATING if detect_contamination(text) else CLEAN
+
+
+def _artifact_text(r: dict[str, Any]) -> str:
+    """Extract the agent-produced answer text from a trial record's `artifact` field.
+
+    `artifact` is `{"type": "text", "payload": <final answer>}` when present — the
+    `payload` is what the agent actually wrote. Never falls back to `reason`: that
+    field holds the DAB VALIDATOR's message (e.g. the official validators literally
+    return "Ground truth found in LLM output." on a clean PASS), not agent output.
+    """
+    artifact = r.get("artifact")
+    if isinstance(artifact, dict):
+        artifact = cast(dict[str, Any], artifact)
+        payload = artifact.get("payload")
+        return str(payload) if payload is not None else ""
+    if artifact is None:
+        return ""
+    return str(artifact)
+
+
+def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
+    """Classify every trial in `trials_jsonl` and write `taint.json` beside it.
+
+    Scans ONLY agent-produced channels: the artifact payload (the agent's actual
+    answer, see `_artifact_text`) plus its per-call trace(s) —
+    `<scratch>/<task>__trial<n>/mcp_tool_calls.jsonl` (claude-mcp driver) and/or
+    `agent_tool_calls.jsonl` (labrat-agent driver) — whichever are present, for the
+    answer-key / external-dataset leakage patterns in scent_audit.
+
+    Deliberately does NOT substring-scan `reason` — that's the DAB validator's PASS/
+    FAIL message, not agent output, and several official validators (agnews,
+    bookreview, music_brainz) literally emit "Ground truth found in LLM output." on a
+    clean PASS. The one exception: if the suite's own contamination backstop already
+    flagged the trial (`reason` starting with `"contaminated:"`), that verdict is
+    trusted directly and short-circuits the channel scan.
+
+    Returns `{f"{task_id}:{trial_num}": verdict}`.
+    """
+    verdicts: dict[str, str] = {}
+    lines = trials_jsonl.read_text().splitlines() if trials_jsonl.exists() else []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        r = cast(dict[str, Any], json.loads(line))
+        task_id = str(r["task_id"])
+        trial_num = int(r["trial_num"])
+        key = f"{task_id}:{trial_num}"
+
+        reason = str(r.get("reason") or "")
+        if reason.startswith("contaminated:"):
+            verdicts[key] = CHEATING
+            continue
+
+        parts = [_artifact_text(r)]
+        safe = task_id.replace(":", "_")
+        trial_dir = scratch_dir / f"{safe}__trial{trial_num}"
+        for trace_name in ("mcp_tool_calls.jsonl", "agent_tool_calls.jsonl"):
+            trace = trial_dir / trace_name
+            if trace.exists():
+                parts.append(trace.read_text())
+        verdicts[key] = classify_trial("\n".join(parts))
+    (trials_jsonl.parent / "taint.json").write_text(json.dumps(verdicts, indent=2))
+    return verdicts
+
+
+def gate(verdicts: dict[str, str]) -> tuple[bool, list[str]]:
+    """Return (ok, offending_keys). `ok` is False if any trial verdict is CHEATING."""
+    offenders = [k for k, v in verdicts.items() if v == CHEATING]
+    return (not offenders, offenders)

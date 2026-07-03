@@ -8,6 +8,7 @@ profile_dataset + verify_join tools; never reads ground-truth artifacts.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.profile_dataset import (
     ProfileDatasetTool,
+    _TableProfile,  # pyright: ignore[reportPrivateUsage]
 )
 from labrat.agent.tools.profile_dataset import (
     _Output as ProfileOutput,  # pyright: ignore[reportPrivateUsage]
@@ -24,7 +26,7 @@ from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.agent.verifier import LLMFn
 from labrat.db.base import Connection
 from labrat.maze.document import ScentDoc, Section, parse_document, render_document
-from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc
+from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc, detect_contamination
 
 _STRINGY = ("CHAR", "TEXT", "STRING", "VARCHAR")
 
@@ -41,6 +43,18 @@ def _is_stringy(data_type: str) -> bool:
     return any(tok in up for tok in _STRINGY)
 
 
+_FORMAT_SAMPLE_CAP = 2
+_UNUSUAL_CHARS = (">", "::", "|")
+_SAMPLE_TRUNCATE = 80
+
+
+def _is_numeric_or_date(data_type: str) -> bool:
+    dt = data_type.lower()
+    return any(
+        k in dt for k in ("int", "float", "double", "decimal", "numeric", "date", "timestamp")
+    )
+
+
 def build_quick_reference(profile: ProfileOutput) -> Section:
     lines = [f"Database `{profile.database}`: {profile.tables_profiled} tables profiled."]
     for t in profile.tables:
@@ -51,22 +65,43 @@ def build_quick_reference(profile: ProfileOutput) -> Section:
     return Section(heading="Quick Reference", body="\n".join(lines), source="verified")
 
 
+_COMPACT_THRESHOLD = 8
+
+
+def _col_signature(t: _TableProfile) -> tuple[tuple[str, str], ...]:
+    return tuple((c.name, c.data_type) for c in t.columns)
+
+
 def build_key_tables(profile: ProfileOutput, joins: list[VerifiedJoin]) -> Section:
     joins_by_table: dict[str, list[VerifiedJoin]] = {}
     for j in joins:
         joins_by_table.setdefault(j.left.split(".")[0], []).append(j)
 
-    blocks: list[str] = []
+    buckets: dict[tuple[tuple[str, str], ...], list[_TableProfile]] = defaultdict(list)
     for t in profile.tables:
-        cols = ", ".join(f"{c.name} ({c.data_type})" for c in t.columns)
-        block = [f"### {t.name}", f"- Columns: {cols}"]
-        if t.row_count is not None:
-            block.append(f"- Grain: {t.row_count} rows.")
-        for j in joins_by_table.get(t.name, []):
-            fan = "no fan-out" if j.fanout <= 1 else f"fans out up to {j.fanout}/key"
-            pct = round(j.match_rate * 100, 1)
-            block.append(f"- Join: `{j.left} = {j.right}` (verified {pct}% match, {fan}).")
-        blocks.append("\n".join(block))
+        buckets[_col_signature(t)].append(t)
+
+    blocks: list[str] = []
+    for group in buckets.values():
+        if len(group) >= _COMPACT_THRESHOLD:
+            rep = group[0]
+            cols = ", ".join(f"{c.name} ({c.data_type})" for c in rep.columns)
+            names = ", ".join(t.name for t in group)
+            blocks.append(
+                f"### ⚠ {len(group)} tables share this structure\n"
+                f"- Columns: {cols}\n- Tables: {names}"
+            )
+        else:
+            for t in group:
+                cols = ", ".join(f"{c.name} ({c.data_type})" for c in t.columns)
+                block = [f"### {t.name}", f"- Columns: {cols}"]
+                if t.row_count is not None:
+                    block.append(f"- Grain: {t.row_count} rows.")
+                for j in joins_by_table.get(t.name, []):
+                    fan = "no fan-out" if j.fanout <= 1 else f"fans out up to {j.fanout}/key"
+                    pct = round(j.match_rate * 100, 1)
+                    block.append(f"- Join: `{j.left} = {j.right}` (verified {pct}% match, {fan}).")
+                blocks.append("\n".join(block))
     return Section(heading="Key Tables", body="\n\n".join(blocks), source="verified")
 
 
@@ -115,6 +150,73 @@ def _candidate_joins(profile: ProfileOutput) -> list[tuple[str, str, str, str]]:
     return candidates
 
 
+_JOIN_XFORM_MIN = 0.5
+# (label, SQL template applied to a column expr) — deterministic, symmetric on both sides
+_JOIN_TRANSFORMS: list[tuple[str, str]] = [
+    ("extract-digits", "regexp_replace(CAST({c} AS VARCHAR), '[^0-9]', '', 'g')"),
+    ("lower-trim", "lower(trim(CAST({c} AS VARCHAR)))"),
+    ("strip-leading-num", "regexp_replace(CAST({c} AS VARCHAR), '^[0-9]+[-.]', '')"),
+    (
+        "numeric-id",
+        "CAST(TRY_CAST(regexp_replace(CAST({c} AS VARCHAR), '[^0-9]', '', 'g') "
+        "AS BIGINT) AS VARCHAR)",
+    ),
+]
+
+
+def _match_rate(conn: Connection, lt: str, lexpr: str, rt: str, rexpr: str) -> float:
+    def _scalar(sql: str) -> int:
+        v = conn.execute(sql).row(0)[0]
+        return int(v) if v is not None else 0
+
+    denom = _scalar(f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IS NOT NULL AND {lexpr} <> ''")
+    if denom == 0:
+        return 0.0
+    matched = _scalar(
+        f"SELECT COUNT(*) FROM {lt} WHERE {lexpr} IN "
+        f"(SELECT {rexpr} FROM {rt} WHERE {rexpr} IS NOT NULL AND {rexpr} <> '')"
+    )
+    return matched / denom
+
+
+def build_join_keys(
+    profile: ProfileOutput, conn: Connection, verified: list[VerifiedJoin]
+) -> Section | None:
+    """For candidate joins that don't match raw, detect a normalizing transform and
+    emit the exact normalization SQL. Deterministic (bounded COUNT probes)."""
+    verified_pairs = {(j.left, j.right) for j in verified}
+    lines: list[str] = []
+    for lt, lc, rt, rc in _candidate_joins(profile):
+        if (f"{lt}.{lc}", f"{rt}.{rc}") in verified_pairs:
+            continue
+        try:
+            raw = _match_rate(conn, lt, lc, rt, rc)
+        except Exception:
+            continue
+        if raw >= 0.95:
+            continue  # already clean; discover_joins handles it
+        best: tuple[str, str, float] | None = None
+        for label, tmpl in _JOIN_TRANSFORMS:
+            lexpr, rexpr = tmpl.format(c=lc), tmpl.format(c=rc)
+            try:
+                rate = _match_rate(conn, lt, lexpr, rt, rexpr)
+            except Exception:
+                continue
+            if rate >= _JOIN_XFORM_MIN and rate > raw and (best is None or rate > best[2]):
+                best = (label, tmpl, rate)
+        if best is not None:
+            label, tmpl, rate = best
+            lexpr, rexpr = tmpl.format(c=f"{lt}.{lc}"), tmpl.format(c=f"{rt}.{rc}")
+            lines.append(
+                f"- `{lt}.{lc}` ↔ `{rt}.{rc}` needs **{label}** "
+                f"({round(rate * 100, 1)}% after transform). Join on: "
+                f"`{lexpr} = {rexpr}`"
+            )
+    if not lines:
+        return None
+    return Section(heading="Join Keys", body="\n".join(lines), source="verified")
+
+
 def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> Section:
     lines: list[str] = []
     for t in profile.tables:
@@ -132,6 +234,46 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
             # Skip if cardinality exceeds cap OR if cardinality equals row count (all unique)
             if 0 < len(vals) <= cap and t.row_count is not None and len(vals) < t.row_count:
                 lines.append(f"- `{t.name}.{col.name}`: {', '.join(sorted(vals))}")
+
+    for t in profile.tables:
+        for col in t.columns:
+            # numeric/date range
+            if _is_numeric_or_date(col.data_type):
+                try:
+                    r = conn.execute(f"SELECT MIN({col.name}), MAX({col.name}) FROM {t.name}").row(
+                        0
+                    )
+                    if r[0] is not None:
+                        lines.append(f"- `{t.name}.{col.name}` range: {r[0]}..{r[1]}")
+                except Exception:
+                    pass
+            # unusual-structure sample for stringy cols
+            elif _is_stringy(col.data_type):
+                try:
+                    df = conn.execute(
+                        f"SELECT DISTINCT {col.name} FROM {t.name} "
+                        f"WHERE {col.name} IS NOT NULL LIMIT 200"
+                    )
+                    odd = [
+                        str(v[0])
+                        for v in df.iter_rows()
+                        if any(ch in str(v[0]) for ch in _UNUSUAL_CHARS) or len(str(v[0])) > 60
+                    ]
+                    # Bound bloat (truncate long free-text) and keep answer-shaped strings
+                    # out of the doc by construction — this deterministic path never runs
+                    # audit_scent_doc, so it must be clean by construction, not by audit.
+                    shown = 0
+                    for ex in odd:
+                        if shown >= _FORMAT_SAMPLE_CAP:
+                            break
+                        if detect_contamination(ex) is not None:
+                            continue
+                        sample = ex[:_SAMPLE_TRUNCATE] + "…" if len(ex) > _SAMPLE_TRUNCATE else ex
+                        lines.append(f"- `{t.name}.{col.name}` format e.g.: `{sample}`")
+                        shown += 1
+                except Exception:
+                    pass
+
     body = "\n".join(lines) if lines else "No low-cardinality categorical columns detected."
     return Section(heading="Dimensions", body=body, source="verified")
 
@@ -243,8 +385,11 @@ async def generate_scent(
         sections = [
             build_quick_reference(profile),
             build_key_tables(profile, joins),
-            build_dimensions(profile, cast(Connection, conn), cap=distinct_cap),
         ]
+        jk = build_join_keys(profile, cast(Connection, conn), joins)
+        if jk is not None:
+            sections.append(jk)
+        sections.append(build_dimensions(profile, cast(Connection, conn), cap=distinct_cap))
         doc = ScentDoc(
             domain=name,
             kind="scent",

@@ -9,6 +9,11 @@ import polars as pl
 from labrat.db.base import Connection
 from labrat.db.catalog import Catalog, Column, ColumnStats, ForeignKey, Schema, Table
 
+_NORMALIZE_TEXT_MACRO = (
+    "CREATE OR REPLACE TEMPORARY MACRO normalize_text(x) AS "
+    "regexp_replace(lower(strip_accents(CAST(x AS VARCHAR))), '[^a-z0-9]', '', 'g')"
+)
+
 
 class DuckDBConnection(Connection):
     """DuckDB implementation of the Connection interface.
@@ -35,6 +40,9 @@ class DuckDBConnection(Connection):
 
     def connect(self) -> None:
         self._conn = duckdb.connect(self._path, read_only=self._read_only)
+        # Session macro for diacritic/whitespace/case-insensitive matching. TEMPORARY so it
+        # works even on a read-only database (temp objects live in an in-memory schema).
+        self._conn.execute(_NORMALIZE_TEXT_MACRO)
 
     def disconnect(self) -> None:
         if self._conn is not None:
