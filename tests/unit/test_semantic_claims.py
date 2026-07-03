@@ -148,6 +148,20 @@ async def test_verify_keeps_survivors_drops_bogus(tmp_path) -> None:
     conn.disconnect()
 
 
+async def test_verify_role_survivor_renders_bullet(tmp_path) -> None:
+    conn = _clinical_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=conn.introspect_catalog(), primary="main")
+    section = await verify_semantic_claims(
+        [RoleClaim(table="clinical", code_col="icd_o_3_histology", name_col="histological_type")],
+        ctx,
+        database="main",
+    )
+    assert section is not None and section.source == "verified"
+    # the pancancer fix: the bullet must name both columns and advise using the code column
+    assert "icd_o_3_histology" in section.body and "histological_type" in section.body
+    conn.disconnect()
+
+
 async def test_verify_no_survivors_returns_none(tmp_path) -> None:
     p = str(tmp_path / "n.duckdb")
     raw = duckdb.connect(p)
