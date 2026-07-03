@@ -26,7 +26,7 @@ from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.agent.verifier import LLMFn
 from labrat.db.base import Connection
 from labrat.maze.document import ScentDoc, Section, parse_document, render_document
-from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc
+from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc, detect_contamination
 
 _STRINGY = ("CHAR", "TEXT", "STRING", "VARCHAR")
 
@@ -45,6 +45,7 @@ def _is_stringy(data_type: str) -> bool:
 
 _FORMAT_SAMPLE_CAP = 2
 _UNUSUAL_CHARS = (">", "::", "|")
+_SAMPLE_TRUNCATE = 80
 
 
 def _is_numeric_or_date(data_type: str) -> bool:
@@ -258,8 +259,18 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
                         for v in df.iter_rows()
                         if any(ch in str(v[0]) for ch in _UNUSUAL_CHARS) or len(str(v[0])) > 60
                     ]
-                    for ex in odd[:_FORMAT_SAMPLE_CAP]:
-                        lines.append(f"- `{t.name}.{col.name}` format e.g.: `{ex}`")
+                    # Bound bloat (truncate long free-text) and keep answer-shaped strings
+                    # out of the doc by construction — this deterministic path never runs
+                    # audit_scent_doc, so it must be clean by construction, not by audit.
+                    shown = 0
+                    for ex in odd:
+                        if shown >= _FORMAT_SAMPLE_CAP:
+                            break
+                        if detect_contamination(ex) is not None:
+                            continue
+                        sample = ex[:_SAMPLE_TRUNCATE] + "…" if len(ex) > _SAMPLE_TRUNCATE else ex
+                        lines.append(f"- `{t.name}.{col.name}` format e.g.: `{sample}`")
+                        shown += 1
                 except Exception:
                     pass
 
