@@ -29,6 +29,17 @@ async def test_empty_result_when_filtered_warns(tmp_path) -> None:
     conn.disconnect()
 
 
+async def test_empty_result_multiline_sql_warns(tmp_path) -> None:
+    conn = _conn(tmp_path)
+    out = await RunSqlTool().execute(
+        ToolContext(connection=conn, catalog=None, primary="main"),
+        RunSqlTool().input_model(query="SELECT *\nFROM t\nWHERE a = 999"),
+    )
+    assert out.ok
+    assert any("0 rows" in w.lower() or "empty" in w.lower() for w in out.warnings)
+    conn.disconnect()
+
+
 async def test_all_null_column_warns(tmp_path) -> None:
     conn = _conn(tmp_path)
     out = await RunSqlTool().execute(

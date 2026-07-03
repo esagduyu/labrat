@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -285,7 +286,7 @@ class RunSqlTool(Tool[_Input]):
 
         warnings: list[str] = []
         lowered = sql.lower()
-        if len(df) == 0 and (" where " in lowered or " join " in lowered):
+        if len(df) == 0 and re.search(r"\b(where|join)\b", lowered):
             warnings.append(
                 "Query returned 0 rows despite a WHERE/JOIN — check the predicate and join keys."
             )
