@@ -8,10 +8,14 @@ Unparseable lines are ignored (tolerant)."""
 from __future__ import annotations
 
 import re
+from typing import cast
 
 from pydantic import BaseModel
 
+from labrat.agent.tools.base import ToolContext
+from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.db.base import Connection
+from labrat.maze.document import Section
 
 _JOIN_RE = re.compile(r"^\s*JOIN\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)\s*$", re.IGNORECASE)
 _ROLE_RE = re.compile(r"^\s*ROLE\s+(\w+)\.(\w+)\s+CODES\s+(\w+)\.(\w+)\s*$", re.IGNORECASE)
@@ -85,3 +89,47 @@ def verify_role_claim(conn: Connection, claim: RoleClaim) -> bool:
     name_score = _looks_like_code(name_vals)
     # code column must look code-shaped AND clearly more so than the name column
     return code_score >= _SHAPE_THRESHOLD and code_score > name_score
+
+
+async def verify_semantic_claims(
+    claims: list[JoinClaim | RoleClaim], ctx: ToolContext, *, database: str
+) -> Section | None:
+    """Probe each structured claim; persist ONLY survivors as a Verified Semantics section."""
+    tool = VerifyJoinTool()
+    conn = cast(Connection, ctx.connections[database])
+    lines: list[str] = []
+    for c in claims:
+        if isinstance(c, JoinClaim):
+            try:
+                v = await tool.execute(
+                    ctx,
+                    tool.input_model(
+                        left_table=c.left_table,
+                        left_column=c.left_col,
+                        right_table=c.right_table,
+                        right_column=c.right_col,
+                        database=database,
+                    ),
+                )
+            except Exception:
+                continue
+            if v.likely_valid:
+                fan = (
+                    "no fan-out"
+                    if v.max_right_rows_per_key <= 1
+                    else f"fans out up to {v.max_right_rows_per_key}/key"
+                )
+                lines.append(
+                    f"- Join `{c.left_table}.{c.left_col} = {c.right_table}.{c.right_col}` "
+                    f"(verified {round(v.match_rate * 100, 1)}% match, {fan})."
+                )
+        else:  # RoleClaim
+            if verify_role_claim(conn, c):
+                lines.append(
+                    f"- For `{c.table}`, `{c.code_col}` holds coded values; "
+                    f"`{c.name_col}` holds display names — group/filter by the code column "
+                    f"when the question asks for codes."
+                )
+    if not lines:
+        return None
+    return Section(heading="Verified Semantics", body="\n".join(lines), source="verified")

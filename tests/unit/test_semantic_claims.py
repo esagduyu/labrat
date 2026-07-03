@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import duckdb
 
+from labrat.agent.tools.base import ToolContext
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.maze.semantic_claims import (
     JoinClaim,
     RoleClaim,
     parse_semantic_claims,
     verify_role_claim,
+    verify_semantic_claims,
 )
 
 
@@ -117,4 +119,44 @@ def test_role_claim_rejects_non_identifier(tmp_path) -> None:
         verify_role_claim(conn, RoleClaim(table="t; DROP TABLE t", code_col="a", name_col="a"))
         is False
     )
+    conn.disconnect()
+
+
+async def test_verify_keeps_survivors_drops_bogus(tmp_path) -> None:
+    p = str(tmp_path / "j.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE customers(id INT, name VARCHAR)")
+    raw.execute("INSERT INTO customers VALUES (1,'a'),(2,'b')")
+    raw.execute("CREATE TABLE orders(customer_id INT, amt INT)")
+    raw.execute("INSERT INTO orders VALUES (1,10),(2,20)")
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+    ctx = ToolContext(connection=conn, catalog=conn.introspect_catalog(), primary="main")
+    claims = [
+        JoinClaim(
+            left_table="orders", left_col="customer_id", right_table="customers", right_col="id"
+        ),  # real
+        JoinClaim(
+            left_table="orders", left_col="amt", right_table="customers", right_col="id"
+        ),  # bogus
+    ]
+    section = await verify_semantic_claims(claims, ctx, database="main")
+    assert section is not None and section.source == "verified"
+    assert "orders.customer_id" in section.body and "customers.id" in section.body
+    assert "orders.amt" not in section.body  # bogus join dropped
+    conn.disconnect()
+
+
+async def test_verify_no_survivors_returns_none(tmp_path) -> None:
+    p = str(tmp_path / "n.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE t(a INT, b INT)")
+    raw.execute("INSERT INTO t VALUES (1,999)")
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+    ctx = ToolContext(connection=conn, catalog=conn.introspect_catalog(), primary="main")
+    bogus = [JoinClaim(left_table="t", left_col="a", right_table="t", right_col="b")]
+    assert await verify_semantic_claims(bogus, ctx, database="main") is None
     conn.disconnect()
