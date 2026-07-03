@@ -16,6 +16,11 @@ async def _profile(tmp_path):
     raw.close()
     conn = DuckDBConnection(path=p, read_only=False)
     conn.connect()
+    # Pin single-threaded execution: DuckDB's DISTINCT ... LIMIT without an ORDER BY
+    # (the legacy seed-0 SQL this suite is pinning) has no guaranteed row order under
+    # parallel hash aggregation, which made cross-call stability assertions flaky.
+    # This only affects test determinism, not the production SQL under test.
+    conn._connection.execute("PRAGMA threads=1")
     prof = await ProfileDatasetTool().execute(
         ToolContext(connection=conn, catalog=conn.introspect_catalog(), primary="main"),
         ProfileDatasetTool().input_model(sample_rows=0, max_tables=100),
