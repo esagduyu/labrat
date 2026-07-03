@@ -25,7 +25,7 @@ async def test_consensus_returns_modal(tmp_path: Path, monkeypatch) -> None:
     suite = DabSuite(driver="claude-mcp", consensus_k=3)
     answers = iter([("A", 5, 1.0), ("B", 5, 1.0), ("A", 5, 1.0)])  # modal = A
 
-    async def _disp(self, task, dbp, sd, *, extra_instructions=""):
+    async def _disp(self, task, dbp, sd, *, extra_instructions="", diversity_index=None):
         return next(answers)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
@@ -39,7 +39,7 @@ async def test_reverify_keeps_primary_when_agree(tmp_path: Path, monkeypatch) ->
     suite = DabSuite(driver="claude-mcp", reverify=True)
     runs = iter([("42", 5, 1.0), ("42", 5, 1.0)])  # primary, re-derive — identical → agree
 
-    async def _disp(self, task, dbp, sd, *, extra_instructions=""):
+    async def _disp(self, task, dbp, sd, *, extra_instructions="", diversity_index=None):
         return next(runs)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
@@ -51,7 +51,7 @@ async def test_off_path_single_dispatch(tmp_path: Path, monkeypatch) -> None:
     suite = DabSuite(driver="claude-mcp")  # both off
     calls = {"n": 0}
 
-    async def _disp(self, task, dbp, sd, *, extra_instructions=""):
+    async def _disp(self, task, dbp, sd, *, extra_instructions="", diversity_index=None):
         calls["n"] += 1
         return ("once", 1, 0.5)
 
@@ -115,7 +115,13 @@ async def test_verification_json_written(tmp_path: Path, monkeypatch: Any) -> No
     answers = iter([("A", 5, 1.0), ("B", 5, 1.0)])
 
     async def _disp(
-        self: Any, task: Any, dbp: Any, sd: Any, *, extra_instructions: str = ""
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         return next(answers)
 
@@ -136,7 +142,13 @@ async def test_no_verification_json_on_off_path(tmp_path: Path, monkeypatch: Any
     suite = DabSuite(driver="claude-mcp")  # consensus_k=None, reverify=False
 
     async def _disp(
-        self: Any, task: Any, dbp: Any, sd: Any, *, extra_instructions: str = ""
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         return ("once", 1, 0.5)
 
@@ -154,7 +166,13 @@ async def test_summed_latency_across_sub_runs(tmp_path: Path, monkeypatch: Any) 
     answers = iter([("A", 5, 1.5), ("A", 5, 2.5)])  # both agree → modal = A
 
     async def _disp(
-        self: Any, task: Any, dbp: Any, sd: Any, *, extra_instructions: str = ""
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         return next(answers)
 
@@ -209,3 +227,150 @@ def test_eval_dab_threads_verification_flags(monkeypatch: Any, tmp_path: Path) -
     )
     assert captured.get("consensus_k") == 3
     assert captured.get("reverify") is True
+    assert captured.get("consensus_diversity") is True  # default on, no --no-consensus-diversity
+
+
+def test_eval_dab_threads_no_consensus_diversity(monkeypatch: Any, tmp_path: Path) -> None:
+    """--no-consensus-diversity must reach DabSuite(consensus_diversity=False)."""
+    import scripts.eval_dab as ed
+
+    captured: dict[str, Any] = {}
+
+    class _FakeSuite:
+        name = "dab"
+
+        def __init__(self, **kw: Any) -> None:
+            captured.update(kw)
+
+        def tasks(self) -> list[Any]:
+            return []
+
+        def write_submission(self, report: Any, output_dir: Any) -> None:
+            pass
+
+    async def _fake_interim(*a: Any, **kw: Any) -> BenchmarkReport:
+        return BenchmarkReport(
+            benchmark="dab",
+            run_id="test",
+            score=AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0),
+            trials=[],
+            config={},
+        )
+
+    monkeypatch.setattr(ed, "DabSuite", _FakeSuite)
+    monkeypatch.setattr(ed, "_run_interim", _fake_interim)
+    ed.main(
+        [
+            "--driver",
+            "claude-mcp",
+            "--agent-consensus",
+            "3",
+            "--no-consensus-diversity",
+            "--output-dir",
+            str(tmp_path / "r"),
+            "--datasets",
+            "deps_dev_v1",
+        ]
+    )
+    assert captured.get("consensus_k") == 3
+    assert captured.get("consensus_diversity") is False
+
+
+# ── Diverse consensus (M1 Unit 1b) ───────────────────────────────────────────
+
+
+async def test_consensus_passes_diversity_index_when_on(tmp_path: Path, monkeypatch: Any) -> None:
+    """K-of-N consensus sub-runs each get a distinct diversity_index when on (default)."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    seen: list[int | None] = []
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        seen.append(diversity_index)
+        return (f"ans{diversity_index}", 1, 0.1)
+
+    async def _fake_choose_modal(
+        answers: list[str], *, question: str, llm_fn: Any
+    ) -> tuple[int, bool]:
+        return (0, False)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_choose_modal)
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2, consensus_diversity=True)
+    await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert 0 in seen and 1 in seen  # both sub-runs got distinct diversity indices
+
+
+async def test_consensus_passes_none_diversity_index_when_off(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """With consensus_diversity=False, every K sub-run dispatches with diversity_index=None."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    seen: list[int | None] = []
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        seen.append(diversity_index)
+        return ("same", 1, 0.1)
+
+    async def _fake_choose_modal(
+        answers: list[str], *, question: str, llm_fn: Any
+    ) -> tuple[int, bool]:
+        return (0, False)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_choose_modal)
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2, consensus_diversity=False)
+    await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert seen == [None, None]
+
+
+async def test_reverify_rederive_diversity_index_always_none(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The independent re-derive run (_run_once(900)) never diversifies, even with
+    consensus_diversity=True — diversifying the re-derivation would defeat its purpose
+    as an independent check.
+    """
+    seen: list[int | None] = []
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        seen.append(diversity_index)
+        return ("42", 1, 0.1)  # primary + re-derive identical → agree, no reconcile round
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+
+    suite = DabSuite(driver="claude-mcp", reverify=True, consensus_diversity=True)
+    await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    # k==1 path: primary dispatch (diversity_index=None) + re-derive dispatch
+    # (diversity_index=None) — neither the single-primary nor the re-derive diversify.
+    assert seen == [None, None]

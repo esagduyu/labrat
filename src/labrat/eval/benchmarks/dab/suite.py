@@ -437,6 +437,7 @@ class DabSuite:
         cartograph_scent_root: Path | None = None,
         consensus_k: int | None = None,
         reverify: bool = False,
+        consensus_diversity: bool = True,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -473,6 +474,11 @@ class DabSuite:
         )
         self._consensus_k = consensus_k
         self._reverify = reverify
+        # When True (default) and consensus_k > 1, each K sub-run gets a distinct
+        # diversity_index (variant Scent + rotated framing — see _framing_for /
+        # _run_trial_claude_mcp). False = the null-baseline A/B for the ablation
+        # (all sub-runs identical, diversity_index=None throughout).
+        self._consensus_diversity = consensus_diversity
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -654,11 +660,17 @@ class DabSuite:
         k = self._consensus_k or 1
         verification_active = k > 1 or self._reverify
 
-        async def _run_once(i: int, extra: str = "") -> tuple[str, int, float]:
+        async def _run_once(
+            i: int, extra: str = "", diversity_index: int | None = None
+        ) -> tuple[str, int, float]:
             sub = scratch_dir / f"subrun{i}" if verification_active else scratch_dir
             sub.mkdir(parents=True, exist_ok=True)
             return await self._dispatch_driver_once(
-                task, db_config_path, sub, extra_instructions=extra
+                task,
+                db_config_path,
+                sub,
+                extra_instructions=extra,
+                diversity_index=diversity_index,
             )
 
         total_latency = 0.0
@@ -673,7 +685,9 @@ class DabSuite:
             results: list[tuple[str, int, float]] = []
             for i in range(k):
                 try:
-                    r = await _run_once(i)
+                    r = await _run_once(
+                        i, diversity_index=(i if self._consensus_diversity else None)
+                    )
                     results.append(r)
                     total_latency += r[2]
                 except Exception:
@@ -732,6 +746,7 @@ class DabSuite:
                 vdata: dict[str, Any] = {
                     "consensus_k": self._consensus_k,
                     "reverify": self._reverify,
+                    "consensus_diversity": self._consensus_diversity,
                     "consensus_answers": consensus_answers,
                     "modal_index": modal_index,
                     "low_confidence": low_confidence,

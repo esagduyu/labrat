@@ -263,6 +263,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Independent re-derive + reconcile-on-mismatch verify stage (off by default).",
     )
     parser.add_argument(
+        "--no-consensus-diversity",
+        dest="no_consensus_diversity",
+        action="store_true",
+        default=None,
+        help=(
+            "Ablation control: disable per-sub-run diversity (variant Scent + rotated "
+            "framing) in K-of-N consensus (--agent-consensus). Diversity is ON by "
+            "default — this makes every sub-run an identical dispatch "
+            "(diversity_index=None throughout), the null-baseline arm."
+        ),
+    )
+    parser.add_argument(
         "--agent-timeout",
         type=int,
         default=None,
@@ -307,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
         if existing_cfg_path.exists():
             existing_cfg = json.loads(existing_cfg_path.read_text())
 
+    # Tri-state --no-consensus-diversity: None (unset) inherits from resume config /
+    # defaults to True; True/False resolved from the negation flag once it's set.
+    cli_consensus_diversity: bool | None = (
+        (not args.no_consensus_diversity) if args.no_consensus_diversity is not None else None
+    )
+
     for field, cli_val in [
         ("driver", args.driver),
         ("agent_model", args.agent_model),
@@ -318,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         ("cartograph_semantics", args.cartograph_semantics),
         ("agent_consensus", args.agent_consensus),
         ("agent_reverify", args.agent_reverify),
+        ("consensus_diversity", cli_consensus_diversity),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
     ]:
@@ -391,6 +410,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_reverify is not None
         else existing_cfg.get("agent_reverify", False)
     )
+    effective_consensus_diversity: bool = bool(
+        cli_consensus_diversity
+        if cli_consensus_diversity is not None
+        else existing_cfg.get("consensus_diversity", True)
+    )
     effective_timeout: int | None = (
         args.agent_timeout if args.agent_timeout is not None else existing_cfg.get("agent_timeout")
     )
@@ -418,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         cartograph_scent_root=effective_cartograph_scent_dir,
         consensus_k=effective_consensus,
         reverify=effective_reverify,
+        consensus_diversity=effective_consensus_diversity,
     )
 
     task_filter: list[str] | None = None
@@ -455,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "agent_consensus": effective_consensus,
                 "agent_reverify": effective_reverify,
+                "consensus_diversity": effective_consensus_diversity,
                 "agent_timeout": effective_timeout,
                 "agent_reasoning": effective_reasoning,
                 "n_trials": args.n_trials,
