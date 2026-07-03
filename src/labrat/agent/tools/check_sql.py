@@ -89,6 +89,15 @@ class CheckSqlTool(Tool[_Input]):
         # projected columns (fail-open: we don't track what a CTE actually selects).
         cte_names = {c.alias.lower() for c in tree.find_all(exp.CTE) if c.alias}
 
+        # Output/derived names — SELECT-list aliases (e.g. `COUNT(*) AS n`, then
+        # referenced unqualified in ORDER BY/QUALIFY as `n`) and derived-table/subquery
+        # aliases (e.g. `s` in `FROM (SELECT id AS x FROM orders) s`, or the projected
+        # `x` referenced from the outer query). These are projected/derived names, not
+        # base columns — fail-open, same treatment as CTE names, since we don't track
+        # what a subquery/window/aggregate actually projects.
+        derived_names = {a.alias.lower() for a in tree.find_all(exp.Alias) if a.alias}
+        derived_names |= {sq.alias.lower() for sq in tree.find_all(exp.Subquery) if sq.alias}
+
         # alias -> real table name, for tables in scope
         alias_map: dict[str, str] = {}
         in_scope: list[str] = []
@@ -115,8 +124,8 @@ class CheckSqlTool(Tool[_Input]):
                 continue
             qualifier = col.table  # alias or table, '' if unqualified
             if qualifier:
-                if qualifier.lower() in cte_names:
-                    continue  # can't resolve a CTE's projected columns — fail-open
+                if qualifier.lower() in cte_names or qualifier.lower() in derived_names:
+                    continue  # can't resolve a CTE/derived-table's projected columns — fail-open
                 real = alias_map.get(qualifier.lower())
                 if real is None or real not in idx:
                     continue  # unknown/foreign qualifier — table already flagged or out of scope
@@ -127,6 +136,8 @@ class CheckSqlTool(Tool[_Input]):
                         )
                     )
             else:
+                if cname.lower() in derived_names:
+                    continue  # SELECT-list alias / derived-table projected name — fail-open
                 owners = [t for t in in_scope if cname.lower() in idx.get(t, set())]
                 if len(owners) == 0 and in_scope and not cte_names:
                     pool = sorted({c for t in in_scope for c in idx.get(t, set())})

@@ -84,3 +84,41 @@ async def test_cte_reference_not_flagged() -> None:
         ),
     )
     assert out.valid, (out.unknown_tables, out.unknown_columns)
+
+
+async def test_select_list_alias_referenced_in_order_by_not_flagged() -> None:
+    out = await CheckSqlTool().execute(
+        _ctx(),
+        CheckSqlTool().input_model(
+            sql="SELECT customer_id, COUNT(*) AS n FROM orders GROUP BY customer_id ORDER BY n"
+        ),
+    )
+    assert out.valid, (out.unknown_tables, out.unknown_columns)
+
+
+async def test_window_alias_referenced_in_qualify_not_flagged() -> None:
+    out = await CheckSqlTool().execute(
+        _ctx(),
+        CheckSqlTool().input_model(
+            sql=("SELECT total, RANK() OVER (ORDER BY total) AS rnk FROM orders QUALIFY rnk <= 3")
+        ),
+    )
+    assert out.valid, (out.unknown_tables, out.unknown_columns)
+
+
+async def test_subquery_projected_alias_not_flagged() -> None:
+    out = await CheckSqlTool().execute(
+        _ctx(),
+        CheckSqlTool().input_model(sql="SELECT x FROM (SELECT id AS x FROM orders) s"),
+    )
+    assert out.valid, (out.unknown_tables, out.unknown_columns)
+
+
+async def test_base_column_typo_still_flagged_alongside_aliases() -> None:
+    # regression guard: alias fail-open must not swallow a real base-column typo
+    out = await CheckSqlTool().execute(
+        _ctx(), CheckSqlTool().input_model(sql="SELECT totl FROM orders")
+    )
+    assert not out.valid
+    cols = {u.ref: u.suggestions for u in out.unknown_columns}
+    assert "totl" in cols and "total" in cols["totl"]
