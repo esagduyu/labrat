@@ -528,6 +528,40 @@ async def test_reverify_rederive_diversity_index_always_none(
     assert seen == [None, None]
 
 
+async def test_rederive_does_not_see_primary_transcript(tmp_path: Path, monkeypatch: Any) -> None:
+    """Spacedock invariant: the re-derive dispatch (_run_once(900)) must be an
+    independent context — it must NOT receive the primary sub-run's answer/transcript
+    in its extra_instructions. Seeding the re-derivation with the primary's answer
+    would defeat its purpose as an independent check."""
+    calls: list[tuple[str, str]] = []
+
+    async def _fake_dispatch(
+        self: Any,
+        task: Any,
+        dbc: Any,
+        sub: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        calls.append((sub.name, extra_instructions))
+        # Primary and re-derive both return the same sentinel so they agree exactly
+        # and no reconcile (subrun901) dispatch is needed.
+        return ("PRIMARY_ANSWER", 5, 1.0)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
+
+    suite = DabSuite(driver="claude-mcp", reverify=True)
+    await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    rederive_calls = [extra for name, extra in calls if name == "subrun900"]
+    assert rederive_calls, "expected a subrun900 (re-derive) dispatch"
+    for extra in rederive_calls:
+        assert "PRIMARY_ANSWER" not in extra, (
+            "re-derive dispatch must not receive the primary sub-run's answer/transcript"
+        )
+
+
 # ── Post-verify: deterministic constraint check + one bounded revise (M1 Unit 3b) ──
 
 
