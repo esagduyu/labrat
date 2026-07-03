@@ -439,6 +439,7 @@ class DabSuite:
         reverify: bool = False,
         consensus_diversity: bool = True,
         argue_rounds: int = 0,
+        postverify: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -485,6 +486,11 @@ class DabSuite:
         # disables the loop entirely, leaving the existing consensus/reverify behavior
         # byte-identical.
         self._argue_rounds = argue_rounds
+        # Deterministic post-hoc constraint check on the FINAL answer (post-consensus,
+        # post-argue, post-reverify). Independent of consensus/reverify — works standalone.
+        # On a violation, one bounded revise dispatch; fail-open on any error. See
+        # _run_trial_verified's postverify block.
+        self._postverify = postverify
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -664,7 +670,10 @@ class DabSuite:
 
         question = task.prompt
         k = self._consensus_k or 1
-        verification_active = k > 1 or self._reverify
+        # postverify is an independent mechanism from consensus/reverify — it must route
+        # into this verified path (sub-run scratch dirs, verification.json) even when it's
+        # the only verification flag on.
+        verification_active = k > 1 or self._reverify or self._postverify
 
         async def _run_once(
             i: int, extra: str = "", diversity_index: int | None = None
@@ -793,6 +802,33 @@ class DabSuite:
             except Exception:
                 pass  # fail-open: keep the primary answer
 
+        # ── Post-verify: deterministic constraint check + one bounded revise ─
+        # Runs on the FINAL answer (post-consensus, post-argue, post-reverify).
+        # Independent of consensus_k/reverify — works standalone.
+        postverify_violations: list[str] = []
+        postverify_revised = False
+        if self._postverify:
+            try:
+                from labrat.agent.verification.constraints import check_answer_constraints
+
+                postverify_violations = check_answer_constraints(question, final_answer[0])
+                if postverify_violations:
+                    violation_lines = ["Your answer does not satisfy the question's constraints:"]
+                    violation_lines.extend(f"- {v}" for v in postverify_violations)
+                    violation_lines.append(
+                        "Revise your answer to satisfy these constraints. Give the single "
+                        "final answer clearly."
+                    )
+                    revised = await _run_once(
+                        902, extra="\n".join(violation_lines), diversity_index=None
+                    )
+                    total_latency += revised[2]
+                    final_answer = revised
+                    postverify_revised = True
+                    chosen_subdir_i = 902
+            except Exception:
+                pass  # fail-open: keep the original final answer
+
         # ── Persist verification traces (spec §6) ───────────────────────
         if verification_active:
             try:
@@ -808,6 +844,9 @@ class DabSuite:
                     "rederived_answer": rederived_answer,
                     "agreed": agreed,
                     "reconcile_used": reconcile_used,
+                    "postverify": self._postverify,
+                    "postverify_violations": postverify_violations,
+                    "postverify_revised": postverify_revised,
                     "chosen_answer": final_answer[0],
                 }
                 (scratch_dir / "verification.json").write_text(json.dumps(vdata, indent=2))

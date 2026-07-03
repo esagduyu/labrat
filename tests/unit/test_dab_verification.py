@@ -526,3 +526,170 @@ async def test_reverify_rederive_diversity_index_always_none(
     # k==1 path: primary dispatch (diversity_index=None) + re-derive dispatch
     # (diversity_index=None) — neither the single-primary nor the re-derive diversify.
     assert seen == [None, None]
+
+
+# ── Post-verify: deterministic constraint check + one bounded revise (M1 Unit 3b) ──
+
+
+def _topn_task() -> BenchmarkTask:
+    return BenchmarkTask(
+        id="demo:1",
+        benchmark="dab",
+        prompt="What are the top 5 products?",
+        config={"db_config_path": "x", "validator_path": "y", "dataset": "demo"},
+    )
+
+
+async def test_postverify_revises_on_violation(tmp_path: Path, monkeypatch: Any) -> None:
+    """A chosen answer that violates a constraint (asks for top 5, answer lists 3)
+    triggers exactly one bounded revise dispatch; the revised answer is returned."""
+    calls: list[str] = []
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        calls.append(extra_instructions)
+        if "does not satisfy" in extra_instructions:
+            return ("A, B, C, D, E", 5, 1.0)
+        return ("A, B, C", 5, 1.0)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    suite = DabSuite(driver="claude-mcp", postverify=True)  # standalone — no consensus/reverify
+    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+
+    assert text == "A, B, C, D, E"
+    assert len(calls) == 2  # primary + exactly one revise dispatch
+
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["postverify"] is True
+    assert vdata["postverify_violations"]
+    assert vdata["postverify_revised"] is True
+
+
+async def test_postverify_no_revise_when_satisfied(tmp_path: Path, monkeypatch: Any) -> None:
+    """A chosen answer that already satisfies the constraint triggers no revise dispatch."""
+    calls = {"n": 0}
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        calls["n"] += 1
+        return ("A, B, C, D, E", 5, 1.0)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    suite = DabSuite(driver="claude-mcp", postverify=True)
+    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+
+    assert text == "A, B, C, D, E"
+    assert calls["n"] == 1  # no revise dispatch
+
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["postverify_violations"] == []
+    assert vdata["postverify_revised"] is False
+
+
+async def test_postverify_fail_open_on_revise_error(tmp_path: Path, monkeypatch: Any) -> None:
+    """If the revise dispatch raises, the original (violating) answer is kept — fail-open."""
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        if "does not satisfy" in extra_instructions:
+            raise RuntimeError("boom")
+        return ("A, B, C", 5, 1.0)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    suite = DabSuite(driver="claude-mcp", postverify=True)
+    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+
+    assert text == "A, B, C"  # original kept despite the violation — fail-open
+
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["postverify_violations"]  # violation was detected
+    assert vdata["postverify_revised"] is False  # but the revise dispatch failed
+
+
+async def test_postverify_off_byte_identical(tmp_path: Path, monkeypatch: Any) -> None:
+    """postverify=False (default) must be byte-identical to the pre-postverify off-path:
+    a single dispatch, no verification.json."""
+    calls = {"n": 0}
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        calls["n"] += 1
+        return ("A, B, C", 5, 1.0)  # would violate "top 5" if postverify were on
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    suite = DabSuite(driver="claude-mcp")  # postverify defaults to False
+    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+
+    assert text == "A, B, C" and calls["n"] == 1
+    assert not (tmp_path / "verification.json").exists()
+
+
+def test_eval_dab_threads_postverify(monkeypatch: Any, tmp_path: Path) -> None:
+    """--agent-postverify must reach DabSuite(postverify=True)."""
+    import scripts.eval_dab as ed
+
+    captured: dict[str, Any] = {}
+
+    class _FakeSuite:
+        name = "dab"
+
+        def __init__(self, **kw: Any) -> None:
+            captured.update(kw)
+
+        def tasks(self) -> list[Any]:
+            return []
+
+        def write_submission(self, report: Any, output_dir: Any) -> None:
+            pass
+
+    async def _fake_interim(*a: Any, **kw: Any) -> BenchmarkReport:
+        return BenchmarkReport(
+            benchmark="dab",
+            run_id="test",
+            score=AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0),
+            trials=[],
+            config={},
+        )
+
+    monkeypatch.setattr(ed, "DabSuite", _FakeSuite)
+    monkeypatch.setattr(ed, "_run_interim", _fake_interim)
+    ed.main(
+        [
+            "--driver",
+            "claude-mcp",
+            "--agent-postverify",
+            "--output-dir",
+            str(tmp_path / "r"),
+            "--datasets",
+            "deps_dev_v1",
+        ]
+    )
+    assert captured.get("postverify") is True
