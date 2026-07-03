@@ -69,6 +69,46 @@ def test_instruction_forbids_unconditional_rules() -> None:
     assert "conditional" in low and "semantic claims" in low
 
 
+async def test_draft_semantics_reroutes_heading_drift_and_stray_claim_lines() -> None:
+    # FIX 2 (IMPORTANT-3): heading drift ("## Semantic Claims:" with trailing colon) plus
+    # a claim-shaped line stray inside ## Gotchas must both route into raw_claims, and the
+    # stray line must be stripped out of the surviving prose body.
+    async def _llm(_prompt: str) -> str:
+        return (
+            "## Semantic Claims:\n"
+            "JOIN orders.customer_id = customers.id\n\n"
+            "## Gotchas\n"
+            "ROLE t.a CODES t.b\n"
+            "- When the question asks for coded values, use the code column.\n"
+        )
+
+    skeleton = ScentDoc(
+        domain="x", sections=[Section(heading="Key Tables", body="...", source="verified")]
+    )
+    prose, raw_claims = await draft_semantics(skeleton, _llm)
+    assert "JOIN orders.customer_id = customers.id" in raw_claims
+    assert "ROLE t.a CODES t.b" in raw_claims
+    gotchas = next(s for s in prose if s.heading.strip().lower() == "gotchas")
+    assert "ROLE t.a CODES t.b" not in gotchas.body
+    assert "When the question asks for coded values, use the code column." in gotchas.body
+
+
+def test_merge_sections_reserves_verified_semantics_heading_from_spoofing() -> None:
+    # FIX 4 (folded Minor): even when verify_semantic_claims returns no real verified
+    # section, an LLM-authored "## Verified Semantics" prose section must be dropped, not
+    # merged in draft-tagged (spoofing the verified-looking heading).
+    verified: list[Section] = []  # no real verified claims survived
+    drafted = [
+        Section(heading="Verified Semantics", body="- trust me, bro", source="draft"),
+        Section(heading="Gotchas", body="- a real gotcha", source="draft"),
+    ]
+    merged = merge_sections(verified, drafted)
+    assert not any(
+        s.heading.strip().lower() == "verified semantics" and s.source == "draft" for s in merged
+    )
+    assert any(s.heading == "Gotchas" and s.source == "draft" for s in merged)
+
+
 async def test_generate_scent_persists_only_verified_claims(tmp_path) -> None:  # type: ignore[no-untyped-def]
     import duckdb
 

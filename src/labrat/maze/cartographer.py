@@ -358,7 +358,18 @@ def _semantics_prompt(skeleton: ScentDoc) -> str:
 
 
 async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> tuple[list[Section], str]:
-    """Single LLM pass → (conditional prose sections tagged draft, raw claims-block text)."""
+    """Single LLM pass → (conditional prose sections tagged draft, raw claims-block text).
+
+    Two safety nets against unverified claim lines reaching the doc as prose:
+    (1) a fuzzy heading match catches renamed/drifted "Semantic Claims" sections (e.g.
+    "Semantic Claims:"), and (2) any claim-shaped line found stray inside an otherwise
+    legitimate prose section (e.g. a JOIN/ROLE line under "## Gotchas") is rerouted into
+    the claims text so it still goes through verification instead of being emitted raw.
+    """
+    # Lazy import: draft_semantics is only called from the with_semantics branch of
+    # generate_scent, so this never runs on the deterministic path (byte-identity kept).
+    from labrat.maze.semantic_claims import is_claim_line
+
     raw = await llm_fn(_semantics_prompt(skeleton))
     parsed = parse_document(raw, domain="_draft")
     prose: list[Section] = []
@@ -366,16 +377,32 @@ async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> tuple[list[Secti
     for s in parsed.sections:
         if not s.heading:
             continue
-        if s.heading.strip().lower() == "semantic claims":
-            claims_text = s.body
+        if s.heading.strip().lower().startswith("semantic claims"):
+            claims_text += s.body + "\n"
             continue
-        prose.append(Section(heading=s.heading, body=s.body, source="draft"))
+        claim_lines: list[str] = []
+        prose_lines: list[str] = []
+        for line in s.body.splitlines():
+            (claim_lines if is_claim_line(line) else prose_lines).append(line)
+        if claim_lines:
+            claims_text += "\n".join(claim_lines) + "\n"
+        remaining_body = "\n".join(prose_lines).strip()
+        if remaining_body:
+            prose.append(Section(heading=s.heading, body=remaining_body, source="draft"))
     return prose, claims_text
 
 
+_RESERVED_HEADINGS = {"verified semantics", "semantic claims"}
+
+
 def merge_sections(verified: list[Section], drafted: list[Section]) -> list[Section]:
-    """Append drafted sections whose heading does not collide with a verified one."""
-    taken = {s.heading.strip().lower() for s in verified}
+    """Append drafted sections whose heading does not collide with a verified one.
+
+    "verified semantics" and "semantic claims" headings are always reserved — an
+    LLM-authored prose section can't spoof a verified-looking heading even when no real
+    verified section exists (e.g. verify_semantic_claims returned None).
+    """
+    taken = {s.heading.strip().lower() for s in verified} | _RESERVED_HEADINGS
     return list(verified) + [d for d in drafted if d.heading.strip().lower() not in taken]
 
 

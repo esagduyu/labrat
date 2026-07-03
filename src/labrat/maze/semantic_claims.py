@@ -19,10 +19,16 @@ from labrat.maze.document import Section
 
 _JOIN_RE = re.compile(r"^\s*JOIN\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)\s*$", re.IGNORECASE)
 _ROLE_RE = re.compile(r"^\s*ROLE\s+(\w+)\.(\w+)\s+CODES\s+(\w+)\.(\w+)\s*$", re.IGNORECASE)
-_CODE_SHAPE_RE = re.compile(r"(\d.*[/\-._]|^\[.*\]$|^(?=.*\d)[A-Za-z0-9]{1,10}$)")
+_CODE_SHAPE_RE = re.compile(r"^\[.*\]$|^(?=.*\d)[A-Za-z0-9/\-._]{1,12}$")
 _SAFE_IDENT = re.compile(r"\w+")
 _SAMPLE = 200
 _SHAPE_THRESHOLD = 0.6
+_NAME_CEILING = 0.4
+
+
+def is_claim_line(line: str) -> bool:
+    """True if a line matches the JOIN or ROLE claim grammar."""
+    return bool(_JOIN_RE.match(line) or _ROLE_RE.match(line))
 
 
 class JoinClaim(BaseModel):
@@ -87,8 +93,11 @@ def verify_role_claim(conn: Connection, claim: RoleClaim) -> bool:
         return False
     code_score = _looks_like_code(code_vals)
     name_score = _looks_like_code(name_vals)
-    # code column must look code-shaped AND clearly more so than the name column
-    return code_score >= _SHAPE_THRESHOLD and code_score > name_score
+    # code column must look code-shaped, clearly more so than the name column, AND the
+    # name column must not itself be substantially code-shaped (ambiguous direction → drop)
+    return (
+        code_score >= _SHAPE_THRESHOLD and name_score <= _NAME_CEILING and code_score > name_score
+    )
 
 
 async def verify_semantic_claims(
@@ -100,6 +109,11 @@ async def verify_semantic_claims(
     lines: list[str] = []
     for c in claims:
         if isinstance(c, JoinClaim):
+            if not all(
+                _SAFE_IDENT.fullmatch(x)
+                for x in (c.left_table, c.left_col, c.right_table, c.right_col)
+            ):
+                continue
             try:
                 v = await tool.execute(
                     ctx,

@@ -174,3 +174,73 @@ async def test_verify_no_survivors_returns_none(tmp_path) -> None:
     bogus = [JoinClaim(left_table="t", left_col="a", right_table="t", right_col="b")]
     assert await verify_semantic_claims(bogus, ctx, database="main") is None
     conn.disconnect()
+
+
+# --- FIX 1 (IMPORTANT-1 + IMPORTANT-2) regression tests -----------------------------
+
+
+def _sized_products_conn(tmp_path):
+    p = str(tmp_path / "products.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE products(size_code VARCHAR, size_label VARCHAR)")
+    raw.execute(
+        "INSERT INTO products VALUES "
+        "('S','Size 5.5 (US women)'),('M','Size 6.0 (US women)'),('L','Size 7.5 (US women)')"
+    )
+    raw.close()
+    c = DuckDBConnection(path=p, read_only=False)
+    c.connect()
+    return c
+
+
+def test_role_claim_reversed_free_text_no_longer_survives(tmp_path) -> None:
+    # Fable's reversed-claim fixture (load-bearing): free-text size_label used to score
+    # code-shaped under the old unanchored regex, letting the REVERSED claim survive.
+    conn = _sized_products_conn(tmp_path)
+    assert (
+        verify_role_claim(
+            conn, RoleClaim(table="products", code_col="size_label", name_col="size_code")
+        )
+        is False
+    )  # reversed claim: must now drop (the bug)
+    assert (
+        verify_role_claim(
+            conn, RoleClaim(table="products", code_col="size_code", name_col="size_label")
+        )
+        is False
+    )  # correct direction also drops: pure-alpha S/M/L scores 0.0 (accepted false-drop)
+    conn.disconnect()
+
+
+def test_role_claim_genuine_digit_bearing_code_still_survives(tmp_path) -> None:
+    p = str(tmp_path / "dx.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE dx(code VARCHAR, label VARCHAR)")
+    raw.execute(
+        "INSERT INTO dx VALUES "
+        "('9400/3','Glioblastoma'),('8140/3','Adenocarcinoma'),('8500/2','Ductal carcinoma')"
+    )
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+    assert verify_role_claim(conn, RoleClaim(table="dx", code_col="code", name_col="label")) is True
+    assert (
+        verify_role_claim(conn, RoleClaim(table="dx", code_col="label", name_col="code")) is False
+    )
+    conn.disconnect()
+
+
+def test_role_claim_name_ceiling_drops_when_both_sides_code_shaped(tmp_path) -> None:
+    # IMPORTANT-2: name side itself scores >= _NAME_CEILING code-shaped → direction ambiguous.
+    p = str(tmp_path / "codes.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE t(num_code VARCHAR, alt_code VARCHAR)")
+    raw.execute("INSERT INTO t VALUES ('840','124'),('826','276'),('392','392')")
+    raw.close()
+    conn = DuckDBConnection(path=p, read_only=False)
+    conn.connect()
+    assert (
+        verify_role_claim(conn, RoleClaim(table="t", code_col="num_code", name_col="alt_code"))
+        is False
+    )
+    conn.disconnect()
