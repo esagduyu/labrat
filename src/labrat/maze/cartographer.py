@@ -8,6 +8,7 @@ profile_dataset + verify_join tools; never reads ground-truth artifacts.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.profile_dataset import (
     ProfileDatasetTool,
+    _TableProfile,  # pyright: ignore[reportPrivateUsage]
 )
 from labrat.agent.tools.profile_dataset import (
     _Output as ProfileOutput,  # pyright: ignore[reportPrivateUsage]
@@ -62,22 +64,43 @@ def build_quick_reference(profile: ProfileOutput) -> Section:
     return Section(heading="Quick Reference", body="\n".join(lines), source="verified")
 
 
+_COMPACT_THRESHOLD = 8
+
+
+def _col_signature(t: _TableProfile) -> tuple[tuple[str, str], ...]:
+    return tuple((c.name, c.data_type) for c in t.columns)
+
+
 def build_key_tables(profile: ProfileOutput, joins: list[VerifiedJoin]) -> Section:
     joins_by_table: dict[str, list[VerifiedJoin]] = {}
     for j in joins:
         joins_by_table.setdefault(j.left.split(".")[0], []).append(j)
 
-    blocks: list[str] = []
+    buckets: dict[tuple[tuple[str, str], ...], list[_TableProfile]] = defaultdict(list)
     for t in profile.tables:
-        cols = ", ".join(f"{c.name} ({c.data_type})" for c in t.columns)
-        block = [f"### {t.name}", f"- Columns: {cols}"]
-        if t.row_count is not None:
-            block.append(f"- Grain: {t.row_count} rows.")
-        for j in joins_by_table.get(t.name, []):
-            fan = "no fan-out" if j.fanout <= 1 else f"fans out up to {j.fanout}/key"
-            pct = round(j.match_rate * 100, 1)
-            block.append(f"- Join: `{j.left} = {j.right}` (verified {pct}% match, {fan}).")
-        blocks.append("\n".join(block))
+        buckets[_col_signature(t)].append(t)
+
+    blocks: list[str] = []
+    for group in buckets.values():
+        if len(group) >= _COMPACT_THRESHOLD:
+            rep = group[0]
+            cols = ", ".join(f"{c.name} ({c.data_type})" for c in rep.columns)
+            names = ", ".join(t.name for t in group)
+            blocks.append(
+                f"### ⚠ {len(group)} tables share this structure\n"
+                f"- Columns: {cols}\n- Tables: {names}"
+            )
+        else:
+            for t in group:
+                cols = ", ".join(f"{c.name} ({c.data_type})" for c in t.columns)
+                block = [f"### {t.name}", f"- Columns: {cols}"]
+                if t.row_count is not None:
+                    block.append(f"- Grain: {t.row_count} rows.")
+                for j in joins_by_table.get(t.name, []):
+                    fan = "no fan-out" if j.fanout <= 1 else f"fans out up to {j.fanout}/key"
+                    pct = round(j.match_rate * 100, 1)
+                    block.append(f"- Join: `{j.left} = {j.right}` (verified {pct}% match, {fan}).")
+                blocks.append("\n".join(block))
     return Section(heading="Key Tables", body="\n\n".join(blocks), source="verified")
 
 
