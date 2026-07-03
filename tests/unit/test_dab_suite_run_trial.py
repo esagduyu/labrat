@@ -200,6 +200,42 @@ async def test_labrat_agent_driver_records_provider_token_usage(
     assert result.meta.get("usage") == usage
 
 
+@patch("labrat.agent.providers.build_provider", return_value=MagicMock())
+async def test_labrat_agent_driver_threads_diversity_index_to_cartographer(
+    _provider: MagicMock, tmp_path: Path
+) -> None:
+    """FIX 3: the labrat-agent driver must pass variant_seed=diversity_index or 0 to
+    _run_cartographer, same as the claude-mcp driver — otherwise consensus sub-runs on
+    this driver all share seed-0 Scent and the decorrelation mechanism is absent."""
+    _make_real_duckdb_fixture(tmp_path)
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cartographer(*args: Any, **kwargs: Any) -> Path:
+        captured.update(kwargs)
+        root = tmp_path / "scent"
+        root.mkdir(exist_ok=True)
+        return root
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        return SimpleNamespace(final_text="ok", tool_calls=0, latency_seconds=0.0)
+
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", cartograph=True)
+    task = next(iter(suite.tasks()))
+
+    with (
+        patch("labrat.eval.benchmarks.dab.suite._run_cartographer", new=fake_run_cartographer),
+        patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task),
+    ):
+        await suite._run_trial_labrat_agent(
+            task,
+            tmp_path / "query_real1" / "db_config.yaml",
+            tmp_path / "scratch",
+            diversity_index=2,
+        )
+
+    assert captured.get("variant_seed") == 2
+
+
 async def test_run_trial_isolates_agent_timeout_as_infra(tmp_path: Path) -> None:
     """A TimeoutError from the agent fails only this trial (infra:timeout), not the run."""
     _make_synthetic_fixture(tmp_path)

@@ -1215,6 +1215,7 @@ class DabSuite:
                 self._scent_cache_root,
                 with_semantics=self._cartograph_semantics,
                 llm_fn=self._cartograph_llm_fn() if self._cartograph_semantics else None,
+                variant_seed=diversity_index or 0,
             )
 
         try:
