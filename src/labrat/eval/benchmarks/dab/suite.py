@@ -150,9 +150,7 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
             "match and won't fan out.",
             "  4. Before answering, re-read the question and confirm your result actually "
             "answers it (check magnitudes, units, and that joins didn't drop or fan out rows).",
-            f"  5. {levers[0]}",
-            f"  6. {levers[1]}",
-            f"  7. {levers[2]}",
+            *[f"  {5 + i}. {lever}" for i, lever in enumerate(levers)],
             "",
             "Run queries until you are confident, then respond with a single plain answer "
             "on the last line.",
@@ -271,6 +269,9 @@ def _dab_lever_lines() -> list[str]:
         "— don't guess; re-run until it executes cleanly.",
         "Compute counts/sums/aggregates in SQL (GROUP BY + aggregate functions), not by "
         "fetching rows and tallying them yourself.",
+        "For 'top N' / 'highest' questions, remember a bare LIMIT N silently truncates ties: "
+        "if the Nth value can repeat, rank with ties (RANK()/DENSE_RANK() or fetch the full tie "
+        "band) rather than LIMIT alone.",
     ]
 
 
