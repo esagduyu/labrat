@@ -41,6 +41,17 @@ def _is_stringy(data_type: str) -> bool:
     return any(tok in up for tok in _STRINGY)
 
 
+_FORMAT_SAMPLE_CAP = 2
+_UNUSUAL_CHARS = (">", "::", "|")
+
+
+def _is_numeric_or_date(data_type: str) -> bool:
+    dt = data_type.lower()
+    return any(
+        k in dt for k in ("int", "float", "double", "decimal", "numeric", "date", "timestamp")
+    )
+
+
 def build_quick_reference(profile: ProfileOutput) -> Section:
     lines = [f"Database `{profile.database}`: {profile.tables_profiled} tables profiled."]
     for t in profile.tables:
@@ -199,6 +210,36 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
             # Skip if cardinality exceeds cap OR if cardinality equals row count (all unique)
             if 0 < len(vals) <= cap and t.row_count is not None and len(vals) < t.row_count:
                 lines.append(f"- `{t.name}.{col.name}`: {', '.join(sorted(vals))}")
+
+    for t in profile.tables:
+        for col in t.columns:
+            # numeric/date range
+            if _is_numeric_or_date(col.data_type):
+                try:
+                    r = conn.execute(f"SELECT MIN({col.name}), MAX({col.name}) FROM {t.name}").row(
+                        0
+                    )
+                    if r[0] is not None:
+                        lines.append(f"- `{t.name}.{col.name}` range: {r[0]}..{r[1]}")
+                except Exception:
+                    pass
+            # unusual-structure sample for stringy cols
+            elif _is_stringy(col.data_type):
+                try:
+                    df = conn.execute(
+                        f"SELECT DISTINCT {col.name} FROM {t.name} "
+                        f"WHERE {col.name} IS NOT NULL LIMIT 200"
+                    )
+                    odd = [
+                        str(v[0])
+                        for v in df.iter_rows()
+                        if any(ch in str(v[0]) for ch in _UNUSUAL_CHARS) or len(str(v[0])) > 60
+                    ]
+                    for ex in odd[:_FORMAT_SAMPLE_CAP]:
+                        lines.append(f"- `{t.name}.{col.name}` format e.g.: `{ex}`")
+                except Exception:
+                    pass
+
     body = "\n".join(lines) if lines else "No low-cardinality categorical columns detected."
     return Section(heading="Dimensions", body=body, source="verified")
 
