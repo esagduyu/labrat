@@ -275,6 +275,27 @@ def _dab_lever_lines() -> list[str]:
     ]
 
 
+_CONSENSUS_FRAMINGS: list[str] = [
+    "Pay extra attention to filters and NULL-handling — confirm no rows were wrongly dropped.",
+    "Double-check join grain and whether the top value ties with others.",
+    "Confirm units, magnitudes, and that aggregates aren't double-counting from a fan-out join.",
+    "Re-read the question's exact wording (which column, which date, coded vs named values) "
+    "before finalizing.",
+]
+
+
+def _framing_for(diversity_index: int | None) -> str:
+    """Rotated, process-only framing line for a consensus sub-run.
+
+    Pure function of the sub-run index — ``None`` (single-run / no diversity) returns
+    "" so callers can append unconditionally without an extra branch. Never mentions
+    answer content; only shifts analytical emphasis across K sub-runs.
+    """
+    if diversity_index is None:
+        return ""
+    return _CONSENSUS_FRAMINGS[diversity_index % len(_CONSENSUS_FRAMINGS)]
+
+
 def _build_claude_mcp_prompt(
     primary_name: str,
     env_spec: DabTaskEnv,
@@ -746,14 +767,23 @@ class DabSuite:
         scratch_dir: Path,
         *,
         extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         if self._driver == "labrat-agent":
             return await self._run_trial_labrat_agent(
-                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+                task,
+                db_config_path,
+                scratch_dir,
+                extra_instructions=extra_instructions,
+                diversity_index=diversity_index,
             )
         if self._driver == "claude-mcp":
             return await self._run_trial_claude_mcp(
-                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+                task,
+                db_config_path,
+                scratch_dir,
+                extra_instructions=extra_instructions,
+                diversity_index=diversity_index,
             )
         return await self._run_trial_raw_bash(task, db_config_path)
 
@@ -830,6 +860,7 @@ class DabSuite:
         scratch_dir: Path,
         *,
         extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         """Phase 4 driver that uses the LabRat MCP server inside `claude --print`.
 
@@ -875,8 +906,13 @@ class DabSuite:
                 self._scent_cache_root,
                 with_semantics=self._cartograph_semantics,
                 llm_fn=self._cartograph_llm_fn() if self._cartograph_semantics else None,
+                variant_seed=diversity_index or 0,
             )
             (maze_root / "_home").mkdir(parents=True, exist_ok=True)
+
+        framing = _framing_for(diversity_index)
+        if framing:
+            extra_instructions = (extra_instructions + "\n" + framing).strip()
 
         mcp_config = {
             "mcpServers": {
@@ -1030,6 +1066,7 @@ class DabSuite:
         scratch_dir: Path,
         *,
         extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         # P3 (sandbox note): this path is in-process. The registry exposes no
         # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
@@ -1043,6 +1080,10 @@ class DabSuite:
             build_dab_task_env,
             introspect_env_catalogs,
         )
+
+        framing = _framing_for(diversity_index)
+        if framing:
+            extra_instructions = (extra_instructions + "\n" + framing).strip()
 
         env = build_dab_task_env(db_config_path)
         for conn in env.ctx.connections.values():
