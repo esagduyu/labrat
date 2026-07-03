@@ -446,6 +446,7 @@ async def cartograph_prepass(
     llm_fn: LLMFn | None = None,
     table_budget: int = 40,
     distinct_cap: int = 25,
+    variant_seed: int = 0,
 ) -> list[Path]:
     """First-contact Scent pre-pass: if ``scent_dir`` already holds docs, reuse them
     (idempotent first-contact cache); otherwise generate_scent(...) and write them.
@@ -453,6 +454,11 @@ async def cartograph_prepass(
     Deterministic by default (``with_semantics=False`` → no LLM). The reusable seam:
     DAB calls this deterministic-only; the agent's first-connect path will later call it
     with semantics + the dual store. Caller owns ``scent_dir`` isolation.
+
+    ``variant_seed`` (default 0 = baseline) is threaded into ``generate_scent`` to give
+    per-sub-run diversity on high-cardinality dimension sampling; callers that want
+    distinct variants must also give each one a distinct ``scent_dir`` (this cache is
+    keyed purely on directory contents, not on the seed).
     """
     existing = sorted(scent_dir.glob("*.md")) if scent_dir.exists() else []
     if existing:
@@ -465,5 +471,6 @@ async def cartograph_prepass(
         llm_fn=llm_fn,
         table_budget=table_budget,
         distinct_cap=distinct_cap,
+        variant_seed=variant_seed,
     )
     return write_docs(docs, scent_dir)

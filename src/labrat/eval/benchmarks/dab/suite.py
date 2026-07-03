@@ -344,6 +344,7 @@ async def _run_cartographer(
     *,
     with_semantics: bool = False,
     llm_fn: LLMFn | None = None,
+    variant_seed: int = 0,
 ) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
@@ -351,8 +352,16 @@ async def _run_cartographer(
     Per-dataset store under ``cache_root`` so datasets that share a connection key
     (e.g. 'main') never collide; idempotent (cartograph_prepass caches on first contact).
     Deterministic-only — never calls a model, never touches answer-key files.
+
+    ``variant_seed`` (default 0) is per-sub-run diversity plumbing: when >0 the maze
+    root is suffixed with ``variant<seed>`` so each variant gets its own Scent store,
+    and the seed is threaded into ``generate_scent`` (via ``cartograph_prepass``) so
+    high-cardinality dimension sampling varies across variants. ``variant_seed=0``
+    leaves the maze root and behavior unchanged from before this parameter existed.
     """
     maze_root = cache_root / _safe_name(dataset)
+    if variant_seed > 0:
+        maze_root = maze_root / f"variant{variant_seed}"
     scent_dir = maze_root / "labrat_maze" / "scent"
 
     ctx = env_spec.ctx
@@ -369,6 +378,7 @@ async def _run_cartographer(
             scent_dir,
             with_semantics=with_semantics,
             llm_fn=llm_fn,
+            variant_seed=variant_seed,
         )
     finally:
         for conn in ctx.connections.values():
