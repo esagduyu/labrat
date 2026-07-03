@@ -19,6 +19,10 @@ backstop, infra classification, resume) and the same `build_data_tools_registry(
 | 9 | Answer extraction + scoring | shared `score_with_validator` | same | ✅ parity |
 | 10 | Resume + infra classification | shared | shared | ✅ parity |
 | 11 | Submission artifacts | config/trials/submission/report + traces | same + traces | ✅ parity |
+| 12 | Variant-Scent diversity (consensus sub-run decorrelation) | `variant_seed=diversity_index or 0` into `_run_cartographer` | same (closed P5) | ✅ parity |
+| 13 | Framing rotation (`_framing_for`) on diversified sub-runs | yes | yes | ✅ parity |
+| 14 | Argumentation rounds on a split consensus vote (`--agent-argue-rounds`) | shared `_run_trial_verified`, driver-agnostic | same | ✅ parity |
+| 15 | Postverify (constraint check + bounded revise, `--agent-postverify`) | shared `_run_trial_verified`, driver-agnostic | same | ✅ parity |
 
 ## Gaps and resolution
 
@@ -33,9 +37,16 @@ backstop, infra classification, resume) and the same `build_data_tools_registry(
   is unnecessary for the submission path; claude-mcp remains the path for Claude.
 - **P4 — tool-call count (no action):** claude-mcp approximates from `num_turns`; labrat-agent reports
   the exact dispatch count — labrat-agent is more accurate. Not part of the submission format.
+- **P5 — variant-Scent diversity was labrat-agent-only-missing (M1 final-review fix, closed):**
+  `_run_trial_claude_mcp` passed `variant_seed=diversity_index or 0` into `_run_cartographer`, but
+  `_run_trial_labrat_agent`'s call site omitted it, so labrat-agent consensus sub-runs all shared
+  seed-0 Scent — the decorrelation mechanism was absent on that driver. Fixed by threading
+  `variant_seed=diversity_index or 0` through the labrat-agent call site too (`diversity_index` was
+  already a parameter on `_run_trial_labrat_agent`, just not forwarded to `_run_cartographer`).
 
 ## Conclusion
 
-With P1 and P2 closed and P3 documented, the labrat-agent/Codex path is **submission-equivalent** to
-claude-mcp: identical tool set, identical trace schema, identical scoring/sandbox/resume semantics, and
-a full trace package per trial.
+With P1–P5 closed and P3 documented, the labrat-agent/Codex path is **submission-equivalent** to
+claude-mcp: identical tool set, identical trace schema, identical scoring/sandbox/resume semantics,
+identical M1 consensus-decorrelation/argumentation/postverify behavior, and a full trace package per
+trial.

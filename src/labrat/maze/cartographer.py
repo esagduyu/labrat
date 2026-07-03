@@ -217,16 +217,25 @@ def build_join_keys(
     return Section(heading="Join Keys", body="\n".join(lines), source="verified")
 
 
-def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25) -> Section:
+def build_dimensions(
+    profile: ProfileOutput, conn: Connection, *, cap: int = 25, variant_seed: int = 0
+) -> Section:
     lines: list[str] = []
     for t in profile.tables:
         for col in t.columns:
             if not _is_stringy(col.data_type):
                 continue
+            order_clause = (
+                f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                if variant_seed > 0
+                else ""
+            )
             try:
                 df = conn.execute(
                     f"SELECT DISTINCT {col.name} FROM {t.name} "
-                    f"WHERE {col.name} IS NOT NULL LIMIT {cap + 1}"
+                    f"WHERE {col.name} IS NOT NULL "
+                    f"{order_clause}"
+                    f"LIMIT {cap + 1}"
                 )
             except Exception:
                 continue
@@ -249,10 +258,17 @@ def build_dimensions(profile: ProfileOutput, conn: Connection, *, cap: int = 25)
                     pass
             # unusual-structure sample for stringy cols
             elif _is_stringy(col.data_type):
+                order_clause = (
+                    f"ORDER BY hash(CAST({col.name} AS VARCHAR) || '{variant_seed}') "
+                    if variant_seed > 0
+                    else ""
+                )
                 try:
                     df = conn.execute(
                         f"SELECT DISTINCT {col.name} FROM {t.name} "
-                        f"WHERE {col.name} IS NOT NULL LIMIT 200"
+                        f"WHERE {col.name} IS NOT NULL "
+                        f"{order_clause}"
+                        f"LIMIT 200"
                     )
                     odd = [
                         str(v[0])
@@ -351,6 +367,7 @@ async def generate_scent(
     table_budget: int = 40,
     distinct_cap: int = 25,
     relevance: dict[str, float] | None = None,
+    variant_seed: int = 0,
 ) -> list[ScentDoc]:
     """Generate one Scent doc per connection: a verified deterministic skeleton plus,
     when ``with_semantics`` and ``llm_fn`` are given, an LLM-drafted semantics pass.
@@ -389,7 +406,11 @@ async def generate_scent(
         jk = build_join_keys(profile, cast(Connection, conn), joins)
         if jk is not None:
             sections.append(jk)
-        sections.append(build_dimensions(profile, cast(Connection, conn), cap=distinct_cap))
+        sections.append(
+            build_dimensions(
+                profile, cast(Connection, conn), cap=distinct_cap, variant_seed=variant_seed
+            )
+        )
         doc = ScentDoc(
             domain=name,
             kind="scent",
@@ -435,6 +456,7 @@ async def cartograph_prepass(
     llm_fn: LLMFn | None = None,
     table_budget: int = 40,
     distinct_cap: int = 25,
+    variant_seed: int = 0,
 ) -> list[Path]:
     """First-contact Scent pre-pass: if ``scent_dir`` already holds docs, reuse them
     (idempotent first-contact cache); otherwise generate_scent(...) and write them.
@@ -442,6 +464,11 @@ async def cartograph_prepass(
     Deterministic by default (``with_semantics=False`` → no LLM). The reusable seam:
     DAB calls this deterministic-only; the agent's first-connect path will later call it
     with semantics + the dual store. Caller owns ``scent_dir`` isolation.
+
+    ``variant_seed`` (default 0 = baseline) is threaded into ``generate_scent`` to give
+    per-sub-run diversity on high-cardinality dimension sampling; callers that want
+    distinct variants must also give each one a distinct ``scent_dir`` (this cache is
+    keyed purely on directory contents, not on the seed).
     """
     existing = sorted(scent_dir.glob("*.md")) if scent_dir.exists() else []
     if existing:
@@ -454,5 +481,6 @@ async def cartograph_prepass(
         llm_fn=llm_fn,
         table_budget=table_budget,
         distinct_cap=distinct_cap,
+        variant_seed=variant_seed,
     )
     return write_docs(docs, scent_dir)

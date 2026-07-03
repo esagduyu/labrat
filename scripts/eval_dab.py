@@ -263,6 +263,40 @@ def main(argv: list[str] | None = None) -> int:
         help="Independent re-derive + reconcile-on-mismatch verify stage (off by default).",
     )
     parser.add_argument(
+        "--agent-argue-rounds",
+        type=int,
+        default=None,
+        help=(
+            "Bounded argumentation rounds on a split K-of-N consensus vote (requires "
+            "--agent-consensus). When the vote comes back low_confidence, re-dispatch "
+            "each sub-run with the other sub-runs' answers appended and re-vote, up to "
+            "N rounds, stopping early once a majority forms. Off (0) by default."
+        ),
+    )
+    parser.add_argument(
+        "--agent-postverify",
+        action="store_true",
+        default=None,
+        help=(
+            "Deterministic question-constraint check on the FINAL answer (post-consensus, "
+            "post-argue, post-reverify); on a violation, one bounded revise dispatch. "
+            "Independent of --agent-consensus/--agent-reverify — works standalone. Off by "
+            "default."
+        ),
+    )
+    parser.add_argument(
+        "--no-consensus-diversity",
+        dest="no_consensus_diversity",
+        action="store_true",
+        default=None,
+        help=(
+            "Ablation control: disable per-sub-run diversity (variant Scent + rotated "
+            "framing) in K-of-N consensus (--agent-consensus). Diversity is ON by "
+            "default — this makes every sub-run an identical dispatch "
+            "(diversity_index=None throughout), the null-baseline arm."
+        ),
+    )
+    parser.add_argument(
         "--agent-timeout",
         type=int,
         default=None,
@@ -307,6 +341,12 @@ def main(argv: list[str] | None = None) -> int:
         if existing_cfg_path.exists():
             existing_cfg = json.loads(existing_cfg_path.read_text())
 
+    # Tri-state --no-consensus-diversity: None (unset) inherits from resume config /
+    # defaults to True; True/False resolved from the negation flag once it's set.
+    cli_consensus_diversity: bool | None = (
+        (not args.no_consensus_diversity) if args.no_consensus_diversity is not None else None
+    )
+
     for field, cli_val in [
         ("driver", args.driver),
         ("agent_model", args.agent_model),
@@ -318,6 +358,9 @@ def main(argv: list[str] | None = None) -> int:
         ("cartograph_semantics", args.cartograph_semantics),
         ("agent_consensus", args.agent_consensus),
         ("agent_reverify", args.agent_reverify),
+        ("agent_argue_rounds", args.agent_argue_rounds),
+        ("agent_postverify", args.agent_postverify),
+        ("consensus_diversity", cli_consensus_diversity),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
     ]:
@@ -391,6 +434,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_reverify is not None
         else existing_cfg.get("agent_reverify", False)
     )
+    effective_argue_rounds: int = (
+        args.agent_argue_rounds
+        if args.agent_argue_rounds is not None
+        else existing_cfg.get("agent_argue_rounds", 0)
+    )
+    effective_postverify: bool = bool(
+        args.agent_postverify
+        if args.agent_postverify is not None
+        else existing_cfg.get("agent_postverify", False)
+    )
+    effective_consensus_diversity: bool = bool(
+        cli_consensus_diversity
+        if cli_consensus_diversity is not None
+        else existing_cfg.get("consensus_diversity", True)
+    )
     effective_timeout: int | None = (
         args.agent_timeout if args.agent_timeout is not None else existing_cfg.get("agent_timeout")
     )
@@ -418,6 +476,9 @@ def main(argv: list[str] | None = None) -> int:
         cartograph_scent_root=effective_cartograph_scent_dir,
         consensus_k=effective_consensus,
         reverify=effective_reverify,
+        consensus_diversity=effective_consensus_diversity,
+        argue_rounds=effective_argue_rounds,
+        postverify=effective_postverify,
     )
 
     task_filter: list[str] | None = None
@@ -455,6 +516,9 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "agent_consensus": effective_consensus,
                 "agent_reverify": effective_reverify,
+                "agent_argue_rounds": effective_argue_rounds,
+                "agent_postverify": effective_postverify,
+                "consensus_diversity": effective_consensus_diversity,
                 "agent_timeout": effective_timeout,
                 "agent_reasoning": effective_reasoning,
                 "n_trials": args.n_trials,

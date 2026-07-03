@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -150,6 +151,7 @@ class _Output(BaseModel):
     error_category: str | None = None
     executed_sql: str | None = None
     hint: str | None = None
+    warnings: list[str] = []
 
 
 class RunSqlTool(Tool[_Input]):
@@ -281,10 +283,26 @@ class RunSqlTool(Tool[_Input]):
         )
         if self._on_result is not None:
             self._on_result(df, elapsed_ms)
+
+        warnings: list[str] = []
+        lowered = sql.lower()
+        if len(df) == 0 and re.search(r"\b(where|join)\b", lowered):
+            warnings.append(
+                "Query returned 0 rows despite a WHERE/JOIN — check the predicate and join keys."
+            )
+        elif len(df) > 0:
+            for col in df.columns:
+                if df[col].null_count() == len(df):
+                    warnings.append(
+                        f"Column `{col}` is entirely NULL in the result — "
+                        "likely a bad join or wrong column."
+                    )
+
         return _Output(
             ok=True,
             query=args.query,
             columns=df.columns,
             rows=rows,
             row_count=len(df),
+            warnings=warnings,
         )

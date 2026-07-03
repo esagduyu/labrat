@@ -275,6 +275,27 @@ def _dab_lever_lines() -> list[str]:
     ]
 
 
+_CONSENSUS_FRAMINGS: list[str] = [
+    "Pay extra attention to filters and NULL-handling — confirm no rows were wrongly dropped.",
+    "Double-check join grain and whether the top value ties with others.",
+    "Confirm units, magnitudes, and that aggregates aren't double-counting from a fan-out join.",
+    "Re-read the question's exact wording (which column, which date, coded vs named values) "
+    "before finalizing.",
+]
+
+
+def _framing_for(diversity_index: int | None) -> str:
+    """Rotated, process-only framing line for a consensus sub-run.
+
+    Pure function of the sub-run index — ``None`` (single-run / no diversity) returns
+    "" so callers can append unconditionally without an extra branch. Never mentions
+    answer content; only shifts analytical emphasis across K sub-runs.
+    """
+    if diversity_index is None:
+        return ""
+    return _CONSENSUS_FRAMINGS[diversity_index % len(_CONSENSUS_FRAMINGS)]
+
+
 def _build_claude_mcp_prompt(
     primary_name: str,
     env_spec: DabTaskEnv,
@@ -344,6 +365,7 @@ async def _run_cartographer(
     *,
     with_semantics: bool = False,
     llm_fn: LLMFn | None = None,
+    variant_seed: int = 0,
 ) -> Path:
     """Run the deterministic, GT-firewalled cartographer on the task's primary DB and
     return the maze root to expose as LABRAT_MAZE_DIR.
@@ -351,8 +373,16 @@ async def _run_cartographer(
     Per-dataset store under ``cache_root`` so datasets that share a connection key
     (e.g. 'main') never collide; idempotent (cartograph_prepass caches on first contact).
     Deterministic-only — never calls a model, never touches answer-key files.
+
+    ``variant_seed`` (default 0) is per-sub-run diversity plumbing: when >0 the maze
+    root is suffixed with ``variant<seed>`` so each variant gets its own Scent store,
+    and the seed is threaded into ``generate_scent`` (via ``cartograph_prepass``) so
+    high-cardinality dimension sampling varies across variants. ``variant_seed=0``
+    leaves the maze root and behavior unchanged from before this parameter existed.
     """
     maze_root = cache_root / _safe_name(dataset)
+    if variant_seed > 0:
+        maze_root = maze_root / f"variant{variant_seed}"
     scent_dir = maze_root / "labrat_maze" / "scent"
 
     ctx = env_spec.ctx
@@ -369,6 +399,7 @@ async def _run_cartographer(
             scent_dir,
             with_semantics=with_semantics,
             llm_fn=llm_fn,
+            variant_seed=variant_seed,
         )
     finally:
         for conn in ctx.connections.values():
@@ -406,6 +437,9 @@ class DabSuite:
         cartograph_scent_root: Path | None = None,
         consensus_k: int | None = None,
         reverify: bool = False,
+        consensus_diversity: bool = True,
+        argue_rounds: int = 0,
+        postverify: bool = False,
     ) -> None:
         self._dir = (
             dab_dir or Path(os.environ.get("DAB_DIR", "~/repos/DataAgentBench")).expanduser()
@@ -442,6 +476,21 @@ class DabSuite:
         )
         self._consensus_k = consensus_k
         self._reverify = reverify
+        # When True (default) and consensus_k > 1, each K sub-run gets a distinct
+        # diversity_index (variant Scent + rotated framing — see _framing_for /
+        # _run_trial_claude_mcp). False = the null-baseline A/B for the ablation
+        # (all sub-runs identical, diversity_index=None throughout).
+        self._consensus_diversity = consensus_diversity
+        # Bounded argumentation rounds run only when the K-run consensus vote above
+        # comes back low_confidence (a split vote) — see _run_trial_verified. 0 (default)
+        # disables the loop entirely, leaving the existing consensus/reverify behavior
+        # byte-identical.
+        self._argue_rounds = argue_rounds
+        # Deterministic post-hoc constraint check on the FINAL answer (post-consensus,
+        # post-argue, post-reverify). Independent of consensus/reverify — works standalone.
+        # On a violation, one bounded revise dispatch; fail-open on any error. See
+        # _run_trial_verified's postverify block.
+        self._postverify = postverify
         self._tasks_cache: list[BenchmarkTask] | None = None
 
     @property
@@ -621,13 +670,22 @@ class DabSuite:
 
         question = task.prompt
         k = self._consensus_k or 1
-        verification_active = k > 1 or self._reverify
+        # postverify is an independent mechanism from consensus/reverify — it must route
+        # into this verified path (sub-run scratch dirs, verification.json) even when it's
+        # the only verification flag on.
+        verification_active = k > 1 or self._reverify or self._postverify
 
-        async def _run_once(i: int, extra: str = "") -> tuple[str, int, float]:
+        async def _run_once(
+            i: int, extra: str = "", diversity_index: int | None = None
+        ) -> tuple[str, int, float]:
             sub = scratch_dir / f"subrun{i}" if verification_active else scratch_dir
             sub.mkdir(parents=True, exist_ok=True)
             return await self._dispatch_driver_once(
-                task, db_config_path, sub, extra_instructions=extra
+                task,
+                db_config_path,
+                sub,
+                extra_instructions=extra,
+                diversity_index=diversity_index,
             )
 
         total_latency = 0.0
@@ -637,12 +695,14 @@ class DabSuite:
         low_confidence: bool | None = None
         consensus_answers: list[str] | None = None
         chosen_subdir_i: int | None = None
+        results: list[tuple[str, int, float]] = []
 
         if k > 1:
-            results: list[tuple[str, int, float]] = []
             for i in range(k):
                 try:
-                    r = await _run_once(i)
+                    r = await _run_once(
+                        i, diversity_index=(i if self._consensus_diversity else None)
+                    )
                     results.append(r)
                     total_latency += r[2]
                 except Exception:
@@ -661,6 +721,53 @@ class DabSuite:
             total_latency += primary[2]
             if verification_active:  # reverify-only path
                 chosen_subdir_i = 0
+
+        # ── Argumentation: bounded rounds on a split vote ────────────────
+        # Only fires when the K-run vote above came back low_confidence AND the
+        # caller opted in via --agent-argue-rounds. Each round re-dispatches every
+        # sub-run with the OTHER sub-runs' answers appended ("Other analysts
+        # concluded: ..."), then re-votes. Stops early once a majority forms.
+        # Fail-open: any dispatch/judge error mid-round keeps the current best
+        # (modal) answer from before that round and stops arguing.
+        argue_rounds_used = 0
+        if k > 1 and low_confidence and self._argue_rounds > 0:
+            for round_num in range(self._argue_rounds):
+                try:
+                    argued: list[tuple[str, int, float]] = []
+                    for i in range(len(results)):
+                        block_lines = ["Other analysts concluded:"]
+                        for j, r in enumerate(results):
+                            if j == i:
+                                continue
+                            block_lines.append(f"- {r[0][:1500]}")
+                        block_lines.append(
+                            "Reconsider your answer in light of the above. If you still "
+                            "believe your answer is correct, restate it; otherwise revise. "
+                            "Give the single final answer clearly."
+                        )
+                        argue_extra = "\n".join(block_lines)
+                        r = await _run_once(
+                            i,
+                            extra=argue_extra,
+                            diversity_index=(i if self._consensus_diversity else None),
+                        )
+                        argued.append(r)
+                    total_latency += sum(r[2] for r in argued)
+                    results = argued
+                    argue_rounds_used = round_num + 1
+                    llm_fn = self._verify_llm_fn()
+                    idx, low = await choose_modal(
+                        [r[0] for r in results], question=question, llm_fn=llm_fn
+                    )
+                    modal_index = idx
+                    low_confidence = low
+                    consensus_answers = [r[0] for r in results]
+                    primary = results[idx]
+                    chosen_subdir_i = idx
+                    if not low_confidence:
+                        break
+                except Exception:
+                    break  # fail-open: keep the current best (modal) answer
 
         # Track re-derive metadata for persistence
         rederived_answer: str | None = None
@@ -695,18 +802,51 @@ class DabSuite:
             except Exception:
                 pass  # fail-open: keep the primary answer
 
+        # ── Post-verify: deterministic constraint check + one bounded revise ─
+        # Runs on the FINAL answer (post-consensus, post-argue, post-reverify).
+        # Independent of consensus_k/reverify — works standalone.
+        postverify_violations: list[str] = []
+        postverify_revised = False
+        if self._postverify:
+            try:
+                from labrat.agent.verification.constraints import check_answer_constraints
+
+                postverify_violations = check_answer_constraints(question, final_answer[0])
+                if postverify_violations:
+                    violation_lines = ["Your answer does not satisfy the question's constraints:"]
+                    violation_lines.extend(f"- {v}" for v in postverify_violations)
+                    violation_lines.append(
+                        "Revise your answer to satisfy these constraints. Give the single "
+                        "final answer clearly."
+                    )
+                    revised = await _run_once(
+                        902, extra="\n".join(violation_lines), diversity_index=None
+                    )
+                    total_latency += revised[2]
+                    final_answer = revised
+                    postverify_revised = True
+                    chosen_subdir_i = 902
+            except Exception:
+                pass  # fail-open: keep the original final answer
+
         # ── Persist verification traces (spec §6) ───────────────────────
         if verification_active:
             try:
                 vdata: dict[str, Any] = {
                     "consensus_k": self._consensus_k,
                     "reverify": self._reverify,
+                    "consensus_diversity": self._consensus_diversity,
                     "consensus_answers": consensus_answers,
                     "modal_index": modal_index,
                     "low_confidence": low_confidence,
+                    "argue_rounds": self._argue_rounds,
+                    "argue_rounds_used": argue_rounds_used,
                     "rederived_answer": rederived_answer,
                     "agreed": agreed,
                     "reconcile_used": reconcile_used,
+                    "postverify": self._postverify,
+                    "postverify_violations": postverify_violations,
+                    "postverify_revised": postverify_revised,
                     "chosen_answer": final_answer[0],
                 }
                 (scratch_dir / "verification.json").write_text(json.dumps(vdata, indent=2))
@@ -736,14 +876,23 @@ class DabSuite:
         scratch_dir: Path,
         *,
         extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         if self._driver == "labrat-agent":
             return await self._run_trial_labrat_agent(
-                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+                task,
+                db_config_path,
+                scratch_dir,
+                extra_instructions=extra_instructions,
+                diversity_index=diversity_index,
             )
         if self._driver == "claude-mcp":
             return await self._run_trial_claude_mcp(
-                task, db_config_path, scratch_dir, extra_instructions=extra_instructions
+                task,
+                db_config_path,
+                scratch_dir,
+                extra_instructions=extra_instructions,
+                diversity_index=diversity_index,
             )
         return await self._run_trial_raw_bash(task, db_config_path)
 
@@ -820,6 +969,7 @@ class DabSuite:
         scratch_dir: Path,
         *,
         extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         """Phase 4 driver that uses the LabRat MCP server inside `claude --print`.
 
@@ -865,8 +1015,13 @@ class DabSuite:
                 self._scent_cache_root,
                 with_semantics=self._cartograph_semantics,
                 llm_fn=self._cartograph_llm_fn() if self._cartograph_semantics else None,
+                variant_seed=diversity_index or 0,
             )
             (maze_root / "_home").mkdir(parents=True, exist_ok=True)
+
+        framing = _framing_for(diversity_index)
+        if framing:
+            extra_instructions = (extra_instructions + "\n" + framing).strip()
 
         mcp_config = {
             "mcpServers": {
@@ -1020,6 +1175,7 @@ class DabSuite:
         scratch_dir: Path,
         *,
         extra_instructions: str = "",
+        diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
         # P3 (sandbox note): this path is in-process. The registry exposes no
         # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
@@ -1033,6 +1189,10 @@ class DabSuite:
             build_dab_task_env,
             introspect_env_catalogs,
         )
+
+        framing = _framing_for(diversity_index)
+        if framing:
+            extra_instructions = (extra_instructions + "\n" + framing).strip()
 
         env = build_dab_task_env(db_config_path)
         for conn in env.ctx.connections.values():
@@ -1055,6 +1215,7 @@ class DabSuite:
                 self._scent_cache_root,
                 with_semantics=self._cartograph_semantics,
                 llm_fn=self._cartograph_llm_fn() if self._cartograph_semantics else None,
+                variant_seed=diversity_index or 0,
             )
 
         try:
