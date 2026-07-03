@@ -23,8 +23,9 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
     """Classify every trial in `trials_jsonl` and write `taint.json` beside it.
 
     Scans each trial's recorded answer text (artifact + reason) plus its per-call
-    MCP trace (`<scratch>/<task>__trial<n>/mcp_tool_calls.jsonl`) if present, for
-    the answer-key / external-dataset leakage patterns in scent_audit. Returns
+    trace(s) — `<scratch>/<task>__trial<n>/mcp_tool_calls.jsonl` (claude-mcp driver)
+    and/or `agent_tool_calls.jsonl` (labrat-agent driver) — whichever are present,
+    for the answer-key / external-dataset leakage patterns in scent_audit. Returns
     `{f"{task_id}:{trial_num}": verdict}`.
     """
     verdicts: dict[str, str] = {}
@@ -39,9 +40,11 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
         key = f"{task_id}:{trial_num}"
         parts = [str(r.get("artifact") or ""), str(r.get("reason") or "")]
         safe = task_id.replace(":", "_")
-        trace = scratch_dir / f"{safe}__trial{trial_num}" / "mcp_tool_calls.jsonl"
-        if trace.exists():
-            parts.append(trace.read_text())
+        trial_dir = scratch_dir / f"{safe}__trial{trial_num}"
+        for trace_name in ("mcp_tool_calls.jsonl", "agent_tool_calls.jsonl"):
+            trace = trial_dir / trace_name
+            if trace.exists():
+                parts.append(trace.read_text())
         verdicts[key] = classify_trial("\n".join(parts))
     (trials_jsonl.parent / "taint.json").write_text(json.dumps(verdicts, indent=2))
     return verdicts
