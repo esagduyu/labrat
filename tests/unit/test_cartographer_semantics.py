@@ -74,6 +74,11 @@ def test_instruction_has_cohort_vs_filter_rule() -> None:
     assert "cohort denominator (the population)" in _SEMANTICS_INSTRUCTION
 
 
+def test_instruction_grounds_author_in_verified_facts() -> None:
+    assert "annotator, not an inventor" in _SEMANTICS_INSTRUCTION
+    assert "NEVER introduce a claim" in _SEMANTICS_INSTRUCTION
+
+
 async def test_draft_semantics_reroutes_heading_drift_and_stray_claim_lines() -> None:
     # FIX 2 (IMPORTANT-3): heading drift ("## Semantic Claims:" with trailing colon) plus
     # a claim-shaped line stray inside ## Gotchas must both route into raw_claims, and the

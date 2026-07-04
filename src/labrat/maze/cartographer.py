@@ -424,7 +424,10 @@ _SEMANTICS_INSTRUCTION = (
     "COHORT VS FILTER: a quality/status filter (e.g. FILTER='PASS', a sequenced-only or "
     "is_test flag) scopes WHICH ROWS COUNT AS POSITIVE (the numerator); it must NEVER be "
     "authored as a Best Practice that narrows the cohort denominator (the population) — "
-    "never restrict the population to a filtered subset."
+    "never restrict the population to a filtered subset. "
+    "GROUNDING: you are an annotator, not an inventor — build conditional routing guidance "
+    "ON TOP OF the verified facts below and NEVER introduce a claim the verified facts do "
+    "not support."
 )
 
 
