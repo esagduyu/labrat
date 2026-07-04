@@ -77,11 +77,37 @@ _READONLY_SAFE_COMMAND_KEYWORDS = frozenset({"EXPLAIN", "SHOW"})
 # The root node of such a statement is a plain exp.Select, so the type-only safelist
 # check above misses it; this is a defense-in-depth recursive scan for a write anywhere
 # in the parsed tree of an otherwise-safe root.
-_EMBEDDED_WRITE_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge)
+# exp.Into marks `SELECT ... INTO <table> FROM ...` (Postgres/T-SQL "select-into"),
+# whose root node is still a plain exp.Select — a write (creates a table) with no
+# force gate, so it must be caught by the same recursive scan as the DML types above.
+_EMBEDDED_WRITE_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Into)
 
 
 _ANALYZE_WORD_RE = re.compile(r"\bANALY[SZ]E\b", re.IGNORECASE)
 _LEADING_ANALYZE_RE = re.compile(r"^\s*ANALY[SZ]E\b", re.IGNORECASE)
+# Leading noise before the real payload token: whitespace, a /* ... */ block comment,
+# or a -- ... line comment. Applied repeatedly so stacked/mixed leading comments are
+# all peeled off (e.g. "/*a*/ --b\n ANALYZE ..."). Only anchored at the START of the
+# string — a comment appearing after the first real token is left alone.
+_LEADING_BLOCK_COMMENT_RE = re.compile(r"\A\s*/\*.*?\*/", re.DOTALL)
+_LEADING_LINE_COMMENT_RE = re.compile(r"\A\s*--[^\n]*\n?")
+
+
+def _strip_leading_sql_noise(text: str) -> str:
+    """Repeatedly strip leading whitespace/block-comments/line-comments.
+
+    A comment placed before EXPLAIN's ANALYZE keyword (or before its parenthesized
+    options group) defeats a naive `startswith`/anchored-regex check on the raw
+    payload text — see `_is_explain_analyze`. Stripping here exposes the real first
+    token so the existing checks see through comment obfuscation.
+    """
+    while True:
+        new_text = _LEADING_BLOCK_COMMENT_RE.sub("", text)
+        new_text = _LEADING_LINE_COMMENT_RE.sub("", new_text)
+        new_text = new_text.lstrip()
+        if new_text == text:
+            return text
+        text = new_text
 
 
 def _is_explain_analyze(command: exp.Command) -> bool:
@@ -103,10 +129,15 @@ def _is_explain_analyze(command: exp.Command) -> bool:
     A bare EXPLAIN of a statement that merely *mentions* the word "analyze" (e.g.
     ``EXPLAIN SELECT analyze_flag FROM t``) must stay safe — the word only matters
     when it appears in EXPLAIN's own options, not inside the wrapped statement.
+
+    A leading SQL comment (block ``/* ... */`` or line ``-- ...``) before the real
+    payload — e.g. ``EXPLAIN /*c*/ ANALYZE INSERT ...`` or ``EXPLAIN --x\\n ANALYZE
+    ...`` — must not defeat this: it's stripped before the ANALYZE checks run, so
+    the obfuscated write is still caught.
     """
     payload = command.args.get("expression")
     text = str(getattr(payload, "this", payload) or "")
-    stripped = text.strip()
+    stripped = _strip_leading_sql_noise(text.strip())
     if stripped.startswith("("):
         close = stripped.find(")")
         options = stripped[1:] if close == -1 else stripped[1:close]

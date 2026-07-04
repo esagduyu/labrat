@@ -164,6 +164,12 @@ async def test_load_mongo_collection_blocked_when_read_only() -> None:
         "EXPLAIN (ANALYSE) INSERT INTO t VALUES (1)",  # British spelling, parenthesized
         "explain (analyze) delete from t",  # case-insensitive, parenthesized
         "EXPLAIN (Buffers, Analyze) DELETE FROM t",  # mixed case, ANALYZE not first
+        "EXPLAIN /*c*/ ANALYZE INSERT INTO t VALUES (1)",  # leading block comment obfuscation
+        "EXPLAIN /* multi word */ ANALYZE DELETE FROM t",  # leading block comment, multi-word
+        "EXPLAIN --x\nANALYZE INSERT INTO t VALUES (1)",  # leading line comment obfuscation
+        "EXPLAIN /*c*/ (ANALYZE) DELETE FROM t",  # leading comment before parenthesized options
+        "SELECT * INTO t2 FROM t",  # SELECT INTO is a write (creates a table), no force
+        "WITH c AS (SELECT 1 AS x) SELECT * INTO t2 FROM c",  # WITH-wrapped SELECT INTO
     ],
 )
 def test_write_statements_classified_mutating(sql: str) -> None:
@@ -183,6 +189,9 @@ def test_write_statements_classified_mutating(sql: str) -> None:
         "PRAGMA database_list",
         "EXPLAIN INSERT INTO t VALUES (1)",  # bare EXPLAIN doesn't execute — stays safe
         "EXPLAIN SELECT analyze_flag FROM t",  # false-positive probe: word in payload, not options
+        "EXPLAIN /*c*/ SELECT * FROM t",  # leading comment before a non-ANALYZE payload
+        "SELECT * FROM t",  # plain select, no INTO
+        "SELECT id FROM t WHERE id IN (SELECT id FROM u)",  # subquery read, no INTO
     ],
 )
 def test_read_statements_classified_safe(sql: str) -> None:
