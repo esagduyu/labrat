@@ -676,6 +676,9 @@ async def generate_scent(
         cn = build_code_name_notes(profile, cast(Connection, conn))
         if cn is not None:
             sections.append(cn)
+        vl = build_view_lineage(cast(Catalog, catalogs[name]), database=name)
+        if vl is not None:
+            sections.append(vl)
         doc = ScentDoc(
             domain=name,
             kind="scent",

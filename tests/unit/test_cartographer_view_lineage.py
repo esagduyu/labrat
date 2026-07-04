@@ -8,7 +8,7 @@ import duckdb
 
 from labrat.db.catalog import Catalog, Column, Schema, Table
 from labrat.db.duckdb_engine import DuckDBConnection
-from labrat.maze.cartographer import build_view_lineage
+from labrat.maze.cartographer import build_view_lineage, generate_scent
 from labrat.maze.document import ScentDoc, Section, parse_document, render_document
 
 
@@ -112,3 +112,56 @@ def test_build_view_lineage_needs_no_connection_and_skips_unparseable() -> None:
     assert section is not None
     assert "- view `good_view`.`a2` ← `base`.`a`" in section.body
     assert "broken_view" not in section.body
+
+
+async def test_generate_scent_includes_lineage_section_for_view_db(tmp_path: Path) -> None:
+    p = str(tmp_path / "scent_view.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE orders(id INTEGER, customer_id INTEGER, amount DOUBLE)")
+    raw.execute("CREATE TABLE customers(id INTEGER, name VARCHAR)")
+    raw.execute("INSERT INTO orders VALUES (1, 1, 10.0), (2, 1, 5.0)")
+    raw.execute("INSERT INTO customers VALUES (1, 'Ada')")
+    raw.execute(
+        "CREATE VIEW customer_spend AS "
+        "SELECT c.name AS customer_name, SUM(o.amount) AS total "
+        "FROM orders o JOIN customers c ON o.customer_id = c.id GROUP BY c.name"
+    )
+    raw.close()
+    conn = DuckDBConnection(p, read_only=True)
+    conn.connect()
+    try:
+        docs = await generate_scent(
+            connections={"shop": conn},
+            catalogs={"shop": conn.introspect_catalog()},
+            primary="shop",
+            with_semantics=False,
+        )
+    finally:
+        conn.disconnect()
+    sections = {s.heading: s for s in docs[0].sections}
+    assert "View Lineage" in sections
+    assert sections["View Lineage"].source == "lineage"
+    assert "`customer_spend`.`total` ← `orders`.`amount`" in sections["View Lineage"].body
+
+
+async def test_generate_scent_no_views_has_no_lineage_section(tmp_path: Path) -> None:
+    # Byte-identity: the builder returns None → nothing appended → deterministic
+    # output for a no-views DB is unchanged (mirrors the Code Columns precedent).
+    p = str(tmp_path / "scent_plain.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE city(id INTEGER, name VARCHAR)")
+    raw.execute("INSERT INTO city VALUES (1, 'London'), (2, 'Paris')")
+    raw.close()
+    conn = DuckDBConnection(p, read_only=True)
+    conn.connect()
+    try:
+        docs = await generate_scent(
+            connections={"c": conn},
+            catalogs={"c": conn.introspect_catalog()},
+            primary="c",
+            with_semantics=False,
+        )
+    finally:
+        conn.disconnect()
+    assert "View Lineage" not in {s.heading for s in docs[0].sections}
+    assert all(s.source == "verified" for s in docs[0].sections)
