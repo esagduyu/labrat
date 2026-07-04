@@ -30,6 +30,7 @@ class ToolContext:
         catalogs: dict[str, object] | None = None,
         primary: str = "primary",
         profile_name: str = "default",
+        read_only: bool = False,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -43,6 +44,7 @@ class ToolContext:
 
         self.primary = primary
         self.profile_name = profile_name
+        self.read_only = read_only
 
     @property
     def connection(self) -> object:
@@ -68,6 +70,16 @@ class Tool[InputT: BaseModel](ABC):
     Subclass, provide name/description/input_model, implement execute().
     The registry handles validation, dispatch, and schema generation.
     """
+
+    # Class-level default consulted by the read-only Analyst-mode dispatch gate.
+    # Structurally-mutating tools set this True; tools whose mutation depends on
+    # the arguments (run_sql) override is_mutating() instead.
+    mutating: bool = False
+
+    def is_mutating(self, args: InputT) -> bool:
+        """True if THIS call would mutate state. Default: the class-level flag."""
+        _ = args
+        return self.mutating
 
     @property
     @abstractmethod
@@ -170,6 +182,9 @@ class ToolRegistry:
             parsed = tool.input_model.model_validate(args)
         except ValidationError as exc:
             return DispatchResult(ok=False, value=None, error=str(exc))
+
+        if ctx.read_only and tool.is_mutating(parsed):  # pyright: ignore[reportArgumentType]
+            return DispatchResult(ok=False, value=None, error="blocked: read-only Analyst mode")
 
         try:
             result = await tool.execute(ctx, parsed)  # pyright: ignore[reportArgumentType]
