@@ -198,6 +198,27 @@ class DuckDBConnection(Connection):
                     foreign_keys=fks,
                 )
             )
+
+        # Views: enumerate via duckdb_views() (NOT information_schema.views, which
+        # includes ~50 internal temp views such as sqlite_master / pg_catalog.*).
+        # A view is a Table with columns (same information_schema.columns path as
+        # base tables) plus the full CREATE VIEW SQL in view_definition.
+        view_rows = self._connection.execute(
+            "SELECT view_name, sql FROM duckdb_views() "
+            "WHERE NOT internal AND schema_name = ? "
+            "ORDER BY view_name",
+            [schema_name],
+        ).fetchall()
+        for view_name, view_sql in view_rows:
+            columns = self._introspect_columns(schema_name, str(view_name))
+            tables.append(
+                Table(
+                    name=str(view_name),
+                    schema_name=schema_name,
+                    columns=columns,
+                    view_definition=str(view_sql),
+                )
+            )
         return tables
 
     def _introspect_columns(self, schema_name: str, table_name: str) -> list[Column]:
