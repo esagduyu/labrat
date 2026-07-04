@@ -70,6 +70,14 @@ class DuckDBConnection(Connection):
         escaped_path = path.replace("'", "''")
         self._connection.execute(f"ATTACH '{escaped_path}' AS {alias} (TYPE {db_type.upper()})")
 
+    def use_database(self, alias: str) -> None:
+        """Switch the active database to an attached catalog so its tables are addressable
+        by bare name — used by the cartographer's attached-DB profiling path so that its
+        bare-name sampling (``FROM <table>``) resolves against the attached catalog."""
+        if not alias.replace("_", "").isalnum():
+            raise ValueError(f"alias must be alphanumeric/underscore: {alias!r}")
+        self._connection.execute(f"USE {alias}")
+
     def materialize_table(self, table_name: str, arrow_table: object) -> None:
         """Create or replace a DuckDB table from an Apache Arrow Table.
 
