@@ -14,14 +14,16 @@ from pydantic import BaseModel
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
 _H2_RE = re.compile(r"^##\s+(.*)$", re.MULTILINE)
-_RECOGNIZED_SOURCES = {"verified", "draft", "human"}
+_RECOGNIZED_SOURCES = {"verified", "draft", "human", "lineage"}
 _SOURCE_LINE_RE = re.compile(r"^\*\*Source:\*\*\s*(\w+)\b.*$")
 
 
 class Section(BaseModel):
     heading: str  # "" for the preamble before the first H2
     body: str
-    source: str = "human"  # "verified" | "draft" | "human"; provenance for #26b cartographer
+    source: str = (
+        "human"  # "verified" | "draft" | "human" | "lineage"; provenance for #26b cartographer
+    )
 
 
 class ScentDoc(BaseModel):

@@ -36,6 +36,7 @@ class Table(BaseModel):
     foreign_keys: list[ForeignKey] = []
     row_count: int | None = None
     comment: str | None = None
+    view_definition: str | None = None  # full CREATE VIEW ... AS SELECT ...; None = base table
 
     @property
     def qualified_name(self) -> str:

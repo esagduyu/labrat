@@ -40,6 +40,8 @@ class _Output(BaseModel):
 class AttachDatabaseTool(Tool[_Input]):
     """ATTACH another database into the primary DuckDB session for cross-DB JOINs."""
 
+    mutating = True
+
     @property
     def name(self) -> str:
         return "attach_database"

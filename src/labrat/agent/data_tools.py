@@ -12,6 +12,7 @@ from labrat.agent.tools.base import ToolRegistry
 from labrat.agent.tools.check_sql import CheckSqlTool
 from labrat.agent.tools.column_stats import ColumnStatsTool
 from labrat.agent.tools.describe_table import DescribeTableTool
+from labrat.agent.tools.explain_lineage import ExplainLineageTool
 from labrat.agent.tools.explain_sql import ExplainSqlTool
 from labrat.agent.tools.link_schema import LinkSchemaTool
 from labrat.agent.tools.list_tables import ListTablesTool
@@ -31,7 +32,7 @@ def build_data_tools_registry() -> ToolRegistry:
 
     Tools included: search_reference_docs, workflow, profile_dataset, list_tables,
     describe_table, search_columns, link_schema, sample_rows, column_stats,
-    run_sql, explain_sql, verify_join, attach_database, load_file,
+    run_sql, explain_sql, explain_lineage, verify_join, attach_database, load_file,
     load_mongo_collection.
 
     Excluded by design: draft_sql / create_chart (TUI callbacks),
@@ -50,6 +51,7 @@ def build_data_tools_registry() -> ToolRegistry:
     registry.register(ColumnStatsTool())
     registry.register(RunSqlTool())
     registry.register(ExplainSqlTool())
+    registry.register(ExplainLineageTool())
     registry.register(VerifyJoinTool())
     registry.register(CheckSqlTool())
     registry.register(AttachDatabaseTool())

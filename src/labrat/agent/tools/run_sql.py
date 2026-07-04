@@ -54,6 +54,135 @@ def _is_mutation(sql: str) -> bool:
         return False  # parse error → let the DB handle it; don't block valid queries
 
 
+_READONLY_SAFE_TYPES = (
+    exp.Select,
+    exp.Union,
+    exp.Intersect,
+    exp.Except,
+    exp.Describe,
+    exp.Show,
+    exp.Pragma,
+)
+# Generic-dialect sqlglot.parse() (no dialect kwarg — matches the rest of this module)
+# doesn't recognize EXPLAIN or SHOW as dedicated node types; both fall back to a
+# generic exp.Command whose `.this` carries the leading keyword. (exp.Show only
+# materializes under dialect="duckdb", which this module's parse calls don't pass.)
+# Both are unambiguously read-only metadata/introspection statements, so both keywords
+# are carved out here alongside the typed safelist above.
+_READONLY_SAFE_COMMAND_KEYWORDS = frozenset({"EXPLAIN", "SHOW"})
+
+# exp.Insert/Update/Delete/Merge embedded anywhere in the tree — e.g. a data-modifying
+# CTE such as `WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d` (valid Postgres;
+# DuckDB rejects the syntax today, but this gate also guards non-DuckDB connections).
+# The root node of such a statement is a plain exp.Select, so the type-only safelist
+# check above misses it; this is a defense-in-depth recursive scan for a write anywhere
+# in the parsed tree of an otherwise-safe root.
+# exp.Into marks `SELECT ... INTO <table> FROM ...` (Postgres/T-SQL "select-into"),
+# whose root node is still a plain exp.Select — a write (creates a table) with no
+# force gate, so it must be caught by the same recursive scan as the DML types above.
+_EMBEDDED_WRITE_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Into)
+
+
+_ANALYZE_WORD_RE = re.compile(r"\bANALY[SZ]E\b", re.IGNORECASE)
+_LEADING_ANALYZE_RE = re.compile(r"^\s*ANALY[SZ]E\b", re.IGNORECASE)
+# Leading noise before the real payload token: whitespace, a /* ... */ block comment,
+# or a -- ... line comment. Applied repeatedly so stacked/mixed leading comments are
+# all peeled off (e.g. "/*a*/ --b\n ANALYZE ..."). Only anchored at the START of the
+# string — a comment appearing after the first real token is left alone.
+_LEADING_BLOCK_COMMENT_RE = re.compile(r"\A\s*/\*.*?\*/", re.DOTALL)
+_LEADING_LINE_COMMENT_RE = re.compile(r"\A\s*--[^\n]*\n?")
+
+
+def _strip_leading_sql_noise(text: str) -> str:
+    """Repeatedly strip leading whitespace/block-comments/line-comments.
+
+    A comment placed before EXPLAIN's ANALYZE keyword (or before its parenthesized
+    options group) defeats a naive `startswith`/anchored-regex check on the raw
+    payload text — see `_is_explain_analyze`. Stripping here exposes the real first
+    token so the existing checks see through comment obfuscation.
+    """
+    while True:
+        new_text = _LEADING_BLOCK_COMMENT_RE.sub("", text)
+        new_text = _LEADING_LINE_COMMENT_RE.sub("", new_text)
+        new_text = new_text.lstrip()
+        if new_text == text:
+            return text
+        text = new_text
+
+
+def _is_explain_analyze(command: exp.Command) -> bool:
+    """True if a generic-dialect ``EXPLAIN`` Command carries an ANALYZE/ANALYSE option.
+
+    Generic-dialect sqlglot parses ``EXPLAIN <stmt>``, ``EXPLAIN ANALYZE <stmt>``,
+    and ``EXPLAIN (<options>) <stmt>`` to the identical node shape —
+    ``exp.Command(this='EXPLAIN')`` — with everything after the ``EXPLAIN`` keyword
+    collapsed into a single string literal on ``.args["expression"]``. The
+    ANALYZE/write payload is invisible to the keyword-only carve-out that treats
+    'EXPLAIN' as safe. But unlike bare EXPLAIN, EXPLAIN ANALYZE (in either its bare
+    form or Postgres-style parenthesized-options form, e.g. ``EXPLAIN (ANALYZE)``
+    or ``EXPLAIN (BUFFERS, ANALYZE)`` — ANALYZE can appear in any position among
+    the options — and either US or British spelling, ANALYZE/ANALYSE) actually
+    EXECUTES the wrapped statement (the classic Postgres/DuckDB "EXPLAIN ANALYZE
+    DELETE" gotcha) — so it must be treated as a write, even wrapping a SELECT
+    (over-blocking EXPLAIN ANALYZE SELECT is acceptable).
+
+    A bare EXPLAIN of a statement that merely *mentions* the word "analyze" (e.g.
+    ``EXPLAIN SELECT analyze_flag FROM t``) must stay safe — the word only matters
+    when it appears in EXPLAIN's own options, not inside the wrapped statement.
+
+    A leading SQL comment (block ``/* ... */`` or line ``-- ...``) before the real
+    payload — e.g. ``EXPLAIN /*c*/ ANALYZE INSERT ...`` or ``EXPLAIN --x\\n ANALYZE
+    ...`` — must not defeat this: it's stripped before the ANALYZE checks run, so
+    the obfuscated write is still caught.
+    """
+    payload = command.args.get("expression")
+    text = str(getattr(payload, "this", payload) or "")
+    stripped = _strip_leading_sql_noise(text.strip())
+    if stripped.startswith("("):
+        close = stripped.find(")")
+        options = stripped[1:] if close == -1 else stripped[1:close]
+        return _ANALYZE_WORD_RE.search(options) is not None
+    return _LEADING_ANALYZE_RE.match(stripped) is not None
+
+
+def _is_write_for_readonly(sql: str) -> bool:
+    """Classify *sql* for read-only Analyst mode. FAIL-CLOSED, unlike _is_mutation.
+
+    Safelist: SELECT/UNION/INTERSECT/EXCEPT (incl. WITH-wrapped), DESCRIBE, PRAGMA,
+    and EXPLAIN/SHOW (which sqlglot's generic dialect parses as a Command whose
+    keyword is 'EXPLAIN'/'SHOW' respectively) — except EXPLAIN ANALYZE, which
+    executes its payload and is always a write (see _is_explain_analyze). Also
+    scans the full parsed tree of an otherwise-safe statement for an embedded
+    write (e.g. a data-modifying CTE, whose root node is a plain exp.Select).
+    Everything else is treated as a write — this blocks INSERT/UPDATE/DELETE/
+    DROP/CREATE/ALTER/TRUNCATE/MERGE/GRANT/ATTACH/DETACH/COPY/SET, unknown
+    statements, and unparseable SQL (block rather than run under read_only).
+    """
+    try:
+        statements = sqlglot.parse(sql.strip())
+    except ParseError:
+        return True
+    if not statements:
+        return True
+    for stmt in statements:
+        if stmt is None:
+            return True
+        root = _unwrap_with(stmt)
+        if isinstance(root, _READONLY_SAFE_TYPES):
+            if stmt.find(*_EMBEDDED_WRITE_TYPES) is not None:
+                return True
+            continue
+        if (
+            isinstance(root, exp.Command)
+            and str(root.this).upper() in _READONLY_SAFE_COMMAND_KEYWORDS
+        ):
+            if str(root.this).upper() == "EXPLAIN" and _is_explain_analyze(root):
+                return True
+            continue
+        return True
+    return False
+
+
 def _has_limit(sql: str) -> bool:
     """Return True if the statement already contains a LIMIT clause."""
     try:
@@ -192,6 +321,15 @@ class RunSqlTool(Tool[_Input]):
     @property
     def input_model(self) -> type[_Input]:
         return _Input
+
+    def is_mutating(self, args: _Input) -> bool:
+        """Read-only-mode classification: a SELECT still runs; a write is blocked.
+
+        Reuses the same sqlglot parse family as the statement-stacking guard, but
+        fail-closed (see _is_write_for_readonly). force=True cannot bypass this —
+        the dispatch gate runs before execute() ever sees the args.
+        """
+        return _is_write_for_readonly(args.query)
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
         thread_id = getattr(ctx, "thread_id", "unknown")

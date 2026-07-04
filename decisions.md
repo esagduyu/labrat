@@ -471,3 +471,18 @@ Per-dataset: stockmarket 100 · stockindex 93 · bookreview 87 · crmarenapro 82
 ## 2026-06-24 — LIVE on the DataAgentBench leaderboard at #8 / 60.88%
 
 PR #65 accepted: **LabRat (Claude Sonnet 4.6 + Cartographer) is #8 of 21** on the public DAB leaderboard at **stratified Pass@1 60.88%** — the **only top-10 entry on a single mid-tier model** (every entry above runs GPT-5.5, Opus 4.8/4.6, or a stacked ensemble: #1 Spacedock+GPT-5.5 74.33, #2 Altimate+GPT-5.5+Sonnet 71.71, #4 Spacedock+Opus 4.8 67.21, #5 MinusX 65.18, #7 Pi+Opus 4.6 61.03, **#8 LabRat 60.88**). Our prior entry (Sonnet, no grounding) stays at #13 / 51.38% — **+9.5pp from the grounding layer alone**, not a model change. Submission disclosed Hints: Yes + the Cartographer + the opening prompts for the maintainers' leakage audit (clean: 270/270, 0 contamination, MCP-only sandbox). The grounding-is-the-moat thesis ([[reference_anthropic_self_serve_analytics]], north-star §5) is now externally validated against frontier-model and ensemble competitors. Leaderboard screenshot: `docs/images/dab-leaderboard-2026-06-24.png`. Next deepening candidate: the Context Ledger ([[project_full_stack_runtime_eval]]).
+
+## 2026-07-04 — Column-level lineage + read-only Analyst mode (M3 / T1b)
+
+- Read-only "Analyst" mode is enforced at ToolRegistry.dispatch (ToolContext.read_only
+  + Tool.is_mutating), never in the prompt. run_sql classifies its SQL via a
+  fail-closed sqlglot safelist (unparseable SQL is blocked under read_only, and
+  force=True cannot bypass the gate).
+- Column lineage is live-parsed via sqlglot.lineage against the introspected Catalog —
+  deliberately NOT dbt-manifest-based (manifests go stale). explain_lineage is
+  parse-only/fail-soft, mirroring check_sql.
+- DuckDB introspection now captures views (Table.view_definition; duckdb_views(),
+  NOT information_schema.views which leaks ~50 internal temp views). The Cartographer
+  emits a `lineage`-tagged View Lineage section from view metadata only (GT-firewalled
+  by construction: build_view_lineage takes a Catalog, no Connection); no-views DBs
+  yield byte-identical Scent.

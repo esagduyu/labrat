@@ -12,9 +12,17 @@ from collections import defaultdict
 from pathlib import Path
 from typing import cast
 
+import sqlglot
 from pydantic import BaseModel
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
+from sqlglot.lineage import lineage
 
 from labrat.agent.tools.base import ToolContext
+from labrat.agent.tools.explain_lineage import (
+    _catalog_schema_dict,  # pyright: ignore[reportPrivateUsage]
+    _flatten,  # pyright: ignore[reportPrivateUsage]
+)
 from labrat.agent.tools.profile_dataset import (
     ProfileDatasetTool,
     _TableProfile,  # pyright: ignore[reportPrivateUsage]
@@ -25,6 +33,7 @@ from labrat.agent.tools.profile_dataset import (
 from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.agent.verifier import LLMFn
 from labrat.db.base import Connection
+from labrat.db.catalog import Catalog
 from labrat.maze.document import ScentDoc, Section, parse_document, render_document
 from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc, detect_contamination
 
@@ -366,6 +375,52 @@ def build_code_name_notes(profile: ProfileOutput, conn: Connection) -> Section |
     return Section(heading="Code Columns", body="\n".join(lines), source="verified")
 
 
+def build_view_lineage(catalog: Catalog, *, database: str) -> Section | None:
+    """Deterministic column-level lineage for every view in *catalog* (Unit D).
+
+    Reads ONLY ``Table.view_definition`` SQL metadata — no connection, no data, no
+    LLM (GT-firewall by construction: the signature cannot reach a database).
+    Fail-soft per view/column: unparseable definitions or unresolvable columns are
+    skipped, never fatal. Returns None when the catalog has no views, so a no-views
+    DB yields byte-identical deterministic Scent.
+    """
+    _ = database  # doc identity is per-connection already; kept for call-site clarity
+    # _catalog_schema_dict already drops zero-column entries (e.g. a table/view
+    # whose columns failed to introspect) — sqlglot's MappingSchema rejects any
+    # table with no columns at all, which would otherwise poison every lineage()
+    # call in this catalog, not just that one table.
+    schema = _catalog_schema_dict(catalog)
+    lines: list[str] = []
+    for sch in catalog.schemas:
+        for t in sch.tables:
+            if t.view_definition is None:
+                continue
+            try:
+                tree = sqlglot.parse_one(t.view_definition)
+            except SqlglotError:
+                continue  # unparseable view — skip it, never block Scent generation
+            select = tree.expression if isinstance(tree, exp.Create) else tree
+            if not isinstance(select, exp.Query):
+                continue
+            select_sql = select.sql()
+            for proj in select.selects:
+                out_name = proj.alias_or_name
+                if out_name == "*":
+                    continue
+                try:
+                    node = lineage(out_name, select_sql, schema=schema)
+                except SqlglotError:
+                    continue  # unresolvable column — skip the bullet, keep the rest
+                refs = _flatten(node)
+                if not refs:
+                    continue  # literal-only column: no base sources to report
+                srcs = ", ".join(f"`{r.table}`.`{r.column}`" for r in refs)
+                lines.append(f"- view `{t.name}`.`{out_name}` ← {srcs}")
+    if not lines:
+        return None
+    return Section(heading="View Lineage", body="\n".join(lines), source="lineage")
+
+
 async def discover_joins(
     ctx: ToolContext, profile: ProfileOutput, *, database: str
 ) -> list[VerifiedJoin]:
@@ -622,6 +677,9 @@ async def generate_scent(
         cn = build_code_name_notes(profile, cast(Connection, conn))
         if cn is not None:
             sections.append(cn)
+        vl = build_view_lineage(cast(Catalog, catalogs[name]), database=name)
+        if vl is not None:
+            sections.append(vl)
         doc = ScentDoc(
             domain=name,
             kind="scent",
