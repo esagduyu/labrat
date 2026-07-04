@@ -480,14 +480,30 @@ _PRUNE_INSTRUCTION = (
 )
 
 
+def _normalize_bullet(line: str) -> str:
+    """Normalize a bullet line for fuzzy matching: strip surrounding whitespace, drop a
+    leading '-' marker, strip trailing punctuation, and casefold. Tolerates cosmetic LLM
+    echo drift (missing trailing period, extra whitespace) without weakening the
+    verbatim-from-original guarantee — this is only used to find WHICH original line a
+    kept critique line refers to; the emitted text always comes from the original."""
+    s = line.strip()
+    if s.startswith("-"):
+        s = s[1:]
+    return s.strip().rstrip(".;").strip().casefold()
+
+
 async def prune_unsupported(
     skeleton: ScentDoc, prose: list[Section], llm_fn: LLMFn
 ) -> list[Section]:
     """Self-critique prune: ask the LLM which drafted bullets are fully supported by a
-    verified fact and keep only those (verbatim). Fail-open — any error, empty response,
-    or unparseable result returns the original ``prose`` unchanged (never worse than the
-    draft). Catches the T1c/M2 failure mode: a bullet that NAMES real columns but makes an
-    unsupported claim (a vocabulary filter would miss it; the critique judges the claim)."""
+    verified fact and keep only those (verbatim, from the ORIGINAL draft text — never the
+    LLM's echo). Fail-open — any error, empty response, or a critique that matches ZERO
+    original bullets (garbled/hallucinated/ambiguous) returns the original ``prose``
+    unchanged (never worse than the draft). Matching is normalized (whitespace/trailing
+    punctuation/case) so cosmetic LLM formatting drift doesn't cause a real match to be
+    silently dropped. Catches the T1c/M2 failure mode: a bullet that NAMES real columns
+    but makes an unsupported claim (a vocabulary filter would miss it; the critique judges
+    the claim)."""
     if not prose:
         return prose
     facts = render_document(skeleton)
@@ -502,13 +518,32 @@ async def prune_unsupported(
         raw = await llm_fn(prompt)
     except Exception:
         return prose  # fail-open on error
-    kept = {ln.strip() for ln in raw.splitlines() if ln.strip().startswith("-")}
-    if not kept:
-        return prose  # fail-open: empty / unparseable / kept-nothing
+    kept_normalized = {
+        _normalize_bullet(ln) for ln in raw.splitlines() if ln.strip().startswith("-")
+    }
+    kept_normalized.discard("")
+    if not kept_normalized:
+        return prose  # fail-open: empty / unparseable response
+
+    # Fail-open guard: only apply the filter if the critique actually corresponds to the
+    # draft — i.e. at least one ORIGINAL bullet (across all sections) normalized-matches
+    # a kept critique line. Zero matches means a garbled/hallucinated critique (or an
+    # ambiguous "drop everything") that must not be trusted to erase real content.
+    matched_any = any(
+        _normalize_bullet(ln) in kept_normalized
+        for s in prose
+        for ln in s.body.splitlines()
+        if ln.strip().startswith("-")
+    )
+    if not matched_any:
+        return prose  # fail-open: critique matches nothing real in the draft
+
     result: list[Section] = []
     for s in prose:
         new_lines = [
-            ln for ln in s.body.splitlines() if not ln.strip().startswith("-") or ln.strip() in kept
+            ln
+            for ln in s.body.splitlines()
+            if not ln.strip().startswith("-") or _normalize_bullet(ln) in kept_normalized
         ]
         body = "\n".join(new_lines).strip()
         if body:
