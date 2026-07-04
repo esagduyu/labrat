@@ -41,6 +41,8 @@ class _Output(BaseModel):
 class LoadFileTool(Tool[_Input]):
     """Load a CSV/TSV/JSON/Parquet file into the DuckDB session as a queryable table."""
 
+    mutating = True
+
     @property
     def name(self) -> str:
         return "load_file"

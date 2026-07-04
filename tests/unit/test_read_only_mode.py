@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
 
 
@@ -87,3 +88,36 @@ async def test_dispatch_allows_mutating_tool_when_not_read_only() -> None:
     res = await reg.dispatch("writer", {}, ToolContext())
     assert res.ok is True
     assert res.value == "wrote"
+
+
+async def test_attach_database_blocked_when_read_only() -> None:
+    reg = build_data_tools_registry()
+    res = await reg.dispatch(
+        "attach_database",
+        {"path": "/tmp/x.sqlite", "alias": "ext", "db_type": "sqlite"},
+        ToolContext(read_only=True),
+    )
+    assert res.ok is False
+    assert res.error == "blocked: read-only Analyst mode"
+
+
+async def test_load_file_blocked_when_read_only() -> None:
+    reg = build_data_tools_registry()
+    res = await reg.dispatch(
+        "load_file",
+        {"path": "/tmp/x.csv", "table_name": "t"},
+        ToolContext(read_only=True),
+    )
+    assert res.ok is False
+    assert res.error == "blocked: read-only Analyst mode"
+
+
+async def test_load_mongo_collection_blocked_when_read_only() -> None:
+    reg = build_data_tools_registry()
+    res = await reg.dispatch(
+        "load_mongo_collection",
+        {"database": "articles_db", "collection": "articles", "target_table": "articles"},
+        ToolContext(read_only=True),
+    )
+    assert res.ok is False
+    assert res.error == "blocked: read-only Analyst mode"

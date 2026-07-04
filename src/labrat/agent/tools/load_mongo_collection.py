@@ -53,6 +53,8 @@ class _Output(BaseModel):
 class LoadMongoCollectionTool(Tool[_Input]):
     """Pull a MongoDB collection into a DuckDB table for SQL querying."""
 
+    mutating = True
+
     @property
     def name(self) -> str:
         return "load_mongo_collection"
