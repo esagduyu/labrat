@@ -71,16 +71,44 @@ _READONLY_SAFE_TYPES = (
 # are carved out here alongside the typed safelist above.
 _READONLY_SAFE_COMMAND_KEYWORDS = frozenset({"EXPLAIN", "SHOW"})
 
+# exp.Insert/Update/Delete/Merge embedded anywhere in the tree — e.g. a data-modifying
+# CTE such as `WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d` (valid Postgres;
+# DuckDB rejects the syntax today, but this gate also guards non-DuckDB connections).
+# The root node of such a statement is a plain exp.Select, so the type-only safelist
+# check above misses it; this is a defense-in-depth recursive scan for a write anywhere
+# in the parsed tree of an otherwise-safe root.
+_EMBEDDED_WRITE_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge)
+
+
+def _is_explain_analyze(command: exp.Command) -> bool:
+    """True if a generic-dialect ``EXPLAIN`` Command is actually ``EXPLAIN ANALYZE``.
+
+    Generic-dialect sqlglot parses both ``EXPLAIN <stmt>`` and ``EXPLAIN ANALYZE
+    <stmt>`` to the identical node shape — ``exp.Command(this='EXPLAIN')`` — with
+    everything after the ``EXPLAIN`` keyword collapsed into a single string literal
+    on ``.args["expression"]``. The ANALYZE/write payload is invisible to the
+    keyword-only carve-out that treats 'EXPLAIN' as safe. But unlike bare EXPLAIN,
+    EXPLAIN ANALYZE actually EXECUTES the wrapped statement (the classic Postgres/
+    DuckDB "EXPLAIN ANALYZE DELETE" gotcha) — so it must be treated as a write,
+    even wrapping a SELECT (over-blocking EXPLAIN ANALYZE SELECT is acceptable).
+    """
+    payload = command.args.get("expression")
+    text = str(getattr(payload, "this", payload) or "")
+    return text.strip().upper().startswith("ANALYZE")
+
 
 def _is_write_for_readonly(sql: str) -> bool:
     """Classify *sql* for read-only Analyst mode. FAIL-CLOSED, unlike _is_mutation.
 
     Safelist: SELECT/UNION/INTERSECT/EXCEPT (incl. WITH-wrapped), DESCRIBE, PRAGMA,
     and EXPLAIN/SHOW (which sqlglot's generic dialect parses as a Command whose
-    keyword is 'EXPLAIN'/'SHOW' respectively). Everything else is treated as a
-    write — this blocks INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/TRUNCATE/MERGE/
-    GRANT/ATTACH/DETACH/COPY/SET, unknown statements, and unparseable SQL (block
-    rather than run under read_only).
+    keyword is 'EXPLAIN'/'SHOW' respectively) — except EXPLAIN ANALYZE, which
+    executes its payload and is always a write (see _is_explain_analyze). Also
+    scans the full parsed tree of an otherwise-safe statement for an embedded
+    write (e.g. a data-modifying CTE, whose root node is a plain exp.Select).
+    Everything else is treated as a write — this blocks INSERT/UPDATE/DELETE/
+    DROP/CREATE/ALTER/TRUNCATE/MERGE/GRANT/ATTACH/DETACH/COPY/SET, unknown
+    statements, and unparseable SQL (block rather than run under read_only).
     """
     try:
         statements = sqlglot.parse(sql.strip())
@@ -93,11 +121,15 @@ def _is_write_for_readonly(sql: str) -> bool:
             return True
         root = _unwrap_with(stmt)
         if isinstance(root, _READONLY_SAFE_TYPES):
+            if stmt.find(*_EMBEDDED_WRITE_TYPES) is not None:
+                return True
             continue
         if (
             isinstance(root, exp.Command)
             and str(root.this).upper() in _READONLY_SAFE_COMMAND_KEYWORDS
         ):
+            if str(root.this).upper() == "EXPLAIN" and _is_explain_analyze(root):
+                return True
             continue
         return True
     return False

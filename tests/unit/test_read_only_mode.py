@@ -150,6 +150,12 @@ async def test_load_mongo_collection_blocked_when_read_only() -> None:
         "COPY t TO 'out.csv'",
         "SET threads = 4",
         "SELECT 1; DROP TABLE t",  # stacked write in position 2
+        "EXPLAIN ANALYZE INSERT INTO t VALUES (1)",  # actually executes on DuckDB/Postgres
+        "EXPLAIN ANALYZE DELETE FROM t",
+        "EXPLAIN ANALYZE UPDATE t SET a = 1",
+        "explain analyze insert into t values (1)",  # case-insensitive
+        "EXPLAIN ANALYZE SELECT 1",  # EXPLAIN ANALYZE always executes; over-blocking is fine
+        "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",  # CTE-embedded write
     ],
 )
 def test_write_statements_classified_mutating(sql: str) -> None:
@@ -182,6 +188,25 @@ def test_run_sql_is_mutating_uses_query_classification() -> None:
     tool = RunSqlTool()
     assert tool.is_mutating(tool.input_model(query="SELECT 1")) is False
     assert tool.is_mutating(tool.input_model(query="DROP TABLE t")) is True
+
+
+def test_run_sql_is_mutating_explain_analyze_write_blocked() -> None:
+    tool = RunSqlTool()
+    assert (
+        tool.is_mutating(tool.input_model(query="EXPLAIN ANALYZE INSERT INTO t VALUES (1)")) is True
+    )
+    assert tool.is_mutating(tool.input_model(query="EXPLAIN ANALYZE DELETE FROM t")) is True
+
+
+def test_run_sql_is_mutating_bare_explain_still_safe() -> None:
+    tool = RunSqlTool()
+    assert tool.is_mutating(tool.input_model(query="EXPLAIN SELECT * FROM t")) is False
+
+
+def test_run_sql_is_mutating_cte_embedded_write_blocked() -> None:
+    tool = RunSqlTool()
+    query = "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d"
+    assert tool.is_mutating(tool.input_model(query=query)) is True
 
 
 @pytest.fixture()
@@ -217,6 +242,42 @@ async def test_run_sql_force_does_not_bypass_read_only(ro_sql_ctx: ToolContext) 
     res = await reg.dispatch("run_sql", {"query": "DROP TABLE items", "force": True}, ro_sql_ctx)
     assert res.ok is False
     assert res.error == "blocked: read-only Analyst mode"
+
+
+async def test_run_sql_explain_analyze_insert_blocked_under_read_only(
+    ro_sql_ctx: ToolContext,
+) -> None:
+    # Critical fail-open bypass: EXPLAIN ANALYZE <write> parses to the same generic
+    # exp.Command as bare EXPLAIN but actually executes the wrapped statement.
+    reg = build_data_tools_registry()
+    res = await reg.dispatch(
+        "run_sql",
+        {"query": "EXPLAIN ANALYZE INSERT INTO items VALUES (3, 'c')", "force": True},
+        ro_sql_ctx,
+    )
+    assert res.ok is False
+    assert res.error == "blocked: read-only Analyst mode"
+
+
+async def test_run_sql_explain_analyze_delete_blocked_under_read_only(
+    ro_sql_ctx: ToolContext,
+) -> None:
+    reg = build_data_tools_registry()
+    res = await reg.dispatch(
+        "run_sql",
+        {"query": "EXPLAIN ANALYZE DELETE FROM items", "force": True},
+        ro_sql_ctx,
+    )
+    assert res.ok is False
+    assert res.error == "blocked: read-only Analyst mode"
+
+
+async def test_run_sql_bare_explain_select_allowed_under_read_only(
+    ro_sql_ctx: ToolContext,
+) -> None:
+    reg = build_data_tools_registry()
+    res = await reg.dispatch("run_sql", {"query": "EXPLAIN SELECT * FROM items"}, ro_sql_ctx)
+    assert res.ok is True
 
 
 async def test_run_sql_mutation_refusal_unchanged_when_not_read_only(
