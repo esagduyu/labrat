@@ -30,7 +30,11 @@ if TYPE_CHECKING:
 
 from labrat.agent.providers import build_provider
 from labrat.agent.verifier import provider_llm_fn
-from labrat.eval.benchmarks.dab.env import DabTaskEnv, introspect_env_catalogs
+from labrat.eval.benchmarks.dab.env import (
+    DabTaskEnv,
+    build_profiling_connections,
+    introspect_env_catalogs,
+)
 from labrat.eval.types import (
     AggregateScore,
     BenchmarkReport,
@@ -390,11 +394,16 @@ async def _run_cartographer(
         connect = getattr(conn, "connect", None)
         if callable(connect):
             connect()
+    prof_conns, prof_cats = build_profiling_connections(env_spec.attachable)
     try:
         introspect_env_catalogs(ctx)
+        # Pass MERGED COPIES to the prepass; never mutate the agent's ctx (runtime stays
+        # DuckDB-only). Attached-DB entries live only in these local dicts.
+        merged_conns: dict[str, object] = {**ctx.connections, **prof_conns}
+        merged_cats: dict[str, object] = {**ctx.catalogs, **prof_cats}
         await cartograph_prepass(
-            ctx.connections,
-            ctx.catalogs,
+            merged_conns,
+            merged_cats,
             ctx.primary,
             scent_dir,
             with_semantics=with_semantics,
@@ -403,6 +412,10 @@ async def _run_cartographer(
         )
     finally:
         for conn in ctx.connections.values():
+            disconnect = getattr(conn, "disconnect", None)
+            if callable(disconnect):
+                disconnect()
+        for conn in prof_conns.values():
             disconnect = getattr(conn, "disconnect", None)
             if callable(disconnect):
                 disconnect()
