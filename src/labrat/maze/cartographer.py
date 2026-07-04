@@ -633,6 +633,7 @@ async def generate_scent(
             from labrat.maze.semantic_claims import parse_semantic_claims, verify_semantic_claims
 
             prose, raw_claims = await draft_semantics(doc, llm_fn)
+            prose = await prune_unsupported(doc, prose, llm_fn)  # C4.2 self-critique prune
             claims = parse_semantic_claims(raw_claims)
             verified = await verify_semantic_claims(claims, ctx, database=name)
             new_sections = list(doc.sections)

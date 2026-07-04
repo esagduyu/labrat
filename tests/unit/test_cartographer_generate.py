@@ -145,3 +145,40 @@ async def test_no_code_name_section_when_no_pair(tmp_path) -> None:
     finally:
         conn.disconnect()
     assert "Code Columns" not in {s.heading for s in docs[0].sections}
+
+
+async def test_generate_prunes_unsupported_draft_bullets(tmp_path) -> None:
+    import duckdb
+
+    from labrat.db.duckdb_engine import DuckDBConnection
+
+    p = str(tmp_path / "prune.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE t(id INTEGER, label VARCHAR)")
+    raw.execute("INSERT INTO t VALUES (1,'a'),(2,'b')")
+    raw.close()
+    conn = DuckDBConnection(p, read_only=True)
+    conn.connect()
+
+    async def _llm(prompt: str) -> str:
+        if "PRUNE PASS" in prompt:  # the prune call keeps only the supported bullet
+            return "- WHEN the question asks for a label, read t.label."
+        return (  # the draft call emits one supported + one unsupported bullet
+            "## Gotchas\n"
+            "- WHEN the question asks for a label, read t.label.\n"
+            "- Revenue always excludes fabricated_flag rows.\n"
+        )
+
+    try:
+        docs = await generate_scent(
+            connections={"d": conn},
+            catalogs={"d": conn.introspect_catalog()},
+            primary="d",
+            with_semantics=True,
+            llm_fn=_llm,
+        )
+    finally:
+        conn.disconnect()
+    body = "\n".join(s.body for s in docs[0].sections)
+    assert "read t.label" in body  # supported bullet kept
+    assert "fabricated_flag" not in body  # unsupported bullet pruned
