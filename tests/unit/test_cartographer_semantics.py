@@ -69,6 +69,11 @@ def test_instruction_forbids_unconditional_rules() -> None:
     assert "conditional" in low and "semantic claims" in low
 
 
+def test_instruction_has_cohort_vs_filter_rule() -> None:
+    assert "the numerator" in _SEMANTICS_INSTRUCTION
+    assert "cohort denominator (the population)" in _SEMANTICS_INSTRUCTION
+
+
 async def test_draft_semantics_reroutes_heading_drift_and_stray_claim_lines() -> None:
     # FIX 2 (IMPORTANT-3): heading drift ("## Semantic Claims:" with trailing colon) plus
     # a claim-shaped line stray inside ## Gotchas must both route into raw_claims, and the

@@ -420,7 +420,11 @@ _SEMANTICS_INSTRUCTION = (
     "Use short, retrieval-oriented bullets and routing-trigger phrasing. If you are unsure "
     "about a business rule, say so rather than invent. Output GitHub-flavored markdown with "
     "## headings only; do not emit a ## Quick Reference, ## Dimensions, or ## Key Tables "
-    "section (those are already verified)."
+    "section (those are already verified). "
+    "COHORT VS FILTER: a quality/status filter (e.g. FILTER='PASS', a sequenced-only or "
+    "is_test flag) scopes WHICH ROWS COUNT AS POSITIVE (the numerator); it must NEVER be "
+    "authored as a Best Practice that narrows the cohort denominator (the population) — "
+    "never restrict the population to a filtered subset."
 )
 
 
