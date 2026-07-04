@@ -53,3 +53,37 @@ async def test_audit_passes_clean_semantics(ecommerce_db: Path) -> None:
     finally:
         connections["shop"].disconnect()  # type: ignore[attr-defined]
     assert any(s.heading == "Gotchas" and s.source == "draft" for s in docs[0].sections)
+
+
+async def test_audit_still_fail_loud_with_code_name_and_prune(tmp_path: Path) -> None:
+    # Full pipeline: a doc with a C2 Code Columns section + a leaky drafted/pruned bullet
+    # must still raise at the freeze-time audit (GT-firewall preserved).
+    import duckdb
+
+    p = str(tmp_path / "clinical.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE clinical_info(icd_o_3_histology VARCHAR, histological_type VARCHAR)")
+    raw.execute(
+        "INSERT INTO clinical_info VALUES "
+        "('9400/3','Astrocytoma'),('9401/3','Astrocytoma'),"
+        "('9450/3','Oligodendroglioma'),('9382/3','Oligoastrocytoma')"
+    )
+    raw.close()
+    conn = DuckDBConnection(p, read_only=True)
+    conn.connect()
+
+    async def _leaky(prompt: str) -> str:
+        # returned for BOTH the draft and the PRUNE call (prune echoes it back as kept)
+        return "## Gotchas\n- The ground truth answer for revenue is 12345."
+
+    try:
+        with pytest.raises(ScentContaminationError):
+            await generate_scent(
+                connections={"clin": conn},
+                catalogs={"clin": conn.introspect_catalog()},
+                primary="clin",
+                with_semantics=True,
+                llm_fn=_leaky,
+            )
+    finally:
+        conn.disconnect()
