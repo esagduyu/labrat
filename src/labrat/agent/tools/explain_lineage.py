@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from typing import cast
 
-from pydantic import BaseModel
+import sqlglot
+from pydantic import BaseModel, Field
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
-from sqlglot.lineage import Node
+from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer.qualify import qualify
 
+from labrat.agent.tools.base import Tool, ToolContext
 from labrat.db.catalog import Catalog
 
 
@@ -25,15 +27,7 @@ class _SourceRef(BaseModel):
     column: str
 
 
-# NOTE: _catalog_schema_dict / _flatten / _output_columns are pure helpers with
-# no in-tree consumer yet — the ExplainLineageTool that calls them lands in the
-# next task (Unit D). Until then they're only exercised by
-# tests/unit/test_explain_lineage.py, which pyright's `include = ["src"]` scope
-# doesn't see, so each needs a targeted reportUnusedFunction suppression. Task 7
-# should remove these three ignore comments once the Tool wires the calls in.
-def _catalog_schema_dict(  # pyright: ignore[reportUnusedFunction]
-    cat: Catalog,
-) -> dict[str, dict[str, str]]:
+def _catalog_schema_dict(cat: Catalog) -> dict[str, dict[str, str]]:
     """sqlglot schema mapping {table: {column: data_type}} across all schemas.
 
     Adapts check_sql._catalog_index, but keeps original casing and data types —
@@ -55,7 +49,7 @@ def _leaves(node: Node) -> list[Node]:
     return out
 
 
-def _flatten(node: Node) -> list[_SourceRef]:  # pyright: ignore[reportUnusedFunction]
+def _flatten(node: Node) -> list[_SourceRef]:
     """Flatten a lineage Node tree to deduplicated base-table {table, column} pairs.
 
     A leaf is a node with no downstream. It maps to a base column iff its .source
@@ -78,9 +72,7 @@ def _flatten(node: Node) -> list[_SourceRef]:  # pyright: ignore[reportUnusedFun
     return refs
 
 
-def _output_columns(  # pyright: ignore[reportUnusedFunction]
-    query: exp.Query, schema: dict[str, dict[str, str]]
-) -> list[str]:
+def _output_columns(query: exp.Query, schema: dict[str, dict[str, str]]) -> list[str]:
     """Names of the query's final projections; '*' is expanded via qualify(schema).
 
     A star that cannot be resolved (table missing from the schema) survives as '*'
@@ -94,3 +86,77 @@ def _output_columns(  # pyright: ignore[reportUnusedFunction]
     except SqlglotError:
         qualified = query
     return [s.alias_or_name for s in qualified.selects if s.alias_or_name != "*"]
+
+
+class _Input(BaseModel):
+    sql: str = Field(description="The SQL query to trace lineage for (not executed).")
+    database: str | None = Field(default=None, description="Connection name; defaults to primary.")
+    column: str | None = Field(
+        default=None,
+        description="Trace only this output column; omit to trace every output column.",
+    )
+
+
+class _ColumnLineage(BaseModel):
+    output_column: str
+    sources: list[_SourceRef]
+    derivation: str
+
+
+class _Output(BaseModel):
+    columns: list[_ColumnLineage]
+    parse_error: str | None = None
+
+
+class ExplainLineageTool(Tool[_Input]):
+    """Column-level lineage for a query, resolved live against the Catalog."""
+
+    @property
+    def name(self) -> str:
+        return "explain_lineage"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Trace column-level lineage for a SQL query WITHOUT executing it: for each "
+            "output column, report the base-table columns it derives from plus the "
+            "deriving expression. Use it to answer 'where does this column come from?' "
+            "and to sanity-check a query's sources before trusting its results. "
+            "Pass column= to trace a single output column."
+        )
+
+    @property
+    def input_model(self) -> type[_Input]:
+        return _Input
+
+    async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
+        cat = cast(Catalog, ctx.catalogs[args.database or ctx.primary])
+        schema = _catalog_schema_dict(cat)
+
+        try:
+            tree = sqlglot.parse_one(args.sql)
+        except SqlglotError as exc:
+            return _Output(columns=[], parse_error=str(exc))
+        if not isinstance(tree, exp.Query):
+            return _Output(columns=[], parse_error="lineage requires a SELECT query")
+
+        targets = [args.column] if args.column is not None else _output_columns(tree, schema)
+        deduped: list[str] = []
+        for t in targets:  # SELECT a, a FROM t — trace each name once
+            if t not in deduped:
+                deduped.append(t)
+
+        results: list[_ColumnLineage] = []
+        for col in deduped:
+            try:
+                node = lineage(col, args.sql, schema=schema)
+            except SqlglotError as exc:
+                return _Output(columns=results, parse_error=str(exc))
+            results.append(
+                _ColumnLineage(
+                    output_column=col,
+                    sources=_flatten(node),
+                    derivation=node.expression.sql(),
+                )
+            )
+        return _Output(columns=results)
