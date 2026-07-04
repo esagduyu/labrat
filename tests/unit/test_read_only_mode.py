@@ -156,6 +156,14 @@ async def test_load_mongo_collection_blocked_when_read_only() -> None:
         "explain analyze insert into t values (1)",  # case-insensitive
         "EXPLAIN ANALYZE SELECT 1",  # EXPLAIN ANALYZE always executes; over-blocking is fine
         "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",  # CTE-embedded write
+        "EXPLAIN (ANALYZE) DELETE FROM t",  # parenthesized options
+        "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM t",  # ANALYZE first among options
+        "EXPLAIN (BUFFERS, ANALYZE) DELETE FROM t",  # ANALYZE not first among options
+        "EXPLAIN (ANALYZE true) DELETE FROM t",  # ANALYZE with explicit value
+        "EXPLAIN ANALYSE DELETE FROM t",  # British spelling, bare
+        "EXPLAIN (ANALYSE) INSERT INTO t VALUES (1)",  # British spelling, parenthesized
+        "explain (analyze) delete from t",  # case-insensitive, parenthesized
+        "EXPLAIN (Buffers, Analyze) DELETE FROM t",  # mixed case, ANALYZE not first
     ],
 )
 def test_write_statements_classified_mutating(sql: str) -> None:
@@ -173,6 +181,8 @@ def test_write_statements_classified_mutating(sql: str) -> None:
         "DESCRIBE t",
         "SHOW TABLES",
         "PRAGMA database_list",
+        "EXPLAIN INSERT INTO t VALUES (1)",  # bare EXPLAIN doesn't execute — stays safe
+        "EXPLAIN SELECT analyze_flag FROM t",  # false-positive probe: word in payload, not options
     ],
 )
 def test_read_statements_classified_safe(sql: str) -> None:
@@ -201,6 +211,28 @@ def test_run_sql_is_mutating_explain_analyze_write_blocked() -> None:
 def test_run_sql_is_mutating_bare_explain_still_safe() -> None:
     tool = RunSqlTool()
     assert tool.is_mutating(tool.input_model(query="EXPLAIN SELECT * FROM t")) is False
+
+
+def test_run_sql_is_mutating_explain_paren_analyze_blocked() -> None:
+    tool = RunSqlTool()
+    assert tool.is_mutating(tool.input_model(query="EXPLAIN (ANALYZE) DELETE FROM t")) is True
+    assert (
+        tool.is_mutating(tool.input_model(query="EXPLAIN (BUFFERS, ANALYZE) DELETE FROM t")) is True
+    )
+
+
+def test_run_sql_is_mutating_explain_analyse_british_blocked() -> None:
+    tool = RunSqlTool()
+    assert tool.is_mutating(tool.input_model(query="EXPLAIN ANALYSE DELETE FROM t")) is True
+    assert (
+        tool.is_mutating(tool.input_model(query="EXPLAIN (ANALYSE) INSERT INTO t VALUES (1)"))
+        is True
+    )
+
+
+def test_run_sql_is_mutating_explain_false_positive_probe_safe() -> None:
+    tool = RunSqlTool()
+    assert tool.is_mutating(tool.input_model(query="EXPLAIN SELECT analyze_flag FROM t")) is False
 
 
 def test_run_sql_is_mutating_cte_embedded_write_blocked() -> None:
@@ -266,6 +298,21 @@ async def test_run_sql_explain_analyze_delete_blocked_under_read_only(
     res = await reg.dispatch(
         "run_sql",
         {"query": "EXPLAIN ANALYZE DELETE FROM items", "force": True},
+        ro_sql_ctx,
+    )
+    assert res.ok is False
+    assert res.error == "blocked: read-only Analyst mode"
+
+
+async def test_run_sql_explain_paren_analyze_delete_blocked_under_read_only(
+    ro_sql_ctx: ToolContext,
+) -> None:
+    # Same bypass class, parenthesized-options form: EXPLAIN (ANALYZE) DELETE FROM t
+    # also executes the wrapped statement on DuckDB/Postgres.
+    reg = build_data_tools_registry()
+    res = await reg.dispatch(
+        "run_sql",
+        {"query": "EXPLAIN (ANALYZE) DELETE FROM items", "force": True},
         ro_sql_ctx,
     )
     assert res.ok is False

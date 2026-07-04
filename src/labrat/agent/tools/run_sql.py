@@ -80,21 +80,38 @@ _READONLY_SAFE_COMMAND_KEYWORDS = frozenset({"EXPLAIN", "SHOW"})
 _EMBEDDED_WRITE_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge)
 
 
-def _is_explain_analyze(command: exp.Command) -> bool:
-    """True if a generic-dialect ``EXPLAIN`` Command is actually ``EXPLAIN ANALYZE``.
+_ANALYZE_WORD_RE = re.compile(r"\bANALY[SZ]E\b", re.IGNORECASE)
+_LEADING_ANALYZE_RE = re.compile(r"^\s*ANALY[SZ]E\b", re.IGNORECASE)
 
-    Generic-dialect sqlglot parses both ``EXPLAIN <stmt>`` and ``EXPLAIN ANALYZE
-    <stmt>`` to the identical node shape — ``exp.Command(this='EXPLAIN')`` — with
-    everything after the ``EXPLAIN`` keyword collapsed into a single string literal
-    on ``.args["expression"]``. The ANALYZE/write payload is invisible to the
-    keyword-only carve-out that treats 'EXPLAIN' as safe. But unlike bare EXPLAIN,
-    EXPLAIN ANALYZE actually EXECUTES the wrapped statement (the classic Postgres/
-    DuckDB "EXPLAIN ANALYZE DELETE" gotcha) — so it must be treated as a write,
-    even wrapping a SELECT (over-blocking EXPLAIN ANALYZE SELECT is acceptable).
+
+def _is_explain_analyze(command: exp.Command) -> bool:
+    """True if a generic-dialect ``EXPLAIN`` Command carries an ANALYZE/ANALYSE option.
+
+    Generic-dialect sqlglot parses ``EXPLAIN <stmt>``, ``EXPLAIN ANALYZE <stmt>``,
+    and ``EXPLAIN (<options>) <stmt>`` to the identical node shape —
+    ``exp.Command(this='EXPLAIN')`` — with everything after the ``EXPLAIN`` keyword
+    collapsed into a single string literal on ``.args["expression"]``. The
+    ANALYZE/write payload is invisible to the keyword-only carve-out that treats
+    'EXPLAIN' as safe. But unlike bare EXPLAIN, EXPLAIN ANALYZE (in either its bare
+    form or Postgres-style parenthesized-options form, e.g. ``EXPLAIN (ANALYZE)``
+    or ``EXPLAIN (BUFFERS, ANALYZE)`` — ANALYZE can appear in any position among
+    the options — and either US or British spelling, ANALYZE/ANALYSE) actually
+    EXECUTES the wrapped statement (the classic Postgres/DuckDB "EXPLAIN ANALYZE
+    DELETE" gotcha) — so it must be treated as a write, even wrapping a SELECT
+    (over-blocking EXPLAIN ANALYZE SELECT is acceptable).
+
+    A bare EXPLAIN of a statement that merely *mentions* the word "analyze" (e.g.
+    ``EXPLAIN SELECT analyze_flag FROM t``) must stay safe — the word only matters
+    when it appears in EXPLAIN's own options, not inside the wrapped statement.
     """
     payload = command.args.get("expression")
     text = str(getattr(payload, "this", payload) or "")
-    return text.strip().upper().startswith("ANALYZE")
+    stripped = text.strip()
+    if stripped.startswith("("):
+        close = stripped.find(")")
+        options = stripped[1:] if close == -1 else stripped[1:close]
+        return _ANALYZE_WORD_RE.search(options) is not None
+    return _LEADING_ANALYZE_RE.match(stripped) is not None
 
 
 def _is_write_for_readonly(sql: str) -> bool:
