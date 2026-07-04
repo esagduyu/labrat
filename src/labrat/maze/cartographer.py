@@ -532,6 +532,9 @@ async def generate_scent(
                 profile, cast(Connection, conn), cap=distinct_cap, variant_seed=variant_seed
             )
         )
+        cn = build_code_name_notes(profile, cast(Connection, conn))
+        if cn is not None:
+            sections.append(cn)
         doc = ScentDoc(
             domain=name,
             kind="scent",

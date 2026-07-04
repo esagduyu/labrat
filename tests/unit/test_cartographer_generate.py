@@ -89,3 +89,59 @@ async def test_with_semantics_appends_draft_sections(ecommerce_db: Path) -> None
     gotchas = [s for s in doc.sections if s.heading == "Gotchas"]
     assert len(gotchas) == 1
     assert gotchas[0].source == "draft"
+
+
+async def test_code_name_section_present_on_deterministic_path(tmp_path) -> None:
+    import duckdb
+
+    from labrat.db.duckdb_engine import DuckDBConnection
+
+    p = str(tmp_path / "clinical.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE clinical_info(icd_o_3_histology VARCHAR, histological_type VARCHAR)")
+    raw.execute(
+        "INSERT INTO clinical_info VALUES "
+        "('9400/3','Astrocytoma'),('9401/3','Astrocytoma'),"
+        "('9450/3','Oligodendroglioma'),('9382/3','Oligoastrocytoma')"
+    )
+    raw.close()
+    conn = DuckDBConnection(p, read_only=True)
+    conn.connect()
+    try:
+        docs = await generate_scent(
+            connections={"clin": conn},
+            catalogs={"clin": conn.introspect_catalog()},
+            primary="clin",
+            with_semantics=False,
+        )
+    finally:
+        conn.disconnect()
+    headings = {s.heading for s in docs[0].sections}
+    assert "Code Columns" in headings
+    body = next(s.body for s in docs[0].sections if s.heading == "Code Columns")
+    assert "icd_o_3_histology" in body
+
+
+async def test_no_code_name_section_when_no_pair(tmp_path) -> None:
+    # byte-identity w.r.t. C2: a DuckDB dataset with no code/name pair gets no new section
+    import duckdb
+
+    from labrat.db.duckdb_engine import DuckDBConnection
+
+    p = str(tmp_path / "plain.duckdb")
+    raw = duckdb.connect(p)
+    raw.execute("CREATE TABLE city(id INTEGER, name VARCHAR)")
+    raw.execute("INSERT INTO city VALUES (1,'London'),(2,'Paris'),(3,'Berlin')")
+    raw.close()
+    conn = DuckDBConnection(p, read_only=True)
+    conn.connect()
+    try:
+        docs = await generate_scent(
+            connections={"c": conn},
+            catalogs={"c": conn.introspect_catalog()},
+            primary="c",
+            with_semantics=False,
+        )
+    finally:
+        conn.disconnect()
+    assert "Code Columns" not in {s.heading for s in docs[0].sections}
