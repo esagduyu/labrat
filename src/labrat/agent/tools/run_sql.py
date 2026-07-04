@@ -54,6 +54,55 @@ def _is_mutation(sql: str) -> bool:
         return False  # parse error → let the DB handle it; don't block valid queries
 
 
+_READONLY_SAFE_TYPES = (
+    exp.Select,
+    exp.Union,
+    exp.Intersect,
+    exp.Except,
+    exp.Describe,
+    exp.Show,
+    exp.Pragma,
+)
+# Generic-dialect sqlglot.parse() (no dialect kwarg — matches the rest of this module)
+# doesn't recognize EXPLAIN or SHOW as dedicated node types; both fall back to a
+# generic exp.Command whose `.this` carries the leading keyword. (exp.Show only
+# materializes under dialect="duckdb", which this module's parse calls don't pass.)
+# Both are unambiguously read-only metadata/introspection statements, so both keywords
+# are carved out here alongside the typed safelist above.
+_READONLY_SAFE_COMMAND_KEYWORDS = frozenset({"EXPLAIN", "SHOW"})
+
+
+def _is_write_for_readonly(sql: str) -> bool:
+    """Classify *sql* for read-only Analyst mode. FAIL-CLOSED, unlike _is_mutation.
+
+    Safelist: SELECT/UNION/INTERSECT/EXCEPT (incl. WITH-wrapped), DESCRIBE, PRAGMA,
+    and EXPLAIN/SHOW (which sqlglot's generic dialect parses as a Command whose
+    keyword is 'EXPLAIN'/'SHOW' respectively). Everything else is treated as a
+    write — this blocks INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/TRUNCATE/MERGE/
+    GRANT/ATTACH/DETACH/COPY/SET, unknown statements, and unparseable SQL (block
+    rather than run under read_only).
+    """
+    try:
+        statements = sqlglot.parse(sql.strip())
+    except ParseError:
+        return True
+    if not statements:
+        return True
+    for stmt in statements:
+        if stmt is None:
+            return True
+        root = _unwrap_with(stmt)
+        if isinstance(root, _READONLY_SAFE_TYPES):
+            continue
+        if (
+            isinstance(root, exp.Command)
+            and str(root.this).upper() in _READONLY_SAFE_COMMAND_KEYWORDS
+        ):
+            continue
+        return True
+    return False
+
+
 def _has_limit(sql: str) -> bool:
     """Return True if the statement already contains a LIMIT clause."""
     try:
@@ -192,6 +241,15 @@ class RunSqlTool(Tool[_Input]):
     @property
     def input_model(self) -> type[_Input]:
         return _Input
+
+    def is_mutating(self, args: _Input) -> bool:
+        """Read-only-mode classification: a SELECT still runs; a write is blocked.
+
+        Reuses the same sqlglot parse family as the statement-stacking guard, but
+        fail-closed (see _is_write_for_readonly). force=True cannot bypass this —
+        the dispatch gate runs before execute() ever sees the args.
+        """
+        return _is_write_for_readonly(args.query)
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
         thread_id = getattr(ctx, "thread_id", "unknown")
