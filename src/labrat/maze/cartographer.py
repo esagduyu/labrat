@@ -471,6 +471,51 @@ async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> tuple[list[Secti
     return prose, claims_text
 
 
+_PRUNE_INSTRUCTION = (
+    "PRUNE PASS. Below are VERIFIED FACTS and a list of DRAFT BULLETS an author wrote. "
+    "Return ONLY the draft bullets that are FULLY SUPPORTED by a verified fact, each on "
+    "its own line, verbatim (copy the bullet text exactly, including the leading '- '). "
+    "Drop any bullet that makes a claim the verified facts do not support. Output nothing "
+    "but the kept bullet lines."
+)
+
+
+async def prune_unsupported(
+    skeleton: ScentDoc, prose: list[Section], llm_fn: LLMFn
+) -> list[Section]:
+    """Self-critique prune: ask the LLM which drafted bullets are fully supported by a
+    verified fact and keep only those (verbatim). Fail-open — any error, empty response,
+    or unparseable result returns the original ``prose`` unchanged (never worse than the
+    draft). Catches the T1c/M2 failure mode: a bullet that NAMES real columns but makes an
+    unsupported claim (a vocabulary filter would miss it; the critique judges the claim)."""
+    if not prose:
+        return prose
+    facts = render_document(skeleton)
+    bullets = "\n".join(
+        ln for s in prose for ln in s.body.splitlines() if ln.strip().startswith("-")
+    )
+    prompt = (
+        f"{_PRUNE_INSTRUCTION}\n\n--- VERIFIED FACTS ---\n{facts}\n--- END FACTS ---\n"
+        f"--- DRAFT BULLETS ---\n{bullets}\n--- END BULLETS ---\n"
+    )
+    try:
+        raw = await llm_fn(prompt)
+    except Exception:
+        return prose  # fail-open on error
+    kept = {ln.strip() for ln in raw.splitlines() if ln.strip().startswith("-")}
+    if not kept:
+        return prose  # fail-open: empty / unparseable / kept-nothing
+    result: list[Section] = []
+    for s in prose:
+        new_lines = [
+            ln for ln in s.body.splitlines() if not ln.strip().startswith("-") or ln.strip() in kept
+        ]
+        body = "\n".join(new_lines).strip()
+        if body:
+            result.append(Section(heading=s.heading, body=body, source=s.source))
+    return result
+
+
 _RESERVED_HEADINGS = {"verified semantics", "semantic claims"}
 
 
