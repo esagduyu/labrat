@@ -294,6 +294,78 @@ def build_dimensions(
     return Section(heading="Dimensions", body=body, source="verified")
 
 
+_CODE_NAME_SAMPLE = 200
+
+
+def _confirms_code_name(conn: Connection, table: str, code_col: str, name_col: str) -> bool:
+    """True iff (a) each code maps to <=1 name (functional dependency code->name) AND
+    (b) grouping by the name collapses distinct codes (fewer names than codes). Any probe
+    error or ambiguity -> False (conservative: a wrong note is the failure to avoid)."""
+    try:
+        multi = conn.execute(
+            f"SELECT COUNT(*) FROM (SELECT {code_col} FROM {table} "
+            f"WHERE {code_col} IS NOT NULL AND {name_col} IS NOT NULL "
+            f"GROUP BY {code_col} HAVING COUNT(DISTINCT {name_col}) > 1) q"
+        ).row(0)[0]
+        if multi is None or int(multi) > 0:
+            return False
+        counts = conn.execute(
+            f"SELECT COUNT(DISTINCT {code_col}), COUNT(DISTINCT {name_col}) FROM {table} "
+            f"WHERE {code_col} IS NOT NULL AND {name_col} IS NOT NULL"
+        ).row(0)
+    except Exception:
+        return False
+    n_code, n_name = counts[0], counts[1]
+    if n_code is None or n_name is None:
+        return False
+    return int(n_code) > int(n_name)
+
+
+def build_code_name_notes(profile: ProfileOutput, conn: Connection) -> Section | None:
+    """Deterministic detector: per table, find a code column (code-shaped values) paired
+    with a display-name column (name-shaped, functionally determined by the code) and warn
+    that grouping/filtering must use the code column. Conservative: emits nothing when
+    ambiguous. Reuses the code-shape scorers from semantic_claims (verifier -> detector)."""
+    from labrat.maze.semantic_claims import (
+        _NAME_CEILING,  # pyright: ignore[reportPrivateUsage]
+        _SHAPE_THRESHOLD,  # pyright: ignore[reportPrivateUsage]
+        _looks_like_code,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    lines: list[str] = []
+    for t in profile.tables:
+        scores: dict[str, float] = {}
+        for col in t.columns:
+            if not _is_stringy(col.data_type):
+                continue
+            try:
+                df = conn.execute(
+                    f"SELECT DISTINCT {col.name} FROM {t.name} "
+                    f"WHERE {col.name} IS NOT NULL LIMIT {_CODE_NAME_SAMPLE}"
+                )
+            except Exception:
+                continue
+            vals = [str(r[0]) for r in df.iter_rows()]
+            if vals:
+                scores[col.name] = _looks_like_code(vals)
+        code_cols = [c for c, s in scores.items() if s >= _SHAPE_THRESHOLD]
+        name_cols = [c for c, s in scores.items() if s <= _NAME_CEILING]
+        for code_col in code_cols:
+            for name_col in name_cols:
+                if name_col == code_col or scores[code_col] <= scores[name_col]:
+                    continue
+                if _confirms_code_name(conn, t.name, code_col, name_col):
+                    lines.append(
+                        f"- For coded values in `{t.name}`, group/filter by `{code_col}` "
+                        f"(the code); `{name_col}` is the display label — grouping by the "
+                        f"name column collapses distinct codes."
+                    )
+                    break  # one note per code column (conservative)
+    if not lines:
+        return None
+    return Section(heading="Code Columns", body="\n".join(lines), source="verified")
+
+
 async def discover_joins(
     ctx: ToolContext, profile: ProfileOutput, *, database: str
 ) -> list[VerifiedJoin]:
