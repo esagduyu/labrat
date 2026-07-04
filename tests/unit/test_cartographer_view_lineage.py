@@ -10,6 +10,7 @@ from labrat.db.catalog import Catalog, Column, Schema, Table
 from labrat.db.duckdb_engine import DuckDBConnection
 from labrat.maze.cartographer import build_view_lineage, generate_scent
 from labrat.maze.document import ScentDoc, Section, parse_document, render_document
+from labrat.maze.scent_audit import audit_scent_doc
 
 
 def test_lineage_source_token_round_trips() -> None:
@@ -165,3 +166,31 @@ async def test_generate_scent_no_views_has_no_lineage_section(tmp_path: Path) ->
         conn.disconnect()
     assert "View Lineage" not in {s.heading for s in docs[0].sections}
     assert all(s.source == "verified" for s in docs[0].sections)
+
+
+def test_leaky_lineage_section_trips_audit() -> None:
+    doc = ScentDoc(
+        domain="d",
+        sections=[
+            Section(
+                heading="View Lineage",
+                body="- view `v`.`label` ← `ground_truth`.`label`",
+                source="lineage",
+            )
+        ],
+    )
+    assert audit_scent_doc(doc) == "answer_key"
+
+
+def test_clean_lineage_section_passes_audit() -> None:
+    doc = ScentDoc(
+        domain="d",
+        sections=[
+            Section(
+                heading="View Lineage",
+                body="- view `customer_spend`.`total` ← `orders`.`amount`",
+                source="lineage",
+            )
+        ],
+    )
+    assert audit_scent_doc(doc) is None

@@ -163,6 +163,32 @@ async def test_star_query_expanded_via_catalog() -> None:
     assert [c.output_column for c in out.columns] == ["id", "customer_id", "amount"]
 
 
+async def test_zero_column_table_elsewhere_in_catalog_does_not_poison_lineage() -> None:
+    # A zero-column table (e.g. a view whose columns failed to introspect) must
+    # not poison sqlglot's schema for every OTHER lineage() call in the catalog —
+    # _catalog_schema_dict must drop it before handing the schema to lineage().
+    cat = Catalog(
+        database_name="shop",
+        schemas=[
+            Schema(
+                name="main",
+                tables=[
+                    *_CAT.schemas[0].tables,
+                    Table(name="broken_view", schema_name="main", columns=[]),
+                ],
+            )
+        ],
+    )
+    tool = ExplainLineageTool()
+    out = await tool.execute(ToolContext(catalog=cat), tool.input_model(sql=_JOIN_SQL))
+    assert out.parse_error is None
+    by_name = {c.output_column: c for c in out.columns}
+    assert [(r.table, r.column) for r in by_name["customer_name"].sources] == [
+        ("customers", "name")
+    ]
+    assert [(r.table, r.column) for r in by_name["total_spend"].sources] == [("orders", "amount")]
+
+
 async def test_registered_and_read_only_safe() -> None:
     reg = build_data_tools_registry()
     res = await reg.dispatch(

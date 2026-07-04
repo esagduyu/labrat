@@ -385,10 +385,11 @@ def build_view_lineage(catalog: Catalog, *, database: str) -> Section | None:
     DB yields byte-identical deterministic Scent.
     """
     _ = database  # doc identity is per-connection already; kept for call-site clarity
-    # Drop zero-column entries (e.g. a table/view whose columns failed to introspect):
-    # sqlglot's MappingSchema rejects any table with no columns at ALL, which would
-    # otherwise poison every lineage() call in this catalog, not just that one table.
-    schema = {name: cols for name, cols in _catalog_schema_dict(catalog).items() if cols}
+    # _catalog_schema_dict already drops zero-column entries (e.g. a table/view
+    # whose columns failed to introspect) — sqlglot's MappingSchema rejects any
+    # table with no columns at all, which would otherwise poison every lineage()
+    # call in this catalog, not just that one table.
+    schema = _catalog_schema_dict(catalog)
     lines: list[str] = []
     for sch in catalog.schemas:
         for t in sch.tables:

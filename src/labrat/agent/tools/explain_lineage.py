@@ -32,12 +32,19 @@ def _catalog_schema_dict(cat: Catalog) -> dict[str, dict[str, str]]:
 
     Adapts check_sql._catalog_index, but keeps original casing and data types —
     sqlglot.lineage() wants the {table: {col: dtype}} schema form.
+
+    Zero-column tables (e.g. a view whose columns failed to introspect) are
+    dropped: sqlglot's MappingSchema raises SchemaError GLOBALLY the instant ANY
+    entry has zero columns, which would poison every lineage() call against this
+    schema — even queries that never touch that table. A table with no known
+    columns can never be a valid lineage source, so dropping it only prevents
+    poisoning; it can never hide a legitimate resolution.
     """
     schema: dict[str, dict[str, str]] = {}
     for sch in cat.schemas:
         for t in sch.tables:
             schema.setdefault(t.name, {}).update({c.name: c.data_type for c in t.columns})
-    return schema
+    return {name: cols for name, cols in schema.items() if cols}
 
 
 def _leaves(node: Node) -> list[Node]:
