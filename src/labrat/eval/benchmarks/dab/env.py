@@ -19,6 +19,7 @@ Design (Phase 4):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ from pydantic import BaseModel, ConfigDict
 from labrat.agent.tools.base import ToolContext
 from labrat.db.catalog import Catalog
 from labrat.db.duckdb_engine import DuckDBConnection
+
+logger = logging.getLogger(__name__)
 
 
 class AttachSpec(BaseModel):
@@ -145,3 +148,41 @@ def introspect_env_catalogs(ctx: ToolContext) -> None:
         introspect = getattr(conn, "introspect_catalog", None)
         if callable(introspect):
             ctx.catalogs[name] = introspect()
+
+
+def build_profiling_connections(
+    attachable: list[AttachSpec],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Build throw-away DuckDB profiling connections for the cartographer, one per
+    attachable secondary DB (postgres|sqlite), WITHOUT touching the agent's ctx.
+
+    Each spec gets a fresh ``:memory:`` DuckDBConnection that ATTACHes only that one
+    secondary and runs ``USE <alias>`` so its tables are addressable by bare name (the
+    cartographer's sampling idiom). Returns ``(connections, catalogs)`` keyed by
+    ``spec.alias``. A failed attach (server down, missing file/extension) is skipped
+    with a logged warning and never aborts the caller.
+    """
+    connections: dict[str, object] = {}
+    catalogs: dict[str, object] = {}
+    for spec in attachable:
+        conn = DuckDBConnection(path=":memory:", read_only=False)
+        try:
+            conn.connect()
+            conn.attach(spec.path, spec.alias, spec.db_type)
+            conn.use_database(spec.alias)
+            catalog = conn.introspect_catalog()
+        except Exception as exc:
+            logger.warning(
+                "skipping attach for profiling (alias=%s, type=%s): %s",
+                spec.alias,
+                spec.db_type,
+                exc,
+            )
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
+            continue
+        connections[spec.alias] = conn
+        catalogs[spec.alias] = catalog
+    return connections, catalogs

@@ -294,6 +294,78 @@ def build_dimensions(
     return Section(heading="Dimensions", body=body, source="verified")
 
 
+_CODE_NAME_SAMPLE = 200
+
+
+def _confirms_code_name(conn: Connection, table: str, code_col: str, name_col: str) -> bool:
+    """True iff (a) each code maps to <=1 name (functional dependency code->name) AND
+    (b) grouping by the name collapses distinct codes (fewer names than codes). Any probe
+    error or ambiguity -> False (conservative: a wrong note is the failure to avoid)."""
+    try:
+        multi = conn.execute(
+            f"SELECT COUNT(*) FROM (SELECT {code_col} FROM {table} "
+            f"WHERE {code_col} IS NOT NULL AND {name_col} IS NOT NULL "
+            f"GROUP BY {code_col} HAVING COUNT(DISTINCT {name_col}) > 1) q"
+        ).row(0)[0]
+        if multi is None or int(multi) > 0:
+            return False
+        counts = conn.execute(
+            f"SELECT COUNT(DISTINCT {code_col}), COUNT(DISTINCT {name_col}) FROM {table} "
+            f"WHERE {code_col} IS NOT NULL AND {name_col} IS NOT NULL"
+        ).row(0)
+    except Exception:
+        return False
+    n_code, n_name = counts[0], counts[1]
+    if n_code is None or n_name is None:
+        return False
+    return int(n_code) > int(n_name)
+
+
+def build_code_name_notes(profile: ProfileOutput, conn: Connection) -> Section | None:
+    """Deterministic detector: per table, find a code column (code-shaped values) paired
+    with a display-name column (name-shaped, functionally determined by the code) and warn
+    that grouping/filtering must use the code column. Conservative: emits nothing when
+    ambiguous. Reuses the code-shape scorers from semantic_claims (verifier -> detector)."""
+    from labrat.maze.semantic_claims import (
+        _NAME_CEILING,  # pyright: ignore[reportPrivateUsage]
+        _SHAPE_THRESHOLD,  # pyright: ignore[reportPrivateUsage]
+        _looks_like_code,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    lines: list[str] = []
+    for t in profile.tables:
+        scores: dict[str, float] = {}
+        for col in t.columns:
+            if not _is_stringy(col.data_type):
+                continue
+            try:
+                df = conn.execute(
+                    f"SELECT DISTINCT {col.name} FROM {t.name} "
+                    f"WHERE {col.name} IS NOT NULL LIMIT {_CODE_NAME_SAMPLE}"
+                )
+            except Exception:
+                continue
+            vals = [str(r[0]) for r in df.iter_rows()]
+            if vals:
+                scores[col.name] = _looks_like_code(vals)
+        code_cols = [c for c, s in scores.items() if s >= _SHAPE_THRESHOLD]
+        name_cols = [c for c, s in scores.items() if s <= _NAME_CEILING]
+        for code_col in code_cols:
+            for name_col in name_cols:
+                if name_col == code_col or scores[code_col] <= scores[name_col]:
+                    continue
+                if _confirms_code_name(conn, t.name, code_col, name_col):
+                    lines.append(
+                        f"- For coded values in `{t.name}`, group/filter by `{code_col}` "
+                        f"(the code); `{name_col}` is the display label — grouping by the "
+                        f"name column collapses distinct codes."
+                    )
+                    break  # one note per code column (conservative)
+    if not lines:
+        return None
+    return Section(heading="Code Columns", body="\n".join(lines), source="verified")
+
+
 async def discover_joins(
     ctx: ToolContext, profile: ProfileOutput, *, database: str
 ) -> list[VerifiedJoin]:
@@ -348,7 +420,14 @@ _SEMANTICS_INSTRUCTION = (
     "Use short, retrieval-oriented bullets and routing-trigger phrasing. If you are unsure "
     "about a business rule, say so rather than invent. Output GitHub-flavored markdown with "
     "## headings only; do not emit a ## Quick Reference, ## Dimensions, or ## Key Tables "
-    "section (those are already verified)."
+    "section (those are already verified). "
+    "COHORT VS FILTER: a quality/status filter (e.g. FILTER='PASS', a sequenced-only or "
+    "is_test flag) scopes WHICH ROWS COUNT AS POSITIVE (the numerator); it must NEVER be "
+    "authored as a Best Practice that narrows the cohort denominator (the population) — "
+    "never restrict the population to a filtered subset. "
+    "GROUNDING: you are an annotator, not an inventor — build conditional routing guidance "
+    "ON TOP OF the verified facts below and NEVER introduce a claim the verified facts do "
+    "not support."
 )
 
 
@@ -390,6 +469,86 @@ async def draft_semantics(skeleton: ScentDoc, llm_fn: LLMFn) -> tuple[list[Secti
         if remaining_body:
             prose.append(Section(heading=s.heading, body=remaining_body, source="draft"))
     return prose, claims_text
+
+
+_PRUNE_INSTRUCTION = (
+    "PRUNE PASS. Below are VERIFIED FACTS and a list of DRAFT BULLETS an author wrote. "
+    "Return ONLY the draft bullets that are FULLY SUPPORTED by a verified fact, each on "
+    "its own line, verbatim (copy the bullet text exactly, including the leading '- '). "
+    "Drop any bullet that makes a claim the verified facts do not support. Output nothing "
+    "but the kept bullet lines."
+)
+
+
+def _normalize_bullet(line: str) -> str:
+    """Normalize a bullet line for fuzzy matching: strip surrounding whitespace, drop a
+    leading '-' marker, strip trailing punctuation, and casefold. Tolerates cosmetic LLM
+    echo drift (missing trailing period, extra whitespace) without weakening the
+    verbatim-from-original guarantee — this is only used to find WHICH original line a
+    kept critique line refers to; the emitted text always comes from the original."""
+    s = line.strip()
+    if s.startswith("-"):
+        s = s[1:]
+    return s.strip().rstrip(".;").strip().casefold()
+
+
+async def prune_unsupported(
+    skeleton: ScentDoc, prose: list[Section], llm_fn: LLMFn
+) -> list[Section]:
+    """Self-critique prune: ask the LLM which drafted bullets are fully supported by a
+    verified fact and keep only those (verbatim, from the ORIGINAL draft text — never the
+    LLM's echo). Fail-open — any error, empty response, or a critique that matches ZERO
+    original bullets (garbled/hallucinated/ambiguous) returns the original ``prose``
+    unchanged (never worse than the draft). Matching is normalized (whitespace/trailing
+    punctuation/case) so cosmetic LLM formatting drift doesn't cause a real match to be
+    silently dropped. Catches the T1c/M2 failure mode: a bullet that NAMES real columns
+    but makes an unsupported claim (a vocabulary filter would miss it; the critique judges
+    the claim)."""
+    if not prose:
+        return prose
+    facts = render_document(skeleton)
+    bullets = "\n".join(
+        ln for s in prose for ln in s.body.splitlines() if ln.strip().startswith("-")
+    )
+    prompt = (
+        f"{_PRUNE_INSTRUCTION}\n\n--- VERIFIED FACTS ---\n{facts}\n--- END FACTS ---\n"
+        f"--- DRAFT BULLETS ---\n{bullets}\n--- END BULLETS ---\n"
+    )
+    try:
+        raw = await llm_fn(prompt)
+    except Exception:
+        return prose  # fail-open on error
+    kept_normalized = {
+        _normalize_bullet(ln) for ln in raw.splitlines() if ln.strip().startswith("-")
+    }
+    kept_normalized.discard("")
+    if not kept_normalized:
+        return prose  # fail-open: empty / unparseable response
+
+    # Fail-open guard: only apply the filter if the critique actually corresponds to the
+    # draft — i.e. at least one ORIGINAL bullet (across all sections) normalized-matches
+    # a kept critique line. Zero matches means a garbled/hallucinated critique (or an
+    # ambiguous "drop everything") that must not be trusted to erase real content.
+    matched_any = any(
+        _normalize_bullet(ln) in kept_normalized
+        for s in prose
+        for ln in s.body.splitlines()
+        if ln.strip().startswith("-")
+    )
+    if not matched_any:
+        return prose  # fail-open: critique matches nothing real in the draft
+
+    result: list[Section] = []
+    for s in prose:
+        new_lines = [
+            ln
+            for ln in s.body.splitlines()
+            if not ln.strip().startswith("-") or _normalize_bullet(ln) in kept_normalized
+        ]
+        body = "\n".join(new_lines).strip()
+        if body:
+            result.append(Section(heading=s.heading, body=body, source=s.source))
+    return result
 
 
 _RESERVED_HEADINGS = {"verified semantics", "semantic claims"}
@@ -460,6 +619,9 @@ async def generate_scent(
                 profile, cast(Connection, conn), cap=distinct_cap, variant_seed=variant_seed
             )
         )
+        cn = build_code_name_notes(profile, cast(Connection, conn))
+        if cn is not None:
+            sections.append(cn)
         doc = ScentDoc(
             domain=name,
             kind="scent",
@@ -471,6 +633,7 @@ async def generate_scent(
             from labrat.maze.semantic_claims import parse_semantic_claims, verify_semantic_claims
 
             prose, raw_claims = await draft_semantics(doc, llm_fn)
+            prose = await prune_unsupported(doc, prose, llm_fn)  # C4.2 self-critique prune
             claims = parse_semantic_claims(raw_claims)
             verified = await verify_semantic_claims(claims, ctx, database=name)
             new_sections = list(doc.sections)
