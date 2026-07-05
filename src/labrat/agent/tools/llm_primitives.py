@@ -7,11 +7,11 @@ deterministic). The engine is pure orchestration over an injected ``ctx.llm_fn``
 only on the labrat-agent / AgentLoop path (``run_agent_task`` injects
 ``ctx.llm_fn``); the tools self-error with a structured result everywhere else.
 
-Note: ``_schema_fields``/``_parse_extract``/``_parse_classify`` currently have no
-in-module caller — the orchestrating ``extract_rows``/``classify_rows`` that wire
-them in lands in a follow-up task, hence the local ``reportUnusedFunction``
-suppressions below (real callers exist today in
-``tests/unit/test_llm_primitives_parsing.py``, which pyright does not scan).
+``extract_rows`` is the deterministic per-row fan-out loop: SELECT up to
+``max_rows`` rows, call ``ctx.llm_fn`` once per row via ``_extract_one``, parse,
+and assemble the result DataFrame. Extract mode (``spec`` a JSON-schema dict) is
+fully wired; classify mode (``spec`` a label list) raises ``NotImplementedError``
+until a follow-up task replaces that branch with ``classify_rows``'s field setup.
 """
 
 from __future__ import annotations
@@ -22,6 +22,9 @@ from dataclasses import dataclass
 from typing import cast
 
 import polars as pl
+
+from labrat.agent.tools.base import LLMFn, ToolContext
+from labrat.db.base import Connection
 
 # Hard fan-out cap: per-row calls multiply cost; never exceed this many rows.
 DEFAULT_MAX_ROWS = 200
@@ -65,7 +68,7 @@ def _strip_fences(raw: str) -> str:
     return match.group(1).strip() if match else stripped
 
 
-def _schema_fields(schema: dict[str, object]) -> list[str]:  # pyright: ignore[reportUnusedFunction]
+def _schema_fields(schema: dict[str, object]) -> list[str]:
     """Field names to extract: JSON-schema ``properties`` keys, else top-level keys."""
     properties = schema.get("properties")
     if isinstance(properties, dict):
@@ -73,9 +76,7 @@ def _schema_fields(schema: dict[str, object]) -> list[str]:  # pyright: ignore[r
     return list(schema.keys())
 
 
-def _parse_extract(  # pyright: ignore[reportUnusedFunction]
-    raw: str, fields: list[str]
-) -> dict[str, str | None] | None:
+def _parse_extract(raw: str, fields: list[str]) -> dict[str, str | None] | None:
     """Parse one extract reply into stringified fields.
 
     None on ANY failure: non-JSON, non-object JSON, or a missing requested field.
@@ -93,9 +94,7 @@ def _parse_extract(  # pyright: ignore[reportUnusedFunction]
     return {field: None if data[field] is None else str(data[field]) for field in fields}
 
 
-def _parse_classify(  # pyright: ignore[reportUnusedFunction]
-    raw: str, labels: list[str]
-) -> str | None:
+def _parse_classify(raw: str, labels: list[str]) -> str | None:
     """Validate one classify reply against ``labels``; return the canonical label.
 
     Exact match first, then a case-insensitive match mapped back to the canonical
@@ -106,3 +105,95 @@ def _parse_classify(  # pyright: ignore[reportUnusedFunction]
         return text
     by_lower = {label.lower(): label for label in labels}
     return by_lower.get(text.lower())
+
+
+async def extract_rows(
+    ctx: ToolContext,
+    *,
+    table: str,
+    text_column: str,
+    key_columns: list[str],
+    spec: dict[str, object] | list[str],
+    where: str | None = None,
+    limit: int | None = None,
+    max_rows: int = DEFAULT_MAX_ROWS,
+) -> ExtractResult:
+    """SELECT up to ``max_rows`` rows and fan out one ``ctx.llm_fn`` call per row.
+
+    ``spec`` is a JSON-schema dict (extract mode: one Utf8 column per schema field)
+    or a label list (classify mode: a single Utf8 ``category`` column constrained to
+    the labels). A per-row parse/LLM failure — or a NULL text cell — yields a
+    null-filled row and increments ``rows_failed``; the batch never aborts. ``where``
+    is an agent-provided raw SQL fragment (same trust model as run_sql's query);
+    ``table``/``text_column``/``key_columns`` ARE validated as identifiers. The row
+    cap is ``min(limit, max_rows)`` — the hard cap always wins. Raises RuntimeError
+    when ``ctx.llm_fn`` is None and ValueError on an unsafe identifier or an empty
+    spec; the tools convert these into structured errors.
+    """
+    llm_fn = ctx.llm_fn
+    if llm_fn is None:
+        raise RuntimeError("extract_rows requires an LLM-enabled context (ctx.llm_fn is None)")
+    for ident in (table, text_column, *key_columns):
+        if not _SAFE_IDENT.fullmatch(ident):
+            raise ValueError(f"unsafe SQL identifier: {ident!r}")
+
+    if isinstance(spec, dict):
+        fields = _schema_fields(spec)
+        if not fields:
+            raise ValueError("json_schema declares no fields to extract")
+    else:
+        raise NotImplementedError("classify mode lands with LlmClassifyTool")
+
+    cap = max_rows if limit is None else min(limit, max_rows)
+    select_cols = ", ".join([*key_columns, text_column])
+    sql = f"SELECT {select_cols} FROM {table}"
+    if where is not None:
+        sql += f" WHERE {where}"
+    sql += f" LIMIT {cap}"
+    source = cast(Connection, ctx.connection).execute(sql)
+
+    values: dict[str, list[str | None]] = {field: [] for field in fields}
+    rows_failed = 0
+    for row in source.iter_rows(named=True):
+        parsed = await _extract_one(llm_fn, spec, fields, row[text_column])
+        if parsed is None:
+            rows_failed += 1
+            for field in fields:
+                values[field].append(None)
+        else:
+            for field in fields:
+                values[field].append(parsed[field])
+
+    series = [source[key] for key in key_columns]
+    series.extend(pl.Series(field, values[field], dtype=pl.Utf8) for field in fields)
+    return ExtractResult(
+        df=pl.DataFrame(series), rows_processed=source.height, rows_failed=rows_failed
+    )
+
+
+async def _extract_one(
+    llm_fn: LLMFn,
+    spec: dict[str, object] | list[str],
+    fields: list[str],
+    text: object,
+) -> dict[str, str | None] | None:
+    """One row: build the prompt, call the LLM, parse. None on ANY failure.
+
+    A NULL text cell fails without spending an LLM call.
+    """
+    if text is None:
+        return None
+    if isinstance(spec, dict):
+        prompt = _EXTRACT_PROMPT_TEMPLATE.format(schema=json.dumps(spec, indent=2), text=str(text))
+    else:
+        prompt = _CLASSIFY_PROMPT_TEMPLATE.format(
+            labels="\n".join(f"- {label}" for label in spec), text=str(text)
+        )
+    try:
+        raw = await llm_fn(prompt)
+    except Exception:
+        return None
+    if isinstance(spec, dict):
+        return _parse_extract(raw, fields)
+    category = _parse_classify(raw, spec)
+    return None if category is None else {"category": category}
