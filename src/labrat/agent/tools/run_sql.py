@@ -10,11 +10,12 @@ from typing import cast
 
 import polars as pl
 import sqlglot
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.base import Connection
 from labrat.history.events import QueryEvent
 from labrat.history.log import QueryHistoryLog
@@ -282,6 +283,20 @@ class _Output(BaseModel):
     hint: str | None = None
     warnings: list[str] = []
 
+    # The executed result frame, carried outside the serialised surface so the
+    # ContextLedger can store it as a Parquet artifact. PrivateAttr → excluded
+    # from model_dump/JSON and from str(); off-ledger behavior is unchanged.
+    _result_df: pl.DataFrame | None = PrivateAttr(default=None)
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        if self.ok and self._result_df is not None:
+            return ("table", self._result_df)
+        return None
+
+    def attach_result_df(self, df: pl.DataFrame) -> None:
+        """Set the private result frame from outside the class (pyright-clean)."""
+        self._result_df = df
+
 
 class RunSqlTool(Tool[_Input]):
     """Execute a SQL query.
@@ -436,7 +451,7 @@ class RunSqlTool(Tool[_Input]):
                         "likely a bad join or wrong column."
                     )
 
-        return _Output(
+        out = _Output(
             ok=True,
             query=args.query,
             columns=df.columns,
@@ -444,3 +459,5 @@ class RunSqlTool(Tool[_Input]):
             row_count=len(df),
             warnings=warnings,
         )
+        out.attach_result_df(df)
+        return out
