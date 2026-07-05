@@ -54,8 +54,16 @@ class ContextLedger:
     def record(self, tool_name: str, dispatch: DispatchResult) -> ModelVisibleToolResult:
         value = dispatch.value
         full_str = str(value)
-        payload = value.ledger_payload() if isinstance(value, LedgerPayloadProvider) else None
-        if payload is not None:
+        payload: object = None
+        if isinstance(value, LedgerPayloadProvider):
+            try:
+                payload = value.ledger_payload()
+            except Exception:
+                # A tool's ledger_payload() hook can raise anything (or be
+                # buggy in ways we can't anticipate) — never let that crash
+                # the loop; degrade to the string fallback below.
+                payload = None
+        if isinstance(payload, tuple) and len(payload) == 2:
             kind, obj = payload
             if kind == "table" and isinstance(obj, pl.DataFrame):
                 return self._record_table(tool_name, full_str, obj)
@@ -65,6 +73,7 @@ class ContextLedger:
                 return self._record_trace(tool_name, full_str, cast("list[object]", obj))
             # Malformed hook (e.g. kind "table" but payload isn't a DataFrame):
             # never crash the loop — degrade to the string fallback.
+        # payload is None, or wrong shape (not a 2-tuple): degrade too.
         return self._record_fallback(tool_name, full_str)
 
     # ── paths ─────────────────────────────────────────────────────────────────

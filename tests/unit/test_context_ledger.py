@@ -96,6 +96,22 @@ class _MalformedHook:
         return ("table", "not a dataframe")
 
 
+class _RaisingHook:
+    def __str__(self) -> str:
+        return "raising-but-small"
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        raise RuntimeError("boom")
+
+
+class _WrongArityHook:
+    def __str__(self) -> str:
+        return "wrong-arity-but-small"
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        return ("table", pl.DataFrame({"a": [1]}), "extra")  # type: ignore[return-value]
+
+
 def test_under_budget_table_passes_through_with_row_count(store: ResultStore) -> None:
     ledger = ContextLedger(store, budget=LedgerBudget(max_rows=5, max_bytes=8000))
     value = _HookedTable(pl.DataFrame({"a": [1, 2]}))
@@ -155,3 +171,17 @@ def test_malformed_hook_degrades_to_string_fallback(store: ResultStore) -> None:
     mvtr = ledger.record("buggy", DispatchResult(ok=True, value=_MalformedHook()))
     assert mvtr.truncated is False  # small string → passthrough, no crash
     assert render(mvtr) == "malformed-but-small"
+
+
+def test_raising_hook_degrades_to_string_fallback(store: ResultStore) -> None:
+    ledger = ContextLedger(store)
+    mvtr = ledger.record("buggy", DispatchResult(ok=True, value=_RaisingHook()))
+    assert mvtr.truncated is False  # small string → passthrough, no crash
+    assert render(mvtr) == "raising-but-small"
+
+
+def test_wrong_arity_tuple_degrades_to_string_fallback(store: ResultStore) -> None:
+    ledger = ContextLedger(store)
+    mvtr = ledger.record("buggy", DispatchResult(ok=True, value=_WrongArityHook()))
+    assert mvtr.truncated is False  # small string → passthrough, no crash
+    assert render(mvtr) == "wrong-arity-but-small"
