@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from labrat.agent.tools.base import ToolContext, ToolRegistry
+from labrat.agent.tools.serialization import render
 from labrat.agent.verifier import Verifier
+from labrat.runtime.context_ledger import ContextLedger
 
 # ── content block types ───────────────────────────────────────────────────────
 
@@ -66,6 +68,7 @@ class AgentLoop:
         max_tool_calls: int | None = None,
         verifier: Verifier | None = None,
         max_verify_rounds: int = 2,
+        ledger: ContextLedger | None = None,
     ) -> None:
         from labrat.agent.prompts import build_system_prompt
         from labrat.agent.providers.base import ModelProvider  # deferred import
@@ -81,6 +84,7 @@ class AgentLoop:
         self._max_tool_calls = max_tool_calls
         self._verifier = verifier
         self._max_verify_rounds = max_verify_rounds
+        self._ledger = ledger
         self.history: list[dict[str, Any]] = []
         # Counters reset by run(); exposed so callers can inspect what was used.
         self.turns_used = 0
@@ -162,11 +166,19 @@ class AgentLoop:
                 dispatch = await self._registry.dispatch(tu.name, tu.input, self._ctx)
                 latency_ms = (time.monotonic() - _t0) * 1000.0
                 output_str = str(dispatch.value) if dispatch.ok else f"Error: {dispatch.error}"
+                # Ledger bounds the MODEL-VISIBLE string only; the trace/audit hook
+                # (on_tool_call) always receives the full output_str. No ledger →
+                # byte-identical to the pre-ledger loop.
+                model_visible = output_str
+                if self._ledger is not None and dispatch.ok:
+                    model_visible = render(
+                        self._ledger.record(tu.name, dispatch, full_str=output_str)
+                    )
                 tool_result_content.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tu.id,
-                        "content": output_str,
+                        "content": model_visible,
                     }
                 )
                 if on_tool_call is not None:

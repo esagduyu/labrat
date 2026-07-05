@@ -19,6 +19,7 @@ from typing import cast
 from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.base import Connection
 from labrat.db.catalog import Catalog, Table
 
@@ -69,6 +70,9 @@ class _Output(BaseModel):
     truncated: bool = False
     note: str | None = None
     tables: list[_TableProfile] = []
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        return ("json", self.model_dump())
 
 
 class ProfileDatasetTool(Tool[_Input]):
