@@ -7,11 +7,18 @@ as an opt-in; when absent the loop is byte-identical to today.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from typing import cast
+
+import polars as pl
 
 from labrat.agent.tools.base import DispatchResult
-from labrat.agent.tools.serialization import ModelVisibleToolResult
-from labrat.results.store import ResultStore, cap_bytes
+from labrat.agent.tools.serialization import (
+    LedgerPayloadProvider,
+    ModelVisibleToolResult,
+)
+from labrat.results.store import ResultStore, cap_bytes, render_table_head
 
 
 @dataclass(frozen=True)
@@ -45,10 +52,78 @@ class ContextLedger:
         return self._store
 
     def record(self, tool_name: str, dispatch: DispatchResult) -> ModelVisibleToolResult:
-        full_str = str(dispatch.value)
+        value = dispatch.value
+        full_str = str(value)
+        payload = value.ledger_payload() if isinstance(value, LedgerPayloadProvider) else None
+        if payload is not None:
+            kind, obj = payload
+            if kind == "table" and isinstance(obj, pl.DataFrame):
+                return self._record_table(tool_name, full_str, obj)
+            if kind == "json":
+                return self._record_json(tool_name, full_str, obj)
+            if kind == "trace" and isinstance(obj, list):
+                return self._record_trace(tool_name, full_str, cast("list[object]", obj))
+            # Malformed hook (e.g. kind "table" but payload isn't a DataFrame):
+            # never crash the loop — degrade to the string fallback.
         return self._record_fallback(tool_name, full_str)
 
     # ── paths ─────────────────────────────────────────────────────────────────
+
+    def _record_table(
+        self, tool_name: str, full_str: str, df: pl.DataFrame
+    ) -> ModelVisibleToolResult:
+        if df.height <= self._budget.max_rows and not self._over_bytes(full_str):
+            return _passthrough(full_str, row_count=df.height)
+        ref = self._store.put_table(df, meta={"tool": tool_name})
+        shown = min(self._budget.max_rows, df.height)
+        cols = ", ".join(df.columns[:20]) + (", ..." if df.width > 20 else "")
+        summary = (
+            f"{tool_name}: {df.height} rows x {df.width} columns ({cols}); "
+            f"showing first {shown} rows; full result stored."
+        )
+        return ModelVisibleToolResult(
+            summary=summary,
+            preview=cap_bytes(render_table_head(df, self._budget.max_rows), self._budget.max_bytes),
+            artifact_ref=ref,
+            full_row_count=df.height,
+            truncated=True,
+        )
+
+    def _record_json(self, tool_name: str, full_str: str, obj: object) -> ModelVisibleToolResult:
+        if not self._over_bytes(full_str):
+            return _passthrough(full_str)
+        ref = self._store.put_json(obj, kind="json")
+        rendered = json.dumps(obj, default=str)
+        summary = (
+            f"{tool_name}: {len(rendered.encode('utf-8'))}-byte JSON payload; "
+            f"preview capped at {self._budget.max_bytes} bytes; full result stored."
+        )
+        return ModelVisibleToolResult(
+            summary=summary,
+            preview=cap_bytes(rendered, self._budget.max_bytes),
+            artifact_ref=ref,
+            full_row_count=None,
+            truncated=True,
+        )
+
+    def _record_trace(
+        self, tool_name: str, full_str: str, items: list[object]
+    ) -> ModelVisibleToolResult:
+        if len(items) <= self._budget.max_rows and not self._over_bytes(full_str):
+            return _passthrough(full_str, row_count=len(items))
+        ref = self._store.put_json(items, kind="trace")
+        shown = min(self._budget.max_rows, len(items))
+        summary = (
+            f"{tool_name}: {len(items)} trace items; showing first {shown}; full trace stored."
+        )
+        lines = [json.dumps(item, default=str) for item in items[: self._budget.max_rows]]
+        return ModelVisibleToolResult(
+            summary=summary,
+            preview=cap_bytes("\n".join(lines), self._budget.max_bytes),
+            artifact_ref=ref,
+            full_row_count=len(items),
+            truncated=True,
+        )
 
     def _record_fallback(self, tool_name: str, full_str: str) -> ModelVisibleToolResult:
         """String fallback for outputs with no (usable) ledger_payload hook."""
