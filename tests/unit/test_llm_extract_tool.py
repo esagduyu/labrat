@@ -151,6 +151,45 @@ async def test_extract_tool_structured_error_on_engine_failure(tmp_path: Path) -
     conn.disconnect()
 
 
+async def test_extract_tool_where_trailing_comment_cannot_bypass_cap(tmp_path: Path) -> None:
+    """F1 (BLOCKING) at the tool boundary: a `where` fragment ending in a trailing
+    SQL comment must not fan out over the whole table."""
+    path = str(tmp_path / "many.duckdb")
+    raw = duckdb.connect(path)
+    raw.execute("CREATE TABLE reviews (id INTEGER, body VARCHAR)")
+    raw.executemany(
+        "INSERT INTO reviews VALUES (?, ?)",
+        [(i, f"Great phone by Acme number {i}") for i in range(10)],
+    )
+    raw.close()
+    conn = DuckDBConnection(path=path, read_only=False)
+    conn.connect()
+
+    calls: list[str] = []
+
+    async def counting(prompt: str) -> str:
+        calls.append(prompt)
+        return json.dumps({"brand": "Acme", "product": "phone"})
+
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=counting)
+    tool = LlmExtractTool()
+    out = await tool.execute(
+        ctx,
+        tool.input_model(
+            table="reviews",
+            text_column="body",
+            json_schema=_SCHEMA,
+            key_columns=["id"],
+            where="1=1 --",
+            limit=3,
+        ),
+    )
+    assert out.ok
+    assert out.rows_processed == 3
+    assert len(calls) == 3
+    conn.disconnect()
+
+
 async def test_extract_tool_requires_duckdb_primary() -> None:
     ctx = ToolContext(connection=object(), catalog=None, llm_fn=_fake_llm)
     tool = LlmExtractTool()
