@@ -486,3 +486,19 @@ PR #65 accepted: **LabRat (Claude Sonnet 4.6 + Cartographer) is #8 of 21** on th
   emits a `lineage`-tagged View Lineage section from view metadata only (GT-firewalled
   by construction: build_view_lineage takes a Catalog, no Connection); no-views DBs
   yield byte-identical Scent.
+
+## 2026-07-05 — Context Ledger Phase 1 (T1d foundation)
+
+Tool outputs no longer necessarily enter AgentLoop history verbatim: an opt-in
+ContextLedger (`src/labrat/runtime/context_ledger.py`) bounds the model-visible
+string (budget: 50 rows / 8000 bytes) and stores over-budget payloads in a
+ResultStore (`src/labrat/results/store.py`; tables→Parquet+meta, profiles→JSON,
+traces→JSONL) addressable by `result://<session>/<n>` refs. Tools declare large
+payloads via an explicit `ledger_payload()` hook (run_sql/sample_rows → table,
+profile_dataset/column_stats → json); hookless tools get a byte-bounded string
+fallback. Summaries are mechanical (no LLM). Bare AgentLoop without a ledger is
+byte-identical to before; `run_agent_task` defaults the ledger ON
+(`enable_ledger=False` restores bare behavior; `ledger_dir=` for durable
+provenance, else a per-call temp dir). `on_tool_call` still receives full
+payloads, so DAB trace validity is unaffected. NOT a claude-mcp lever (that
+path bypasses AgentLoop) — this is the M4 program-mode/`llm_extract` foundation.
