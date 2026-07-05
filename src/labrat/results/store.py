@@ -16,10 +16,34 @@ from typing import Any, Literal, cast
 import polars as pl
 
 
+def cap_bytes(text: str, max_bytes: int) -> str:
+    """Truncate to at most ``max_bytes`` of UTF-8. Strict — no suffix marker.
+
+    Truncation is signalled by the caller (ModelVisibleToolResult.truncated /
+    the mechanical summary), not by mutating the preview past its budget.
+    """
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    return raw[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def render_table_head(df: pl.DataFrame, max_rows: int) -> str:
+    """Deterministic TSV rendering: header line + the first ``max_rows`` rows."""
+    lines = ["\t".join(df.columns)]
+    for row in df.head(max_rows).iter_rows():
+        lines.append("\t".join("" if v is None else str(v) for v in row))
+    return "\n".join(lines)
+
+
 class ResultStore:
     """Per-session artifact directory under a caller-provided root."""
 
     def __init__(self, root: Path, *, session: str | None = None) -> None:
+        if session is not None and ("/" in session or "\\" in session or ".." in session):
+            raise ValueError(
+                f"invalid session (must not contain path separators or '..'): {session!r}"
+            )
         self._session = session if session is not None else uuid.uuid4().hex[:8]
         self._dir = Path(root) / self._session
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -42,10 +66,10 @@ class ResultStore:
         path = self._dir / f"{n:04d}.table.parquet"
         df.write_parquet(path)
         sidecar: dict[str, Any] = {
+            **(meta or {}),
             "columns": df.columns,
             "dtypes": [str(t) for t in df.dtypes],
             "row_count": df.height,
-            **(meta or {}),
         }
         (self._dir / f"{n:04d}.table.meta.json").write_text(
             json.dumps(sidecar, default=str), encoding="utf-8"
@@ -96,6 +120,16 @@ class ResultStore:
         if isinstance(data, dict):
             return cast(dict[str, Any], data)
         return None
+
+    def preview(self, ref: str, *, max_rows: int = 50, max_bytes: int = 8000) -> str:
+        """Bounded human/model-readable preview of an artifact (row AND byte capped)."""
+        kind, path = self._resolve(ref)
+        if kind == "table":
+            return cap_bytes(render_table_head(pl.read_parquet(path), max_rows), max_bytes)
+        if kind == "trace":
+            lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln]
+            return cap_bytes("\n".join(lines[:max_rows]), max_bytes)
+        return cap_bytes(path.read_text(encoding="utf-8"), max_bytes)
 
     # ── internals ─────────────────────────────────────────────────────────────
 

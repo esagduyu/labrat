@@ -91,3 +91,68 @@ def test_mixed_kinds_resolve_independently(tmp_path: Path, df: pl.DataFrame) -> 
     assert store.get(json_ref) == {"k": "v"}
     assert store.get(trace_ref) == [{"i": 1}]
     assert store.meta(json_ref) is None  # meta sidecar is table-only
+
+
+def test_cap_bytes_strict_and_multibyte_safe() -> None:
+    from labrat.results.store import cap_bytes
+
+    assert cap_bytes("short", 100) == "short"
+    capped = cap_bytes("é" * 100, 15)  # "é" is 2 bytes in UTF-8
+    assert len(capped.encode("utf-8")) <= 15
+    assert "�" not in capped  # no replacement chars from a split code point
+
+
+def test_render_table_head_tsv() -> None:
+    from labrat.results.store import render_table_head
+
+    frame = pl.DataFrame({"a": [1, 2, 3], "b": ["x", None, "z"]})
+    rendered = render_table_head(frame, 2)
+    assert rendered.splitlines() == ["a\tb", "1\tx", "2\t"]
+
+
+def test_preview_table_respects_row_and_byte_caps(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path)
+    big = pl.DataFrame({"n": list(range(1000)), "s": ["value"] * 1000})
+    ref = store.put_table(big)
+
+    by_rows = store.preview(ref, max_rows=5, max_bytes=100_000)
+    assert len(by_rows.splitlines()) == 6  # header + 5 rows
+
+    by_bytes = store.preview(ref, max_rows=1000, max_bytes=64)
+    assert len(by_bytes.encode("utf-8")) <= 64
+
+
+def test_preview_json_and_trace_respect_caps(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path)
+    json_ref = store.put_json({"blob": "y" * 500})
+    assert len(store.preview(json_ref, max_rows=50, max_bytes=64).encode("utf-8")) <= 64
+
+    trace_ref = store.put_json([{"i": i} for i in range(20)], kind="trace")
+    trace_preview = store.preview(trace_ref, max_rows=3, max_bytes=100_000)
+    assert len(trace_preview.splitlines()) == 3
+    assert len(store.preview(trace_ref, max_rows=20, max_bytes=32).encode("utf-8")) <= 32
+
+
+def test_session_path_traversal_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid session"):
+        ResultStore(tmp_path, session="../evil")
+    with pytest.raises(ValueError, match="invalid session"):
+        ResultStore(tmp_path, session="foo/../../evil")
+    with pytest.raises(ValueError, match="invalid session"):
+        ResultStore(tmp_path, session="a/b")
+    with pytest.raises(ValueError, match="invalid session"):
+        ResultStore(tmp_path, session="a\\b")
+    # session=None (auto-generated) still works
+    store = ResultStore(tmp_path)
+    assert store.directory == tmp_path / store.session
+
+
+def test_put_table_meta_builtin_fields_win_over_caller_meta(
+    tmp_path: Path, df: pl.DataFrame
+) -> None:
+    store = ResultStore(tmp_path)
+    ref = store.put_table(df, meta={"row_count": 999, "source": "x"})
+    meta = store.meta(ref)
+    assert meta is not None
+    assert meta["row_count"] == df.height  # built-in wins over caller collision
+    assert meta["source"] == "x"  # non-colliding caller key preserved
