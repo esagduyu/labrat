@@ -51,9 +51,16 @@ class ContextLedger:
     def store(self) -> ResultStore:
         return self._store
 
-    def record(self, tool_name: str, dispatch: DispatchResult) -> ModelVisibleToolResult:
+    def record(
+        self,
+        tool_name: str,
+        dispatch: DispatchResult,
+        *,
+        full_str: str | None = None,
+    ) -> ModelVisibleToolResult:
         value = dispatch.value
-        full_str = str(value)
+        if full_str is None:
+            full_str = str(value)
         payload: object = None
         if isinstance(value, LedgerPayloadProvider):
             try:
@@ -65,15 +72,24 @@ class ContextLedger:
                 payload = None
         if isinstance(payload, tuple) and len(payload) == 2:
             kind, obj = payload
-            if kind == "table" and isinstance(obj, pl.DataFrame):
-                return self._record_table(tool_name, full_str, obj)
-            if kind == "json":
-                return self._record_json(tool_name, full_str, obj)
-            if kind == "trace" and isinstance(obj, list):
-                return self._record_trace(tool_name, full_str, cast("list[object]", obj))
-            # Malformed hook (e.g. kind "table" but payload isn't a DataFrame):
-            # never crash the loop — degrade to the string fallback.
-        # payload is None, or wrong shape (not a 2-tuple): degrade too.
+            try:
+                if kind == "table" and isinstance(obj, pl.DataFrame):
+                    return self._record_table(tool_name, full_str, obj)
+                if kind == "json":
+                    return self._record_json(tool_name, full_str, obj)
+                if kind == "trace" and isinstance(obj, list):
+                    return self._record_trace(tool_name, full_str, cast("list[object]", obj))
+                # Malformed hook (e.g. kind "table" but payload isn't a
+                # DataFrame): never crash the loop — degrade to the string
+                # fallback below.
+            except Exception:
+                # The store-write path (e.g. json.dumps on an unserialisable
+                # object) can raise on a well-formed-looking payload we can't
+                # anticipate — never let that crash the loop; degrade to the
+                # string fallback below.
+                pass
+        # payload is None, or wrong shape (not a 2-tuple), or the typed store
+        # write raised: degrade to the string fallback.
         return self._record_fallback(tool_name, full_str)
 
     # ── paths ─────────────────────────────────────────────────────────────────

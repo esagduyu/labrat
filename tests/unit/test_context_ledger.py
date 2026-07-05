@@ -185,3 +185,39 @@ def test_wrong_arity_tuple_degrades_to_string_fallback(store: ResultStore) -> No
     mvtr = ledger.record("buggy", DispatchResult(ok=True, value=_WrongArityHook()))
     assert mvtr.truncated is False  # small string → passthrough, no crash
     assert render(mvtr) == "wrong-arity-but-small"
+
+
+class _CircularJson:
+    """A ledger_payload() hook whose declared json payload can't be serialised."""
+
+    def __str__(self) -> str:
+        return "circular-but-small"
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        obj: dict[str, object] = {"a": 1}
+        obj["self"] = obj  # circular reference — json.dumps(..., default=str) still raises
+        return ("json", obj)
+
+
+def test_unserializable_typed_payload_degrades_to_string_fallback(store: ResultStore) -> None:
+    """A valid ('json', obj) whose obj can't be json.dumps'd must not crash record()."""
+    ledger = ContextLedger(store, budget=LedgerBudget(max_rows=50, max_bytes=1))
+    mvtr = ledger.record("buggy", DispatchResult(ok=True, value=_CircularJson()))
+    assert render(mvtr)  # returns a valid ModelVisibleToolResult, no exception raised
+
+
+def test_record_uses_precomputed_full_str_when_provided(store: ResultStore) -> None:
+    """record() must not recompute str(dispatch.value) when full_str is passed."""
+    ledger = ContextLedger(store)
+    dispatch = DispatchResult(ok=True, value="the real value")
+    mvtr = ledger.record("echo", dispatch, full_str="SENTINEL")
+    assert str(dispatch.value) != "SENTINEL"
+    assert render(mvtr) == "SENTINEL"
+
+
+def test_record_without_full_str_computes_as_before(store: ResultStore) -> None:
+    """Backward-compatible: omitting full_str still computes str(dispatch.value)."""
+    ledger = ContextLedger(store)
+    dispatch = DispatchResult(ok=True, value="echoed: hi")
+    mvtr = ledger.record("echo", dispatch)
+    assert render(mvtr) == "echoed: hi"

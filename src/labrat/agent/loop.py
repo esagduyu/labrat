@@ -171,7 +171,9 @@ class AgentLoop:
                 # byte-identical to the pre-ledger loop.
                 model_visible = output_str
                 if self._ledger is not None and dispatch.ok:
-                    model_visible = render(self._ledger.record(tu.name, dispatch))
+                    model_visible = render(
+                        self._ledger.record(tu.name, dispatch, full_str=output_str)
+                    )
                 tool_result_content.append(
                     {
                         "type": "tool_result",

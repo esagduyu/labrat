@@ -147,6 +147,28 @@ def test_session_path_traversal_rejected(tmp_path: Path) -> None:
     assert store.directory == tmp_path / store.session
 
 
+def test_construction_does_not_create_session_dir(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path, session="lazy")
+    assert store.directory == tmp_path / "lazy"
+    assert not store.directory.exists()  # lazy: no mkdir until first put_*
+
+
+def test_first_put_table_creates_session_dir(tmp_path: Path, df: pl.DataFrame) -> None:
+    store = ResultStore(tmp_path, session="lazy2")
+    assert not store.directory.exists()
+    ref = store.put_table(df)
+    assert store.directory.is_dir()
+    assert store.get(ref).equals(df)
+
+
+def test_first_put_json_creates_session_dir(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path, session="lazy3")
+    assert not store.directory.exists()
+    ref = store.put_json({"k": "v"})
+    assert store.directory.is_dir()
+    assert store.get(ref) == {"k": "v"}
+
+
 def test_put_table_meta_builtin_fields_win_over_caller_meta(
     tmp_path: Path, df: pl.DataFrame
 ) -> None:

@@ -46,7 +46,10 @@ class ResultStore:
             )
         self._session = session if session is not None else uuid.uuid4().hex[:8]
         self._dir = Path(root) / self._session
-        self._dir.mkdir(parents=True, exist_ok=True)
+        # Lazy: no mkdir here — every run_agent_task call constructs a
+        # ResultStore (ledger default-on), so eager mkdir left an empty temp
+        # dir behind even when nothing was ever stored. The first put_*
+        # creates the dir (see _ensure_dir).
         self._next_id = 0
         self._entries: dict[int, tuple[str, Path]] = {}  # n -> (kind, path)
 
@@ -62,6 +65,7 @@ class ResultStore:
 
     def put_table(self, df: pl.DataFrame, *, meta: dict[str, Any] | None = None) -> str:
         """Store a DataFrame as Parquet + a JSON metadata sidecar; return its ref."""
+        self._ensure_dir()
         n = self._claim()
         path = self._dir / f"{n:04d}.table.parquet"
         df.write_parquet(path)
@@ -79,6 +83,7 @@ class ResultStore:
 
     def put_json(self, obj: object, kind: Literal["json", "trace"] = "json") -> str:
         """Store a JSON payload (kind="json") or a JSONL trace (kind="trace")."""
+        self._ensure_dir()
         n = self._claim()
         if kind == "trace":
             if not isinstance(obj, list):
@@ -132,6 +137,9 @@ class ResultStore:
         return cap_bytes(path.read_text(encoding="utf-8"), max_bytes)
 
     # ── internals ─────────────────────────────────────────────────────────────
+
+    def _ensure_dir(self) -> None:
+        self._dir.mkdir(parents=True, exist_ok=True)
 
     def _claim(self) -> int:
         n = self._next_id
