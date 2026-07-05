@@ -7,6 +7,7 @@ from typing import cast
 from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.base import Connection
 
 
@@ -27,6 +28,9 @@ class _Output(BaseModel):
     distinct_count: int
     min_value: str | None = None
     max_value: str | None = None
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        return ("json", self.model_dump())
 
 
 class ColumnStatsTool(Tool[_Input]):
