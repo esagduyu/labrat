@@ -502,3 +502,25 @@ byte-identical to before; `run_agent_task` defaults the ledger ON
 provenance, else a per-call temp dir). `on_tool_call` still receives full
 payloads, so DAB trace validity is unaffected. NOT a claude-mcp lever (that
 path bypasses AgentLoop) — this is the M4 program-mode/`llm_extract` foundation.
+
+## llm_extract / llm_classify — first LLM-calling tools (per-row primitives) (2026-07-05)
+
+Shipped per-row LLM primitives (`llm_extract`, `llm_classify`) as registered data
+tools backed by a shared engine (`agent/tools/llm_primitives.py::extract_rows`)
+that fans out one `ctx.llm_fn` call per row from a deterministic loop. PromptQL-
+style per-row primitives are white space on the DAB leaderboard (competitive
+analysis 2026-07-03) and attack bulk unstructured extraction. Builds on the
+Context Ledger: results bind outside model context (`ledger_payload() ->
+("table", df)`) AND materialize as a queryable DuckDB temp table
+(`llm_extract_result` / `llm_classify_result` by default).
+
+Boundaries (non-negotiable): functional only where `run_agent_task` injects
+`ctx.llm_fn` (labrat-agent/AgentLoop path; the runner adapts its own provider via
+`provider_llm_fn` — same model + billing) — structured `ok=False` self-error
+everywhere else (claude-mcp, MCP server, TUI); hard `max_rows` cap of 200;
+per-row failures (NULL text, LLM error, bad JSON, missing field, out-of-label)
+yield null rows + `rows_failed`, never aborting the batch; extracted columns are
+always VARCHAR. NOT a claude-mcp leaderboard lever (that path bypasses
+AgentLoop). Live DAB/patents validation is a deferred follow-on run. Sequential
+fan-out for now; concurrency is a later optimization behind the same engine
+interface.

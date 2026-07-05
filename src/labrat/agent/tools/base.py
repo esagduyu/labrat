@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
+
+# One-shot async LLM call: prompt in, raw reply text out. Structurally identical to
+# the alias in labrat.agent.verifier (kept there for its own callers); tools import
+# this one. run_agent_task injects an implementation onto ToolContext.llm_fn.
+LLMFn = Callable[[str], Awaitable[str]]
 
 
 class ToolContext:
@@ -19,6 +25,10 @@ class ToolContext:
 
       # Multi-DB — agent can reach each DB by name:
       ToolContext(connections={"main": conn1, "aux": conn2}, catalogs={...}, primary="main")
+
+    ``llm_fn`` is an optional one-shot LLM callable (prompt -> reply) injected by
+    ``run_agent_task`` for the per-row llm_extract/llm_classify tools; it defaults
+    to None, and every deterministic context leaves it None.
     """
 
     def __init__(
@@ -31,6 +41,7 @@ class ToolContext:
         primary: str = "primary",
         profile_name: str = "default",
         read_only: bool = False,
+        llm_fn: LLMFn | None = None,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -45,6 +56,7 @@ class ToolContext:
         self.primary = primary
         self.profile_name = profile_name
         self.read_only = read_only
+        self.llm_fn = llm_fn
 
     @property
     def connection(self) -> object:
