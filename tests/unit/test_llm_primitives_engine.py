@@ -173,3 +173,98 @@ async def test_extract_rows_limit_clamped_to_max_rows(tmp_path: Path) -> None:
     assert result.rows_processed == 2
     assert len(calls) == 2
     conn.disconnect()
+
+
+async def test_extract_rows_classify_mode(tmp_path: Path) -> None:
+    async def classify_llm(prompt: str) -> str:
+        return "Sports" if "Alan" in prompt else "Business"
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=classify_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+    )
+    assert result.df.columns == ["id", "category"]
+    assert result.rows_failed == 0
+    by_id = dict(zip(result.df["id"].to_list(), result.df["category"].to_list(), strict=True))
+    assert by_id == {1: "Business", 2: "Business", 3: "Sports"}
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_out_of_label_fails_row(tmp_path: Path) -> None:
+    async def rogue_llm(prompt: str) -> str:
+        return "Politics" if "Grace" in prompt else "Business"
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=rogue_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+    )
+    assert result.rows_failed == 1
+    assert result.df.filter(pl.col("id") == 2)["category"].to_list() == [None]
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_empty_labels_rejected(tmp_path: Path) -> None:
+    async def never(prompt: str) -> str:
+        raise AssertionError("must not be called")
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=never)
+    with pytest.raises(ValueError, match="labels"):
+        await extract_rows(
+            ctx, table="patents", text_column="abstract", key_columns=["id"], spec=[]
+        )
+    conn.disconnect()
+
+
+async def test_extract_rows_where_filters(tmp_path: Path) -> None:
+    async def classify_llm(prompt: str) -> str:
+        return "Business"
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=classify_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        where="id > 1",
+    )
+    assert result.rows_processed == 2
+    assert set(result.df["id"].to_list()) == {2, 3}
+    conn.disconnect()
+
+
+async def test_extract_rows_null_text_fails_row_without_llm_call(tmp_path: Path) -> None:
+    path = str(tmp_path / "nulls.duckdb")
+    raw = duckdb.connect(path)
+    raw.execute("CREATE TABLE notes (id INTEGER, body VARCHAR)")
+    raw.execute("INSERT INTO notes VALUES (1, 'hello'), (2, NULL)")
+    raw.close()
+    conn = DuckDBConnection(path=path, read_only=False)
+    conn.connect()
+
+    calls: list[str] = []
+
+    async def counting(prompt: str) -> str:
+        calls.append(prompt)
+        return "Business"
+
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=counting)
+    result = await extract_rows(
+        ctx, table="notes", text_column="body", key_columns=["id"], spec=["Business", "Sports"]
+    )
+    assert result.rows_processed == 2
+    assert result.rows_failed == 1
+    assert len(calls) == 1
+    conn.disconnect()

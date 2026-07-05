@@ -9,9 +9,9 @@ only on the labrat-agent / AgentLoop path (``run_agent_task`` injects
 
 ``extract_rows`` is the deterministic per-row fan-out loop: SELECT up to
 ``max_rows`` rows, call ``ctx.llm_fn`` once per row via ``_extract_one``, parse,
-and assemble the result DataFrame. Extract mode (``spec`` a JSON-schema dict) is
-fully wired; classify mode (``spec`` a label list) raises ``NotImplementedError``
-until a follow-up task replaces that branch with ``classify_rows``'s field setup.
+and assemble the result DataFrame. Extract mode (``spec`` a JSON-schema dict)
+and classify mode (``spec`` a label list, single ``category`` column) are both
+fully wired.
 """
 
 from __future__ import annotations
@@ -142,7 +142,9 @@ async def extract_rows(
         if not fields:
             raise ValueError("json_schema declares no fields to extract")
     else:
-        raise NotImplementedError("classify mode lands with LlmClassifyTool")
+        if not spec:
+            raise ValueError("labels must be a non-empty list")
+        fields = ["category"]
 
     cap = max_rows if limit is None else min(limit, max_rows)
     select_cols = ", ".join([*key_columns, text_column])
