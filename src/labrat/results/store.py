@@ -1,9 +1,9 @@
 """ResultStore: addressable on-disk store for over-budget tool payloads.
 
 Artifacts are the provenance backbone ("Cheese"): tables → Parquet + a JSON
-metadata sidecar. Every put returns an opaque ``artifact_ref``
-("result://<session>/<n>") that ``get`` resolves back. Purely mechanical —
-no LLM anywhere in this module.
+metadata sidecar, profile snapshots → JSON, traces → JSONL. Every put returns
+an opaque ``artifact_ref`` ("result://<session>/<n>") that ``get`` resolves
+back. Purely mechanical — no LLM anywhere in this module.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import polars as pl
 
@@ -53,14 +53,38 @@ class ResultStore:
         self._entries[n] = ("table", path)
         return self._ref(n)
 
+    def put_json(self, obj: object, kind: Literal["json", "trace"] = "json") -> str:
+        """Store a JSON payload (kind="json") or a JSONL trace (kind="trace")."""
+        n = self._claim()
+        if kind == "trace":
+            if not isinstance(obj, list):
+                raise TypeError("trace payload must be a list of JSON-serialisable items")
+            items = cast("list[object]", obj)
+            path = self._dir / f"{n:04d}.trace.jsonl"
+            lines = [json.dumps(item, default=str) for item in items]
+            path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            self._entries[n] = ("trace", path)
+            return self._ref(n)
+        path = self._dir / f"{n:04d}.json"
+        path.write_text(json.dumps(obj, default=str), encoding="utf-8")
+        self._entries[n] = ("json", path)
+        return self._ref(n)
+
     # ── readers ───────────────────────────────────────────────────────────────
 
     def get(self, ref: str) -> object:
-        """Resolve a ref back to its stored payload (table refs → pl.DataFrame)."""
+        """Resolve a ref back to its stored payload.
+
+        table → pl.DataFrame; json → the parsed object; trace → list of parsed items.
+        """
         kind, path = self._resolve(ref)
         if kind == "table":
             return pl.read_parquet(path)
-        raise ValueError(f"unknown artifact_ref: {ref!r}")
+        if kind == "trace":
+            return [
+                json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
+            ]
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def meta(self, ref: str) -> dict[str, Any] | None:
         """Return the JSON metadata sidecar for a table ref; None for other kinds."""

@@ -55,3 +55,39 @@ def test_unknown_ref_raises_value_error(tmp_path: Path, df: pl.DataFrame) -> Non
         store.get("result://other/0000")
     with pytest.raises(ValueError, match="unknown artifact_ref"):
         store.get("garbage")
+
+
+def test_put_json_roundtrips_object(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path)
+    obj = {"database": "main", "tables": [{"name": "t", "row_count": 42}]}
+    ref = store.put_json(obj)
+    assert store.get(ref) == obj
+
+
+def test_put_json_trace_roundtrips_as_jsonl(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path)
+    items = [{"step": 1, "tool": "run_sql"}, {"step": 2, "tool": "sample_rows"}]
+    ref = store.put_json(items, kind="trace")
+    assert store.get(ref) == items
+    # trace files are JSONL on disk (one JSON object per line)
+    jsonl_files = list(store.directory.glob("*.trace.jsonl"))
+    assert len(jsonl_files) == 1
+    lines = jsonl_files[0].read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+
+
+def test_put_json_trace_requires_list(tmp_path: Path) -> None:
+    store = ResultStore(tmp_path)
+    with pytest.raises(TypeError, match="trace payload must be a list"):
+        store.put_json({"not": "a list"}, kind="trace")
+
+
+def test_mixed_kinds_resolve_independently(tmp_path: Path, df: pl.DataFrame) -> None:
+    store = ResultStore(tmp_path)
+    table_ref = store.put_table(df)
+    json_ref = store.put_json({"k": "v"})
+    trace_ref = store.put_json([{"i": 1}], kind="trace")
+    assert isinstance(store.get(table_ref), pl.DataFrame)
+    assert store.get(json_ref) == {"k": "v"}
+    assert store.get(trace_ref) == [{"i": 1}]
+    assert store.meta(json_ref) is None  # meta sidecar is table-only
