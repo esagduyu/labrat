@@ -19,8 +19,18 @@ from pydantic import BaseModel, ConfigDict
 from labrat.agent.loop import AgentLoop
 from labrat.agent.providers.base import ModelProvider
 from labrat.agent.tools.base import ToolContext, ToolRegistry
+from labrat.agent.verifier import provider_llm_fn
 from labrat.results.store import ResultStore
 from labrat.runtime.context_ledger import ContextLedger
+
+# System prompt for the injected per-row llm_fn (llm_extract / llm_classify).
+# Kept terse and format-obsessed: each per-row prompt carries its own full
+# instructions; this only reinforces the output discipline.
+_LLM_FN_SYSTEM = (
+    "You are a precise per-row data-extraction engine. Follow the output-format "
+    "instructions in each request exactly: reply with ONLY the requested JSON object "
+    "or category value — no prose, no markdown fences, no explanation."
+)
 
 
 class AgentTaskResult(BaseModel):
@@ -65,6 +75,9 @@ async def run_agent_task(
     ``ledger_dir`` when given (pass the run dir for durable provenance);
     otherwise a per-call temp directory (``tempfile.mkdtemp``, OS-reaped).
     ``enable_ledger=False`` restores bare-loop behavior.
+
+    This runner also injects ``ctx.llm_fn`` (via ``provider_llm_fn``) when the caller
+    left it None, enabling the per-row llm_extract/llm_classify tools on this path.
     """
     text_parts: list[str] = []
 
@@ -73,9 +86,16 @@ async def run_agent_task(
 
     verifier = None
     if verify:
-        from labrat.agent.verifier import LLMVerifier, provider_llm_fn
+        from labrat.agent.verifier import LLMVerifier
 
         verifier = LLMVerifier(provider_llm_fn(provider))
+
+    # Per-row LLM primitives (llm_extract / llm_classify) need an injected llm_fn.
+    # The loop's own provider doubles as the per-row caller (same model + billing).
+    # Only set when the caller hasn't provided one — caller injection wins; every
+    # other ToolContext builder (TUI, MCP server, DAB claude-mcp) leaves it None.
+    if ctx.llm_fn is None:
+        ctx.llm_fn = provider_llm_fn(provider, system=_LLM_FN_SYSTEM)
 
     ledger: ContextLedger | None = None
     if enable_ledger:
