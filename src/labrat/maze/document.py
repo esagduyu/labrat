@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
 _H2_RE = re.compile(r"^##\s+(.*)$", re.MULTILINE)
-_RECOGNIZED_SOURCES = {"verified", "draft", "human", "lineage"}
+_RECOGNIZED_SOURCES = {"verified", "draft", "human", "harvested", "lineage", "semantic_layer"}
 _SOURCE_LINE_RE = re.compile(r"^\*\*Source:\*\*\s*(\w+)\b.*$")
 
 
