@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from labrat.agent.program.dsl import Program, ResolvedHandle, resolve_refs
+from labrat.agent.program.dsl import Program, ProgramError, ResolvedHandle, resolve_refs
 from labrat.agent.tools.base import ToolContext, ToolRegistry
 
 DEFAULT_MAX_STEPS = 20
@@ -64,7 +64,12 @@ async def run_program(
     *,
     max_steps: int = DEFAULT_MAX_STEPS,
 ) -> ProgramResult:
-    """Run a program's steps sequentially, binding each result to its handle."""
+    """Run a program's steps sequentially, binding each result to its handle.
+
+    Stop-on-error: the first failing step (dispatch failure, structured
+    ``ok=False`` tool output, or a bad $ref) is recorded and later steps are
+    never dispatched.
+    """
     if len(program.steps) > max_steps:
         return ProgramResult(
             ok=False,
@@ -79,24 +84,53 @@ async def run_program(
     final_bind: str | None = None
 
     for index, step in enumerate(program.steps):
-        resolved_args = resolve_refs(step.args, handles)
+        try:
+            resolved_args = resolve_refs(step.args, handles)
+        except ProgramError as exc:
+            summaries.append(
+                StepSummary(index=index, tool=step.tool, ok=False, bind=step.bind, error=str(exc))
+            )
+            return ProgramResult(
+                ok=False,
+                steps=summaries,
+                final_bind=final_bind,
+                error=f"step {index} ({step.tool}): {exc}",
+            )
+
         dispatch = await registry.dispatch(step.tool, resolved_args, ctx)
 
+        step_ok = dispatch.ok
+        error = dispatch.error
         dump: dict[str, Any] = {}
         if dispatch.ok and isinstance(dispatch.value, BaseModel):
             dump = dispatch.value.model_dump()
+            if dump.get("ok") is False:
+                # Tools like run_sql/llm_extract report failure as a structured
+                # ok=False output without raising — still a failed step.
+                step_ok = False
+                err_val = dump.get("error")
+                error = err_val if isinstance(err_val, str) else "tool reported ok=False"
 
         summaries.append(
             StepSummary(
                 index=index,
                 tool=step.tool,
-                ok=dispatch.ok,
+                ok=step_ok,
                 bind=step.bind,
                 rows=_rows_of(dump),
                 rows_failed=_int_or_none(dump.get("rows_failed")),
-                error=dispatch.error,
+                error=error,
             )
         )
+
+        if not step_ok:
+            return ProgramResult(
+                ok=False,
+                steps=summaries,
+                final_bind=final_bind,
+                error=f"step {index} ({step.tool}) failed: {error}",
+            )
+
         handles[step.bind] = ResolvedHandle(table=None, output=dump)
         final_bind = step.bind
 

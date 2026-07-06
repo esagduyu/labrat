@@ -113,3 +113,123 @@ async def test_over_max_steps_is_structured_error_and_nothing_runs() -> None:
     assert "max_steps" in result.error
     assert result.steps == []  # nothing was run
     assert echo.calls == []
+
+
+# ── stop-on-error ───────────────────────────────────────────────────────────
+
+
+class _BoomInput(BaseModel):
+    pass
+
+
+class _BoomTool(Tool[_BoomInput]):
+    """Raises inside execute — dispatch converts it to DispatchResult(ok=False)."""
+
+    @property
+    def name(self) -> str:
+        return "boom"
+
+    @property
+    def description(self) -> str:
+        return "Always raises."
+
+    @property
+    def input_model(self) -> type[_BoomInput]:
+        return _BoomInput
+
+    async def execute(self, ctx: ToolContext, args: _BoomInput) -> object:
+        raise RuntimeError("boom exploded")
+
+
+class _SoftFailOutput(BaseModel):
+    ok: bool = False
+    error: str | None = "soft failure: refused"
+
+
+class _SoftFailTool(Tool[_BoomInput]):
+    """Returns a structured ok=False output — dispatch itself SUCCEEDS."""
+
+    @property
+    def name(self) -> str:
+        return "soft_fail"
+
+    @property
+    def description(self) -> str:
+        return "Always returns ok=False without raising."
+
+    @property
+    def input_model(self) -> type[_BoomInput]:
+        return _BoomInput
+
+    async def execute(self, ctx: ToolContext, args: _BoomInput) -> _SoftFailOutput:
+        return _SoftFailOutput()
+
+
+async def test_raising_middle_step_stops_program() -> None:
+    registry, echo = _echo_registry()
+    registry.register(_BoomTool())
+    program = Program(
+        steps=[
+            ProgramStep(tool="echo", args={"text": "one"}, bind="a"),
+            ProgramStep(tool="boom", args={}, bind="b"),
+            ProgramStep(tool="echo", args={"text": "never"}, bind="c"),
+        ]
+    )
+    result = await run_program(program, _ctx(), registry)
+    assert not result.ok
+    assert echo.calls == ["one"]  # step 3 was NOT dispatched
+    assert len(result.steps) == 2  # partial summary incl. the failing step
+    assert result.steps[1].ok is False
+    assert result.steps[1].error is not None
+    assert "boom exploded" in result.steps[1].error
+    assert result.error is not None
+    assert "step 1" in result.error
+    assert result.final_bind == "a"  # last OK step
+
+
+async def test_soft_fail_output_stops_program() -> None:
+    registry, echo = _echo_registry()
+    registry.register(_SoftFailTool())
+    program = Program(
+        steps=[
+            ProgramStep(tool="soft_fail", args={}, bind="a"),
+            ProgramStep(tool="echo", args={"text": "never"}, bind="b"),
+        ]
+    )
+    result = await run_program(program, _ctx(), registry)
+    assert not result.ok
+    assert echo.calls == []
+    assert result.steps[0].ok is False
+    assert result.steps[0].error is not None
+    assert "soft failure" in result.steps[0].error
+
+
+async def test_unknown_tool_stops_program() -> None:
+    registry, echo = _echo_registry()
+    program = Program(
+        steps=[
+            ProgramStep(tool="no_such_tool", args={}, bind="a"),
+            ProgramStep(tool="echo", args={"text": "never"}, bind="b"),
+        ]
+    )
+    result = await run_program(program, _ctx(), registry)
+    assert not result.ok
+    assert echo.calls == []
+    assert result.steps[0].error is not None
+    assert "Unknown tool" in result.steps[0].error
+
+
+async def test_bad_ref_stops_program_as_failed_step() -> None:
+    registry, echo = _echo_registry()
+    program = Program(
+        steps=[
+            ProgramStep(tool="echo", args={"text": "one"}, bind="a"),
+            ProgramStep(tool="echo", args={"text": "$missing.field"}, bind="b"),
+        ]
+    )
+    result = await run_program(program, _ctx(), registry)
+    assert not result.ok
+    assert echo.calls == ["one"]  # step 2 never dispatched
+    assert result.steps[1].ok is False
+    assert result.steps[1].error is not None
+    assert "unknown handle" in result.steps[1].error
