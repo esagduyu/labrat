@@ -11,10 +11,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import polars as pl
 from pydantic import BaseModel
 
 from labrat.agent.program.dsl import Program, ProgramError, ResolvedHandle, resolve_refs
 from labrat.agent.tools.base import ToolContext, ToolRegistry
+from labrat.agent.tools.serialization import LedgerPayloadProvider
+from labrat.db.duckdb_engine import DuckDBConnection
 
 DEFAULT_MAX_STEPS = 20
 
@@ -67,8 +70,10 @@ async def run_program(
     """Run a program's steps sequentially, binding each result to its handle.
 
     Stop-on-error: the first failing step (dispatch failure, structured
-    ``ok=False`` tool output, or a bad $ref) is recorded and later steps are
-    never dispatched.
+    ``ok=False`` tool output, a bad $ref, or a table result the primary
+    connection cannot materialize) is recorded and later steps never dispatch.
+    A step whose output declares a ``("table", df)`` ledger payload is
+    materialized as the DuckDB TEMP table ``program_<bind>``.
     """
     if len(program.steps) > max_steps:
         return ProgramResult(
@@ -82,6 +87,7 @@ async def run_program(
     handles: dict[str, ResolvedHandle] = {}
     summaries: list[StepSummary] = []
     final_bind: str | None = None
+    final_table: str | None = None
 
     for index, step in enumerate(program.steps):
         try:
@@ -94,6 +100,7 @@ async def run_program(
                 ok=False,
                 steps=summaries,
                 final_bind=final_bind,
+                final_table=final_table,
                 error=f"step {index} ({step.tool}): {exc}",
             )
 
@@ -111,12 +118,35 @@ async def run_program(
                 err_val = dump.get("error")
                 error = err_val if isinstance(err_val, str) else "tool reported ok=False"
 
+        handle_table: str | None = None
+        if step_ok and isinstance(dispatch.value, LedgerPayloadProvider):
+            payload = dispatch.value.ledger_payload()
+            if payload is not None:
+                kind, obj = payload
+                if kind == "table" and isinstance(obj, pl.DataFrame):
+                    conn = ctx.connections.get(ctx.primary)
+                    if isinstance(conn, DuckDBConnection):
+                        handle_table = f"program_{step.bind}"
+                        try:
+                            conn.materialize_table(handle_table, obj.to_arrow())  # type: ignore[arg-type]
+                        except Exception as exc:
+                            step_ok = False
+                            error = f"failed to materialize handle ${step.bind}: {exc}"
+                            handle_table = None
+                    else:
+                        step_ok = False
+                        error = (
+                            f"step produced a table but the primary connection is "
+                            f"{type(conn).__name__}, not DuckDB — cannot materialize ${step.bind}"
+                        )
+
         summaries.append(
             StepSummary(
                 index=index,
                 tool=step.tool,
                 ok=step_ok,
                 bind=step.bind,
+                handle_table=handle_table,
                 rows=_rows_of(dump),
                 rows_failed=_int_or_none(dump.get("rows_failed")),
                 error=error,
@@ -128,10 +158,12 @@ async def run_program(
                 ok=False,
                 steps=summaries,
                 final_bind=final_bind,
+                final_table=final_table,
                 error=f"step {index} ({step.tool}) failed: {error}",
             )
 
-        handles[step.bind] = ResolvedHandle(table=None, output=dump)
+        handles[step.bind] = ResolvedHandle(table=handle_table, output=dump)
         final_bind = step.bind
+        final_table = handle_table
 
-    return ProgramResult(ok=True, steps=summaries, final_bind=final_bind, final_table=None)
+    return ProgramResult(ok=True, steps=summaries, final_bind=final_bind, final_table=final_table)

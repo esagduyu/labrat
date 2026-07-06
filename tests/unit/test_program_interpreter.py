@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pathlib import Path
 
+import duckdb
+import polars as pl
+import pytest
+from pydantic import BaseModel, PrivateAttr
+
+import labrat.agent.tools.run_sql as run_sql_mod
 from labrat.agent.program.dsl import Program, ProgramStep
 from labrat.agent.program.interpreter import (
     DEFAULT_MAX_STEPS,
@@ -12,6 +18,10 @@ from labrat.agent.program.interpreter import (
     run_program,
 )
 from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
+from labrat.agent.tools.run_sql import RunSqlTool
+from labrat.agent.tools.serialization import LedgerPayloadKind
+from labrat.db.duckdb_engine import DuckDBConnection
+from labrat.history.log import QueryHistoryLog
 
 # ── stub tools (no DB, no LLM) ──────────────────────────────────────────────
 
@@ -233,3 +243,126 @@ async def test_bad_ref_stops_program_as_failed_step() -> None:
     assert result.steps[1].ok is False
     assert result.steps[1].error is not None
     assert "unknown handle" in result.steps[1].error
+
+
+# ── table materialization ───────────────────────────────────────────────────
+
+
+class _TableOutput(BaseModel):
+    ok: bool = True
+    row_count: int = 2
+
+    _df: pl.DataFrame | None = PrivateAttr(default=None)
+
+    def ledger_payload(self) -> tuple[LedgerPayloadKind, object] | None:
+        if self._df is not None:
+            return ("table", self._df)
+        return None
+
+    def attach(self, df: pl.DataFrame) -> None:
+        self._df = df
+
+
+class _TableInput(BaseModel):
+    pass
+
+
+class _TableTool(Tool[_TableInput]):
+    """Emits a 2-row table payload via the LedgerPayloadProvider hook."""
+
+    @property
+    def name(self) -> str:
+        return "make_table"
+
+    @property
+    def description(self) -> str:
+        return "Emit a fixed 2-row table."
+
+    @property
+    def input_model(self) -> type[_TableInput]:
+        return _TableInput
+
+    async def execute(self, ctx: ToolContext, args: _TableInput) -> _TableOutput:
+        out = _TableOutput()
+        out.attach(pl.DataFrame({"id": [1, 2], "v": ["sentinel_cell_a", "sentinel_cell_b"]}))
+        return out
+
+
+def _make_duckdb(tmp_path: Path) -> DuckDBConnection:
+    path = str(tmp_path / "prog.duckdb")
+    raw = duckdb.connect(path)
+    raw.execute("CREATE TABLE patents (id INTEGER, abstract VARCHAR)")
+    raw.execute("INSERT INTO patents VALUES (1, 'about aspirin'), (2, 'about ibuprofen')")
+    raw.close()
+    conn = DuckDBConnection(path=path, read_only=False)
+    conn.connect()
+    return conn
+
+
+async def test_table_step_materializes_program_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run_sql_mod, "_history_log", QueryHistoryLog(history_dir=tmp_path))
+    conn = _make_duckdb(tmp_path)
+    registry = ToolRegistry()
+    registry.register(_TableTool())
+    registry.register(RunSqlTool())
+    ctx = ToolContext(connection=conn, catalog=None)
+    program = Program(
+        steps=[
+            ProgramStep(tool="make_table", args={}, bind="docs"),
+            ProgramStep(
+                tool="run_sql", args={"query": "SELECT v FROM $docs ORDER BY id"}, bind="final"
+            ),
+        ]
+    )
+    result = await run_program(program, ctx, registry)
+    assert result.ok
+    assert result.steps[0].handle_table == "program_docs"
+    assert result.steps[0].rows == 2
+    # The temp table is real and queryable outside the program.
+    df = conn.execute("SELECT COUNT(*) AS n FROM program_docs")
+    assert df["n"].to_list() == [2]
+    # Step 2's SQL read the substituted temp table and itself materialized.
+    assert result.steps[1].ok
+    assert result.steps[1].rows == 2
+    assert result.final_bind == "final"
+    assert result.final_table == "program_final"
+    df2 = conn.execute("SELECT v FROM program_final ORDER BY v")
+    assert df2["v"].to_list() == ["sentinel_cell_a", "sentinel_cell_b"]
+    conn.disconnect()
+
+
+async def test_program_result_is_bounded_no_cell_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run_sql_mod, "_history_log", QueryHistoryLog(history_dir=tmp_path))
+    conn = _make_duckdb(tmp_path)
+    registry = ToolRegistry()
+    registry.register(_TableTool())
+    ctx = ToolContext(connection=conn, catalog=None)
+    program = Program(steps=[ProgramStep(tool="make_table", args={}, bind="docs")])
+    result = await run_program(program, ctx, registry)
+    assert result.ok
+    dumped = result.model_dump_json()
+    assert "sentinel_cell_a" not in dumped  # NEVER embeds row data
+    assert "sentinel_cell_b" not in dumped
+    conn.disconnect()
+
+
+async def test_table_step_on_non_duckdb_primary_is_structured_failure() -> None:
+    registry = ToolRegistry()
+    registry.register(_TableTool())
+    ctx = ToolContext(connection=object(), catalog=None)
+    program = Program(
+        steps=[
+            ProgramStep(tool="make_table", args={}, bind="docs"),
+            ProgramStep(tool="make_table", args={}, bind="never"),
+        ]
+    )
+    result = await run_program(program, ctx, registry)
+    assert not result.ok
+    assert len(result.steps) == 1  # stop-on-error
+    assert result.steps[0].ok is False
+    assert result.steps[0].error is not None
+    assert "DuckDB" in result.steps[0].error
