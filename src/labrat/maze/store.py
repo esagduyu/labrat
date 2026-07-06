@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from labrat.maze.document import ScentDoc, parse_document
+from labrat.maze.document import ScentDoc, parse_document, render_document
 
 
 @dataclass(frozen=True)
@@ -48,3 +48,21 @@ class MazeStore:
                     continue
                 by_domain[doc.domain] = doc
         return list(by_domain.values())
+
+    def load_domain(self, domain: str, kind: str = "scent") -> ScentDoc | None:
+        for doc in self.docs(kind):
+            if doc.domain == domain:
+                return doc
+        return None
+
+    def write_doc(self, doc: ScentDoc, *, scope: str = "project", kind: str = "scent") -> Path:
+        if doc.kind != kind:
+            raise ValueError(f"doc.kind {doc.kind!r} != write kind {kind!r}")
+        layer = next((layer for layer in self._layers if layer.scope == scope), None)
+        if layer is None:
+            raise ValueError(f"unknown scope: {scope!r}")
+        directory = layer.root / kind
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{doc.domain}.md"
+        path.write_text(render_document(doc), encoding="utf-8")
+        return path
