@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -68,3 +68,57 @@ class ResolvedHandle:
 
     table: str | None  # program_<bind> temp-table name, when the step produced a table
     output: dict[str, Any]  # the step output's model_dump(), for $handle.field lookups
+
+
+def _resolve_token(
+    handle: str, field_name: str | None, handles: dict[str, ResolvedHandle]
+) -> object:
+    if handle not in handles:
+        raise ProgramError(f"unknown handle: ${handle} (bound so far: {sorted(handles)})")
+    resolved = handles[handle]
+    if field_name is None:
+        if resolved.table is None:
+            raise ProgramError(
+                f"${handle} refers to a step that produced no table; "
+                f"use ${handle}.<field> to pass a scalar output forward"
+            )
+        return resolved.table
+    if field_name not in resolved.output:
+        raise ProgramError(
+            f"${handle}.{field_name}: no field {field_name!r} in that step's output "
+            f"(available: {sorted(resolved.output)})"
+        )
+    return resolved.output[field_name]
+
+
+def _resolve_str(value: str, handles: dict[str, ResolvedHandle]) -> object:
+    whole = _REF_TOKEN.fullmatch(value)
+    if whole is not None:
+        # A whole-string ref may resolve to a non-str value ($handle.field).
+        return _resolve_token(whole.group(1), whole.group(2), handles)
+
+    def repl(m: re.Match[str]) -> str:
+        return str(_resolve_token(m.group(1), m.group(2), handles))
+
+    return _REF_TOKEN.sub(repl, value)
+
+
+def _resolve_value(value: object, handles: dict[str, ResolvedHandle]) -> object:
+    if isinstance(value, str):
+        return _resolve_str(value, handles)
+    if isinstance(value, dict):
+        d = cast(dict[str, Any], value)
+        return {k: _resolve_value(v, handles) for k, v in d.items()}
+    if isinstance(value, list):
+        items = cast(list[Any], value)
+        return [_resolve_value(v, handles) for v in items]
+    return value
+
+
+def resolve_refs(args: dict[str, Any], handles: dict[str, ResolvedHandle]) -> dict[str, Any]:
+    """Recursively substitute $handle / $handle.field refs in a step's args tree.
+
+    Raises :class:`ProgramError` on an unknown handle, a missing field, or a
+    bare ``$handle`` whose step produced no table.
+    """
+    return {k: _resolve_value(v, handles) for k, v in args.items()}
