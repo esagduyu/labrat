@@ -107,5 +107,5 @@ async def test_unsafe_bind_rejected_at_dispatch(tmp_path: Path) -> None:
     )
     assert not result.ok
     assert result.error is not None
-    assert "alphanumeric" in result.error
+    assert "letter/underscore" in result.error
     conn.disconnect()

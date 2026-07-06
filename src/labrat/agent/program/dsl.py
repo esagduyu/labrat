@@ -15,8 +15,10 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# Same identifier guard shape as llm_primitives.py / sample_rows.py.
-_SAFE_IDENT = re.compile(r"\w+")
+# Bind grammar mirrors _REF_TOKEN's handle grammar exactly (letter/underscore
+# start, then word chars) so every valid bind is referenceable via $handle —
+# a `\w+` bind like "1x" would run but its handle could never be referenced.
+_SAFE_IDENT = re.compile(r"[A-Za-z_]\w*")
 
 # $handle or $handle.field — verified: `$100` never matches (digit after $);
 # `FROM $facts f JOIN $docs d` yields two bare tokens.
@@ -43,7 +45,7 @@ class ProgramStep(BaseModel):
     @classmethod
     def _bind_is_safe_ident(cls, v: str) -> str:
         if not _SAFE_IDENT.fullmatch(v):
-            raise ValueError(f"bind must be alphanumeric/underscore: {v!r}")
+            raise ValueError(f"bind must start with a letter/underscore, then word chars: {v!r}")
         return v
 
 

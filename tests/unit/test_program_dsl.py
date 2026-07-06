@@ -27,13 +27,21 @@ def test_program_step_args_default_empty() -> None:
 
 
 def test_bind_rejects_unsafe_ident() -> None:
-    with pytest.raises(ValidationError, match="alphanumeric"):
+    with pytest.raises(ValidationError, match="letter/underscore"):
         ProgramStep(tool="run_sql", args={}, bind="bad name; drop")
 
 
 def test_bind_rejects_empty() -> None:
     with pytest.raises(ValidationError):
         ProgramStep(tool="run_sql", args={}, bind="")
+
+
+def test_bind_rejects_digit_leading() -> None:
+    # A digit-leading bind would run but its handle could never be referenced
+    # (`_REF_TOKEN` requires a letter/underscore first char) — reject upfront so
+    # the bind grammar and the $handle ref grammar stay in lockstep.
+    with pytest.raises(ValidationError, match="letter/underscore"):
+        ProgramStep(tool="run_sql", args={}, bind="1x")
 
 
 def test_duplicate_bind_rejected() -> None:
