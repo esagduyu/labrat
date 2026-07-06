@@ -57,3 +57,49 @@ def test_apply_approved_sections_writes_only_approved(tmp_path) -> None:
     doc = store.load_domain("sales")
     assert doc is not None
     assert any("Keep this." in s.body and s.source == "harvested" for s in doc.sections)
+
+
+def test_apply_approved_sections_preserves_prior_sections(tmp_path) -> None:
+    from labrat.maze.document import Section
+    from labrat.maze.harvest import apply_approved_sections
+    from labrat.maze.store import MazeStore
+
+    store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="default")
+    first = [Section(heading="Gotchas", body="- First correction.", source="harvested")]
+    apply_approved_sections(store, domain="sales", approved=first)
+
+    second = [Section(heading="Gotchas", body="- Second correction.", source="harvested")]
+    apply_approved_sections(store, domain="sales", approved=second)
+
+    doc = store.load_domain("sales")
+    assert doc is not None
+    bodies = {s.body for s in doc.sections}
+    assert "- First correction." in bodies
+    assert "- Second correction." in bodies
+
+
+def test_apply_approved_sections_is_idempotent(tmp_path) -> None:
+    from labrat.maze.document import Section
+    from labrat.maze.harvest import apply_approved_sections
+    from labrat.maze.store import MazeStore
+
+    store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="default")
+    section = Section(heading="Gotchas", body="- Same correction.", source="harvested")
+    apply_approved_sections(store, domain="sales", approved=[section])
+    apply_approved_sections(store, domain="sales", approved=[section])
+
+    doc = store.load_domain("sales")
+    assert doc is not None
+    matches = [s for s in doc.sections if s.body.strip() == "- Same correction."]
+    assert len(matches) == 1
+
+
+def test_draft_fails_loud_on_mixed_clean_and_contaminated() -> None:
+    clusters = cluster_corrections(
+        [
+            _mem("Filter deleted_at IS NULL.", "orders"),
+            _mem("see ground_truth.csv for the answer", "orders"),
+        ]
+    )
+    with pytest.raises(ScentContaminationError):
+        draft_harvested_sections(clusters, generated_at="2026-07-06T00:00:00Z")

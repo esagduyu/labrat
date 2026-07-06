@@ -559,3 +559,57 @@ sandbox; a program inherits every existing gate per step (read-only
 *preventing* it (PromptQL/MinusX/Pi convergent "plan-then-execute" ground).
 AgentLoop/product lever, NOT a claude-mcp leaderboard lever. Additive:
 new modules + one registry flag; no change to the loop or existing tools.
+
+## 2026-07-06 — M5 memory moat: Scent-provenance foundation + T2b correction-harvesting v1
+
+**Foundation (Tasks 1-2):** `src/labrat/maze/provenance.py` adds `SOURCE_TIERS`
+(`semantic_layer > lineage > verified > harvested > draft > human`), `source_rank`
+(0 = highest trust, unknown tokens rank lowest) and `best_source` — the ordering the
+future T3c provenance footer will render. `maze/document.py`'s `Section` gained two
+new recognized source tokens (`harvested`, `semantic_layer`) plus optional freshness
+metadata (`generated_at`/`schema_hash`/`model_id`/`git_sha`), serialized as a single
+`**Meta:** k=v; ...` line under `**Source:**` and parsed back by `_extract_meta`
+(mirrors the existing `_extract_source`). Back-compat: docs with no `**Meta:**` line
+parse with all four fields `None` — the existing round-trip test still passes
+unchanged.
+
+**T2b v1 (Tasks 3-8):** correction memories were already extractable
+(`memory/extractor.py::EditExtractor` / `ChatCorrectionExtractor`) but had no caller.
+`memory/harvest.py::SessionHarvester` wires them into a session-boundary harvest
+loop (`harvest_events` / `harvest_correction`), gated by an `enabled` flag so
+benchmark/headless paths never harvest — confirmed by `grep -rn SessionHarvester
+src/labrat/eval/` returning nothing. `maze/harvest.py` is the promotion pass:
+`cluster_corrections` groups correction memories by `table_scope` (never by
+`embedding` — that field stays unused, per the north-star design); `draft_harvested_sections`
+renders each cluster into a `harvested`-tagged "Gotchas" `Section`, deduping bullets
+by stripped body, and runs every drafted body through `scent_audit.detect_contamination`
+— any hit raises `ScentContaminationError` and drops the *whole* cluster's section
+(one contaminated bullet taints the batch; nothing partial is drafted). `MazeStore`
+gained a write path (`write_doc`, `load_domain`) — it was read-only through M3/M4.
+`apply_approved_sections` merges a human-approved section list into a domain's
+`ScentDoc` and persists it: it loads-or-creates the doc, dedups against existing
+section bodies (idempotent re-approval), and — critically — *appends* rather than
+replaces, so re-approving a new correction never drops a prior harvested section.
+`maze/staleness.py::schema_fingerprint`/`is_stale` hash a table→sorted-columns map
+and compare against a section's stored `schema_hash`, flagging harvested Gotchas that
+drifted from the live schema. `screens/harvest_controller.py` is a thin, pyright-exempt
+orchestration layer (`review_corrections`, `harvesting_enabled`) sequencing the
+already-unit-tested helpers for the TUI review flow — no new logic, just gating
+(`is_interactive AND profile_opt_in`) and lazy imports to keep the screens/ import
+graph light.
+
+**Invariants:** (1) draft-then-human-approve, never auto-write — `draft_harvested_sections`
+only returns `Section`s; `apply_approved_sections` is the only path that touches disk,
+and it's only ever called with a human-approved subset; (2) benchmark-path exclusion —
+`SessionHarvester` has zero callers under `src/labrat/eval/`; (3) `Memory.embedding`
+remains unused (clustering is `table_scope`-keyed, not vector-similarity — deferred to
+v2). Test coverage: `tests/unit/test_maze_harvest.py` now also covers the merge-preserves-
+prior-sections and merge-is-idempotent cases (Task 6 review gap) and the mixed-clean-
+plus-contaminated-cluster fail-loud case (Task 5 optional hardening).
+
+**Deferred:** the `harvest_review.py` Textual review screen and a `main.py`
+thread-close trigger to invoke it (no thread-close lifecycle exists in the TUI yet —
+wiring one is a product decision plus needs manual TUI verification, not a unit-testable
+build step); T2b v2 (autonomous scheduled harvest, embedding-based clustering instead
+of `table_scope`); moat Increments 2/3 (`project_moat_roadmap`: T1b lineage integration,
+T3c provenance footer).
