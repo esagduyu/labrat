@@ -524,3 +524,38 @@ always VARCHAR. NOT a claude-mcp leaderboard lever (that path bypasses
 AgentLoop). Live DAB/patents validation is a deferred follow-on run. Sequential
 fan-out for now; concurrency is a later optimization behind the same engine
 interface.
+
+## 2026-07-05 — Program mode: `run_program` tool-pipeline DSL (M4 2.2)
+
+**Decision:** Ship program mode as a restricted tool-pipeline DSL — `run_program`
+takes `{"steps": [{tool, args, bind}, ...]}` and the interpreter
+(`src/labrat/agent/program/`) dispatches each step through the standard
+`ToolRegistry` with the same `ToolContext`. NOT arbitrary code: no eval, no new
+sandbox; a program inherits every existing gate per step (read-only
+`is_mutating`, per-tool caps, input validation).
+
+**Key mechanics:**
+- Handle refs in step args: `$handle` → that step's materialized temp table
+  (`program_<handle>`, via `LedgerPayloadProvider` → `materialize_table` on the
+  DuckDB primary); `$handle.field` → a scalar from the step output's
+  `model_dump()`. Token regex `\$([A-Za-z_]\w*)(?:\.(\w+))?` — `$100`-style SQL
+  literals never match. Bad refs raise a typed `ProgramError` → failed step.
+- Bounded by construction: max 20 steps (`DEFAULT_MAX_STEPS`); stop-on-error
+  with partial summaries + failing step index; only `ProgramResult`
+  (per-step `StepSummary`, no row payloads) returns to model context —
+  intermediate tables never round-trip. The model reads `final_table`
+  (`program_<final_bind>`) with a follow-up `run_sql`.
+- A step also fails when its output reports `ok=False` (run_sql refusal /
+  llm_extract self-error) even though dispatch succeeded — otherwise later
+  `$refs` would read a poisoned handle.
+- Recursion guard: `RunProgramTool.execute` builds its sub-registry via
+  `build_data_tools_registry(include_program=False)` (deferred import breaks
+  the data_tools↔run_program cycle) — a step `{tool: "run_program"}` is an
+  unknown-tool error. `mutating=True` → blocked under read-only Analyst mode.
+- `RunProgramTool` overrides `anthropic_schema`/`openai_schema` to pass the
+  nested `ProgramStep` `$defs` through (the base helpers drop them).
+
+**Why:** extends the Context Ledger from *bounding* tool-result re-entry to
+*preventing* it (PromptQL/MinusX/Pi convergent "plan-then-execute" ground).
+AgentLoop/product lever, NOT a claude-mcp leaderboard lever. Additive:
+new modules + one registry flag; no change to the loop or existing tools.
