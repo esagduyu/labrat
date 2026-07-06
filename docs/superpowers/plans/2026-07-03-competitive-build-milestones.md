@@ -15,11 +15,11 @@
 | **M2** — verified semantic Scent | ✅ SHIPPED | `5a615a6` |
 | **M3** — column-level lineage + read-only Analyst mode | ✅ SHIPPED | `ad125e0` |
 | **M4** — execution white space (Context Ledger + llm_extract/classify + program mode) | ✅ SHIPPED | `ebf3bd0` · `493b3db` · `4a08a4c` |
-| **M5** — compounding memory moat (Plan 0 foundation + T2b harvesting v1) | ▶ IN PROGRESS | — |
+| **M5** — compounding memory moat (Plan 0 foundation + T2b harvesting v1) | ✅ SHIPPED | `ec1526e` |
 
 M4 detail: Context Ledger Ph1 (`ebf3bd0`, M4 foundation), llm_extract/llm_classify per-row primitives (`493b3db`, M4 2.1), program mode `run_program` (`4a08a4c`, M4 2.2). None are claude-mcp leaderboard levers — all are AgentLoop/labrat-agent-path product wins. Ledger Phase 2 (`dispatch_subagent`) remains deferred.
 
-M5 is scoped to the **moat-roadmap Plan 0 (shared Scent section-provenance foundation) + Plan 1 (T2b correction-harvesting v1)** — the shippable first increment (spec `docs/superpowers/specs/2026-07-02-moat-roadmap-design.md`, adopted+refreshed at kickoff). The milestones-doc extras below (2.3 git-team memory, 2.4 customer-facing evals, 2.5 decision-trail harvesting) and moat Increments 2/3 (T1b lineage — note `explain_lineage` already shipped in M3; T3c provenance footer) are M5 follow-ons, each getting its own spec+plan when reached.
+M5 shipped the **moat-roadmap Plan 0 (shared Scent section-provenance foundation) + Plan 1 (T2b correction-harvesting v1)** (merge `ec1526e`, 9 tasks + Fable review + fix wave, suite 1085). Spec/plan on master: `docs/superpowers/specs/2026-07-06-memory-moat-t2b-design.md`, `docs/superpowers/plans/2026-07-06-memory-moat-t2b.md`. **⚠️ The harvest loop has NO production caller yet** — the TUI harvest-review surface (`harvest_review.py` screen + a `main.py` thread-close trigger) plus `Memory.table_scope` population and domain-routing are DEFERRED as one named follow-on (no thread-close lifecycle exists in `ThreadManager`; needs manual TUI verification). This is the **#1 M5 follow-on** and part of the broader TUI-integration push (see `docs/tui-integration-handoff.md`). Other follow-ons: moat Increment 2 remainder (T1b dbt semantic-layer ingestion — `explain_lineage`/column-lineage already shipped in M3), Increment 3 (T2c first-connect + T3c footer), extras 2.3/2.4/2.5.
 
 ---
 

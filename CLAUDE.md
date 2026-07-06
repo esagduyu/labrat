@@ -71,7 +71,7 @@ The system prompt (`agent/prompts/system_base.md`) is **prescriptive**: profile 
 
 ### MCP server (`src/labrat/mcp/`)
 
-`labrat.mcp.server` mounts the data-tools registry over MCP stdio (low-level `mcp.server.Server`). Reads `LABRAT_MCP_CONNECTIONS` (JSON: `{name: {db_type: "duckdb", db_path: "..."}}`) + optional `LABRAT_MCP_PRIMARY` + optional `LABRAT_MCP_LOG_DIR` (per-dispatch tool-call audit log). Each tool is exposed via `anthropic_schema()`; results serialised via Pydantic `model_dump_json()` or `json.dumps`. The DAB `claude-mcp` driver and the TUI both mount this server. `labrat.mcp.toy` is a 2-tool spike server for MCP compatibility checks.
+`labrat.mcp.server` mounts the data-tools registry over MCP stdio (low-level `mcp.server.Server`). Reads `LABRAT_MCP_CONNECTIONS` (JSON: `{name: {db_type: "duckdb", db_path: "..."}}`) + optional `LABRAT_MCP_PRIMARY` + optional `LABRAT_MCP_LOG_DIR` (per-dispatch tool-call audit log). Each tool is exposed via `anthropic_schema()`; results serialised via Pydantic `model_dump_json()` or `json.dumps`. The DAB `claude-mcp` driver mounts this server. `labrat.mcp.toy` is a 2-tool spike server for MCP compatibility checks. **NOTE (2026-07-06): the TUI does NOT mount this server** — the TUI chat path builds an `AgentLoop` directly (`screens/main.py`) with a small hand-rolled registry (`draft_sql`/`create_chart`/`run_validations`/`recall_memories`/`search_query_history`) and shells `claude --print` via `ClaudeCodeProvider`; it bypasses `run_agent_task`, `build_data_tools_registry()`, the Context Ledger, the verifier, `llm_fn`, and the Cartographer. Wiring the shipped machinery into the TUI is the current focus — see `docs/tui-integration-handoff.md`.
 
 ### TUI (`src/labrat/screens/`, `src/labrat/widgets/`)
 
@@ -81,11 +81,11 @@ Built on Textual. `app.py` is the root `App`. Main screen is a 3-pane layout: ch
 
 | Package | Purpose |
 |---------|---------|
-| `maze/` | Scent grounding layer: `cartographer.py` (Cartographer pre-pass, `generate_scent`, `cartograph_prepass`); `search_reference_docs` tool retrieves from the store (#26a/#26b SHIPPED) |
+| `maze/` | Scent grounding layer: `cartographer.py` (Cartographer pre-pass, `generate_scent`, `cartograph_prepass`); `search_reference_docs` tool retrieves from the store (#26a/#26b SHIPPED). **M5 moat foundation + T2b:** `provenance.py` (`SOURCE_TIERS` trust ladder + `source_rank`/`best_source`); `document.py` `Section` optional freshness metadata (`generated_at`/`schema_hash`/`model_id`/`git_sha`, back-compat `**Meta:**` line); `harvest.py` (`cluster_corrections` + `draft_harvested_sections` → `harvested`-tagged Gotchas, contamination-audited **fail-loud, draft-only**; `apply_approved_sections` audits+merges before write); `store.py` **write path** (`write_doc`/`load_domain` — was read-only); `staleness.py` (`schema_fingerprint`/`is_stale`). Every Scent write runs through `scent_audit.py` |
 | `catalog/` | External catalog adapters: `DbtLoader` (manifest.json/schema.yml) and `McpCatalogAdapter` |
 | `context_engine/` | Personal domain: table relevance scoring (frequency × recency), `ContextBundle`, `ContextAnalyzer` |
 | `history/` | Always-on `QueryHistoryLog` (JSONL, PII-redacted). Singleton in `run_sql.py`, monkeypatched in tests |
-| `memory/` | Self-healing memories: global/table/thread scopes, JSONL store, LLM-driven extraction |
+| `memory/` | Self-healing memories: global/table/thread scopes, JSONL store, LLM-driven extraction. **M5 T2b:** `harvest.py::SessionHarvester` wires the once-dormant `EditExtractor`/`ChatCorrectionExtractor` into a session-boundary loop (`enabled` defaults **False** = fail-closed; never harvests on benchmark paths). Gating helper in `screens/harvest_controller.py`. **⚠️ No production caller yet — the TUI harvest-review trigger is deferred (see `docs/tui-integration-handoff.md`)** |
 | `validations/` | Per-rule LLM checks returning `"pass"` / `"warn: ..."` / `"block: ..."` |
 | `eval/` | Legacy `EvalCase`/`EvalRunner` for internal SQL evals (`bird.py`, `latency.py`); new unified `BenchmarkSuite` protocol (`types.py`) for DAB + ADE-bench under `benchmarks/<bench>/{suite,external_runner,scorer,reporter}.py`. `smoke.py` = `SubsetSuite` + `ade_smoke_suite()`. Contract: `docs/superpowers/specs/2026-05-28-unified-benchmark-suite-design.md` |
 | `audit/` | JSONL event sourcing for every interaction |
