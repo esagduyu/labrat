@@ -6,6 +6,23 @@
 
 ---
 
+## ▶ Progress (updated 2026-07-06)
+
+| Milestone | Status | Merge |
+|-----------|--------|-------|
+| **M0** — deterministic levers | ✅ SHIPPED | `798c501` |
+| **M1** — verification-v2 | ✅ SHIPPED | `912b644` |
+| **M2** — verified semantic Scent | ✅ SHIPPED | `5a615a6` |
+| **M3** — column-level lineage + read-only Analyst mode | ✅ SHIPPED | `ad125e0` |
+| **M4** — execution white space (Context Ledger + llm_extract/classify + program mode) | ✅ SHIPPED | `ebf3bd0` · `493b3db` · `4a08a4c` |
+| **M5** — compounding memory moat (Plan 0 foundation + T2b harvesting v1) | ▶ IN PROGRESS | — |
+
+M4 detail: Context Ledger Ph1 (`ebf3bd0`, M4 foundation), llm_extract/llm_classify per-row primitives (`493b3db`, M4 2.1), program mode `run_program` (`4a08a4c`, M4 2.2). None are claude-mcp leaderboard levers — all are AgentLoop/labrat-agent-path product wins. Ledger Phase 2 (`dispatch_subagent`) remains deferred.
+
+M5 is scoped to the **moat-roadmap Plan 0 (shared Scent section-provenance foundation) + Plan 1 (T2b correction-harvesting v1)** — the shippable first increment (spec `docs/superpowers/specs/2026-07-02-moat-roadmap-design.md`, adopted+refreshed at kickoff). The milestones-doc extras below (2.3 git-team memory, 2.4 customer-facing evals, 2.5 decision-trail harvesting) and moat Increments 2/3 (T1b lineage — note `explain_lineage` already shipped in M3; T3c provenance footer) are M5 follow-ons, each getting its own spec+plan when reached.
+
+---
+
 ## Guiding sequence logic
 
 1. **Process the run, then bank the cheap deterministic wins** (M0) — lowest risk, mostly extends tools we own, benchmark-safe.
