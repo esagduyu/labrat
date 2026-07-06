@@ -16,14 +16,18 @@ _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
 _H2_RE = re.compile(r"^##\s+(.*)$", re.MULTILINE)
 _RECOGNIZED_SOURCES = {"verified", "draft", "human", "harvested", "lineage", "semantic_layer"}
 _SOURCE_LINE_RE = re.compile(r"^\*\*Source:\*\*\s*(\w+)\b.*$")
+_META_LINE_RE = re.compile(r"^\*\*Meta:\*\*\s*(.*)$")
+_META_KEYS = ("generated_at", "schema_hash", "model_id", "git_sha")
 
 
 class Section(BaseModel):
     heading: str  # "" for the preamble before the first H2
     body: str
-    source: str = (
-        "human"  # "verified" | "draft" | "human" | "lineage"; provenance for #26b cartographer
-    )
+    source: str = "human"  # provenance token; see _RECOGNIZED_SOURCES for #26b cartographer
+    generated_at: str | None = None
+    schema_hash: str | None = None
+    model_id: str | None = None
+    git_sha: str | None = None
 
 
 class ScentDoc(BaseModel):
@@ -61,6 +65,31 @@ def _extract_source(body: str) -> tuple[str, str]:
     return "human", body
 
 
+def _extract_meta(body: str) -> tuple[dict[str, str | None], str]:
+    """Lift a leading ``**Meta:** k=v; …`` line into a dict of the recognized keys.
+
+    Mirrors _extract_source: if the first non-empty line is a Meta marker, parse it
+    and return (metadata, body-without-that-line); otherwise (all-None, body unchanged).
+    """
+    meta: dict[str, str | None] = {k: None for k in _META_KEYS}
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() == "":
+            continue
+        m = _META_LINE_RE.match(line.strip())
+        if m is None:
+            return meta, body
+        for pair in m.group(1).split(";"):
+            if "=" in pair:
+                k, _, v = pair.partition("=")
+                k = k.strip()
+                if k in meta:
+                    meta[k] = v.strip()
+        rest = "\n".join(lines[:i] + lines[i + 1 :]).strip()
+        return meta, rest
+    return meta, body
+
+
 def _split_sections(body: str) -> list[Section]:
     """Split a markdown body on H2 (##) headings. Text before the first H2 is the preamble."""
     matches = list(_H2_RE.finditer(body))
@@ -68,12 +97,34 @@ def _split_sections(body: str) -> list[Section]:
     preamble = body[: matches[0].start()] if matches else body
     if preamble.strip():
         src, clean = _extract_source(preamble.strip())
-        sections.append(Section(heading="", body=clean, source=src))
+        meta, clean = _extract_meta(clean)
+        sections.append(
+            Section(
+                heading="",
+                body=clean,
+                source=src,
+                generated_at=meta["generated_at"],
+                schema_hash=meta["schema_hash"],
+                model_id=meta["model_id"],
+                git_sha=meta["git_sha"],
+            )
+        )
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
         src, clean = _extract_source(body[start:end].strip())
-        sections.append(Section(heading=m.group(1).strip(), body=clean, source=src))
+        meta, clean = _extract_meta(clean)
+        sections.append(
+            Section(
+                heading=m.group(1).strip(),
+                body=clean,
+                source=src,
+                generated_at=meta["generated_at"],
+                schema_hash=meta["schema_hash"],
+                model_id=meta["model_id"],
+                git_sha=meta["git_sha"],
+            )
+        )
     return sections
 
 
@@ -126,6 +177,18 @@ def render_document(doc: ScentDoc) -> str:
         if s.heading:
             parts.append(f"## {s.heading}")
             parts.append(f"**Source:** {s.source}")
+            meta_pairs = [
+                (k, v)
+                for k, v in (
+                    ("generated_at", s.generated_at),
+                    ("schema_hash", s.schema_hash),
+                    ("model_id", s.model_id),
+                    ("git_sha", s.git_sha),
+                )
+                if v is not None
+            ]
+            if meta_pairs:
+                parts.append("**Meta:** " + "; ".join(f"{k}={v}" for k, v in meta_pairs))
             parts.append("")
         if s.body:
             parts.append(s.body)
