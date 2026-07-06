@@ -70,6 +70,10 @@ def _extract_meta(body: str) -> tuple[dict[str, str | None], str]:
 
     Mirrors _extract_source: if the first non-empty line is a Meta marker, parse it
     and return (metadata, body-without-that-line); otherwise (all-None, body unchanged).
+
+    Values are split on ``;`` and ``=``, so a metadata VALUE containing ``;`` would be
+    truncated. Safe for the current fields (ISO8601 timestamp, sha256 hex, model id,
+    git sha) — none of which contain ``;``.
     """
     meta: dict[str, str | None] = {k: None for k in _META_KEYS}
     lines = body.split("\n")

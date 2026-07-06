@@ -2,7 +2,9 @@
 
 The extractors already exist (memory/extractor.py) but had no callers. This runs
 them on a session's events/corrections and persists the derived memories. Gated by
-`enabled` so benchmark paths never harvest.
+`enabled` so benchmark paths never harvest — harvesting is off by default and only
+runs when a caller explicitly opts in (fail-closed; benchmark/headless paths never
+opt in).
 """
 
 from __future__ import annotations
@@ -14,8 +16,14 @@ from labrat.memory.store import MemoryStore
 
 
 class SessionHarvester:
+    """Runs the correction extractors over session events and persists memories.
+
+    Harvesting is off unless a caller explicitly passes ``enabled=True`` — the
+    default is fail-closed so benchmark/headless paths never harvest.
+    """
+
     def __init__(
-        self, profile: str, llm_fn: LLMFn, store: MemoryStore, enabled: bool = True
+        self, profile: str, llm_fn: LLMFn, store: MemoryStore, enabled: bool = False
     ) -> None:
         self._profile = profile
         self._store = store

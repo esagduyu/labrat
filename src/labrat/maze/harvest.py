@@ -7,7 +7,11 @@ MazeStore write. Every drafted body is contamination-audited (fail-loud).
 from __future__ import annotations
 
 from labrat.maze.document import ScentDoc, Section
-from labrat.maze.scent_audit import ScentContaminationError, detect_contamination
+from labrat.maze.scent_audit import (
+    ScentContaminationError,
+    audit_scent_doc,
+    detect_contamination,
+)
 from labrat.maze.store import MazeStore
 from labrat.memory.model import Memory, MemoryKind
 
@@ -64,6 +68,10 @@ def apply_approved_sections(store: MazeStore, domain: str, approved: list[Sectio
     """Merge human-approved harvested sections into the domain's Scent doc and persist.
 
     Dedups against existing section bodies so re-approving the same bullet is idempotent.
+
+    Note: ``load_domain`` returns the merged (user+project) view, while ``write_doc``
+    defaults to the project layer — so approving a section for a domain that currently
+    exists only in the user layer will copy that doc into the project layer.
     """
     if not approved:
         return
@@ -73,4 +81,9 @@ def apply_approved_sections(store: MazeStore, domain: str, approved: list[Sectio
         if s.body.strip() not in existing_bodies:
             doc.sections.append(s)
             existing_bodies.add(s.body.strip())
+    tag = audit_scent_doc(doc)
+    if tag:
+        raise ScentContaminationError(
+            f"approved sections for {domain!r} tripped contamination guard: {tag}"
+        )
     store.write_doc(doc)

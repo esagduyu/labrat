@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from labrat.maze.document import ScentDoc, Section
 from labrat.maze.store import MazeStore
 
@@ -26,3 +28,10 @@ def test_write_doc_round_trips_through_docs(tmp_path: Path) -> None:
 
 def test_load_domain_missing_returns_none(tmp_path: Path) -> None:
     assert _store(tmp_path).load_domain("nope") is None
+
+
+def test_write_doc_rejects_mismatched_kind(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    doc = ScentDoc(domain="x", kind="trail")
+    with pytest.raises(ValueError):
+        store.write_doc(doc)  # default kind="scent" != doc.kind="trail"

@@ -26,7 +26,7 @@ def _event() -> QueryEvent:
 
 async def test_harvest_events_appends_edit_memories(tmp_path: Path) -> None:
     store = MemoryStore(memory_dir=tmp_path)
-    h = SessionHarvester(profile="p1", llm_fn=_fake_llm, store=store)
+    h = SessionHarvester(profile="p1", llm_fn=_fake_llm, store=store, enabled=True)
     mems = await h.harvest_events([_event()])
     assert len(mems) == 1
     assert "soft-deleted" in mems[0].text

@@ -56,6 +56,8 @@ class MazeStore:
         return None
 
     def write_doc(self, doc: ScentDoc, *, scope: str = "project", kind: str = "scent") -> Path:
+        if doc.kind != kind:
+            raise ValueError(f"doc.kind {doc.kind!r} != write kind {kind!r}")
         layer = next((layer for layer in self._layers if layer.scope == scope), None)
         if layer is None:
             raise ValueError(f"unknown scope: {scope!r}")

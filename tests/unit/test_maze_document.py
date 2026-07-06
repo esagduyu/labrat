@@ -88,3 +88,19 @@ def test_legacy_doc_without_meta_still_parses() -> None:
     s = next(s for s in doc.sections if s.heading == "Gotchas")
     assert s.source == "verified"
     assert s.generated_at is None and s.schema_hash is None
+
+
+def test_legacy_doc_round_trips_byte_identical() -> None:
+    from labrat.maze.document import parse_document, render_document
+
+    legacy = "---\ndomain: x\nkind: scent\n---\n\n## Gotchas\n**Source:** verified\n\n- Note.\n"
+    doc = parse_document(legacy, domain="x")
+    rendered = render_document(doc)
+    reparsed = parse_document(rendered, domain="x")
+
+    original = next(s for s in doc.sections if s.heading == "Gotchas")
+    roundtripped = next(s for s in reparsed.sections if s.heading == "Gotchas")
+    assert roundtripped.body == original.body
+    assert roundtripped.source == original.source == "verified"
+    # No spurious **Meta:** line should appear since no meta fields were set.
+    assert "**Meta:**" not in rendered

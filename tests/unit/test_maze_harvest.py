@@ -94,6 +94,18 @@ def test_apply_approved_sections_is_idempotent(tmp_path) -> None:
     assert len(matches) == 1
 
 
+def test_apply_approved_sections_audits_before_write(tmp_path) -> None:
+    from labrat.maze.document import Section
+    from labrat.maze.harvest import apply_approved_sections
+    from labrat.maze.store import MazeStore
+
+    store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="default")
+    tainted = [Section(heading="Gotchas", body="- refers to ground_truth.csv", source="harvested")]
+    with pytest.raises(ScentContaminationError):
+        apply_approved_sections(store, domain="sales", approved=tainted)
+    assert store.load_domain("sales") is None
+
+
 def test_draft_fails_loud_on_mixed_clean_and_contaminated() -> None:
     clusters = cluster_corrections(
         [

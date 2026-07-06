@@ -7,7 +7,8 @@ to run at all.
 
 Imports of the maze/memory modules are done lazily inside functions to
 avoid pulling their (heavier) dependency chains into every ``screens/``
-import — this module is imported eagerly by the TUI app shell.
+import — this module will be imported by the TUI app shell once the
+harvest action is wired.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def harvesting_enabled(is_interactive: bool, profile_opt_in: bool) -> bool:
 
     Harvesting must be off unless BOTH hold: there is a genuine interactive
     TUI session (never on benchmark/headless/no-TTY paths) AND the profile
-    has opted in. This is the caller-side default ``SessionHarvester`` (Task
-    4) deferred to its callers.
+    has opted in. Callers must pass this into ``SessionHarvester(enabled=...)``;
+    the harvester itself now defaults to disabled.
     """
     return is_interactive and profile_opt_in

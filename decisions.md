@@ -573,7 +573,7 @@ metadata (`generated_at`/`schema_hash`/`model_id`/`git_sha`), serialized as a si
 parse with all four fields `None` — the existing round-trip test still passes
 unchanged.
 
-**T2b v1 (Tasks 3-8):** correction memories were already extractable
+**T2b v1 (Tasks 4-8):** correction memories were already extractable
 (`memory/extractor.py::EditExtractor` / `ChatCorrectionExtractor`) but had no caller.
 `memory/harvest.py::SessionHarvester` wires them into a session-boundary harvest
 loop (`harvest_events` / `harvest_correction`), gated by an `enabled` flag so
