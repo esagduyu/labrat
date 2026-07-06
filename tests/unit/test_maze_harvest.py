@@ -44,3 +44,16 @@ def test_draft_fails_loud_on_contamination() -> None:
     clusters = cluster_corrections([_mem("see ground_truth.csv for the answer", "orders")])
     with pytest.raises(ScentContaminationError):
         draft_harvested_sections(clusters, generated_at="2026-07-06T00:00:00Z")
+
+
+def test_apply_approved_sections_writes_only_approved(tmp_path) -> None:
+    from labrat.maze.document import Section
+    from labrat.maze.harvest import apply_approved_sections
+    from labrat.maze.store import MazeStore
+
+    store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="default")
+    approved = [Section(heading="Gotchas", body="- Keep this.", source="harvested")]
+    apply_approved_sections(store, domain="sales", approved=approved)
+    doc = store.load_domain("sales")
+    assert doc is not None
+    assert any("Keep this." in s.body and s.source == "harvested" for s in doc.sections)
