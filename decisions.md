@@ -627,3 +627,10 @@ benchmark-only by design. Because default profiles have `is_read_only=True` and 
 gate blocks every `mutating=True` tool, mutating tools (`run_program`, `llm_extract`/`llm_classify`,
 `load_file`, `attach_database`) self-report "blocked: read-only Analyst mode" on a fresh profile
 and require a read-write profile to exercise.
+
+## 2026-07-09 — TUI M2: first-connect Cartographer (T2c)
+
+Connect-time deterministic pre-pass into the user store (`~/.labrat/maze/<profile>/scent`),
+idempotent via cartograph_prepass's existing-docs cache; sidecar `.schema_fingerprint` enables
+detect-and-offer staleness (never auto-regenerate — user-scope dir only, project layer preserved).
+Controller is pure (`maze/first_connect.py`); the screen only notifies. Semantics stays off (T1c).
