@@ -32,6 +32,12 @@ def test_stale_scent_labelled() -> None:
     assert "stale" in (prov.footer() or "")
 
 
+def test_empty_scent_results_are_not_grounding_evidence() -> None:
+    prov = TurnProvenance()
+    prov.record_tool("search_reference_docs", True, _scent_output([]))
+    assert prov.footer() is None
+
+
 def test_unparseable_scent_output_degrades_to_count() -> None:
     prov = TurnProvenance()
     prov.record_tool("search_reference_docs", True, "result://abc/0001 (summarized)")

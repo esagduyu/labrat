@@ -34,7 +34,7 @@ class TurnProvenance:
                     if isinstance(parsed, dict)
                     else []
                 )
-                if isinstance(results, list) and results:
+                if isinstance(results, list):
                     result_list = cast("list[Any]", results)
                     self._scent_hits += len(result_list)
                     for doc in result_list:
@@ -42,8 +42,6 @@ class TurnProvenance:
                             cast(dict[str, Any], doc).get("domain"), str
                         ):
                             self._scent_domains.add(cast(str, cast(dict[str, Any], doc)["domain"]))
-                else:
-                    self._scent_hits += 1
             except (ValueError, TypeError):
                 self._scent_hits += 1  # summarized/non-JSON output: fall back to a call count
         elif name == "verify_join":
