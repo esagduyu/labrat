@@ -193,3 +193,60 @@ async def test_chat_panel_uses_first_class_hooks() -> None:
         assert "run_sql" in panel.transcript  # trace line landed
         assert "verifier" in panel.transcript  # status line landed
         assert "done" in panel.transcript
+
+
+# ── provenance footer (TUI-M4 Task 2) ───────────────────────────────────────
+
+
+class _GroundedFakeLoop:
+    """Emits one scent lookup + one run_sql, then text; exposes verifier attrs."""
+
+    verify_rounds_used = 0
+    _verifier = None  # verification off
+
+    async def run(self, message, *, on_text=None, on_status=None, on_tool_call=None):
+        if on_tool_call:
+            on_tool_call(
+                "search_reference_docs",
+                {"question": "q"},
+                True,
+                # Production shape: str(dispatch.value) on the tool's Pydantic _Output,
+                # which has no __str__ override — a repr, not JSON (loop.py:168).
+                "question='q' results=[DocResult(domain='orders', quick_reference=None, "
+                "sections=[SectionMatch(heading='h1', body='b1', score=1.0, "
+                "matched_terms=['a'])])]",
+                8.0,
+            )
+            on_tool_call("run_sql", {"query": "SELECT 1"}, True, '{"ok": true}', 5.0)
+        if on_text:
+            on_text("here you go")
+
+
+async def test_footer_appended_after_turn() -> None:
+    async with _PanelHost().run_test() as pilot:
+        panel = pilot.app.query_one(ChatPanel)
+        panel.set_scent_stale_provider(lambda: False)
+        panel.set_agent_loop(_GroundedFakeLoop())
+        await pilot.click("#user-input")
+        await pilot.press(*"hi", "enter")
+        await pilot.pause()
+        assert "⚑ grounded: scent ×1 (fresh) · 1 query" in panel.transcript  # noqa: RUF001
+
+
+async def test_no_footer_on_plain_turn() -> None:
+    async with _PanelHost().run_test() as pilot:
+        panel = pilot.app.query_one(ChatPanel)
+
+        class _PlainLoop:
+            verify_rounds_used = 0
+            _verifier = None
+
+            async def run(self, message, *, on_text=None, on_status=None, on_tool_call=None):
+                if on_text:
+                    on_text("hello")
+
+        panel.set_agent_loop(_PlainLoop())
+        await pilot.click("#user-input")
+        await pilot.press(*"hi", "enter")
+        await pilot.pause()
+        assert "⚑ grounded" not in panel.transcript

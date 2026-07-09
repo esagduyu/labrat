@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any, ClassVar
 
 from textual import on, work
@@ -94,10 +95,15 @@ class ChatPanel(Widget):
         # (rich_markup, is_trace) — retained for toggle reflow
         self._history_rich: list[tuple[str, bool]] = []
         self._show_traces: bool = True
+        self._scent_stale_provider: Callable[[], bool] | None = None
 
     def set_agent_loop(self, loop: Any) -> None:
         """Wire an AgentLoop into this panel."""
         self._agent_loop = loop
+
+    def set_scent_stale_provider(self, fn: Callable[[], bool]) -> None:
+        """Inject the screen's scent-staleness flag for footer freshness labels."""
+        self._scent_stale_provider = fn
 
     # ── layout ────────────────────────────────────────────────────────────────
 
@@ -133,6 +139,12 @@ class ChatPanel(Widget):
         if self._agent_loop is None:
             return
         self.is_agent_busy = True
+
+        from labrat.widgets.turn_provenance import TurnProvenance
+
+        stale = self._scent_stale_provider() if self._scent_stale_provider else False
+        provenance = TurnProvenance(scent_stale=stale)
+
         streaming = self.query_one("#streaming", RichLog)
         streaming.add_class("visible")
         streaming.clear()
@@ -157,6 +169,7 @@ class ChatPanel(Widget):
                 f"[dim]▸[/dim] [bold]{name}[/bold]({args_str}) {mark} [dim]{latency_ms:.0f}ms[/dim]"
             )
             self._append_history(tool_line, f"▸ {name}({args_str})", is_trace=True)
+            provenance.record_tool(name, ok, output)
 
         def on_status(text: str) -> None:
             self._append_history(f"[dim italic]{text}[/dim italic]", text, is_trace=True)
@@ -177,6 +190,13 @@ class ChatPanel(Widget):
                     f"[bold green]Agent:[/bold green] {full_response}",
                     f"Agent: {full_response}",
                 )
+            verifier_on = getattr(self._agent_loop, "_verifier", None) is not None
+            provenance.set_verifier(
+                getattr(self._agent_loop, "verify_rounds_used", 0) if verifier_on else None
+            )
+            footer = provenance.footer()
+            if footer and full_response:
+                self._append_history(f"[dim]{footer}[/dim]", footer)
             if _agent_error is not None:
                 self._append_history(
                     f"[bold red]Error:[/bold red] {_agent_error}",

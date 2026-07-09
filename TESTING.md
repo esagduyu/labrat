@@ -1158,3 +1158,17 @@ Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle → Save). Chat needs
 5. Switch threads (Ctrl+T) with captured corrections pending → confirm prompt appears; Cancel
    proceeds with the switch, nothing harvested.
 6. Ask in chat about the harvested topic → `search_reference_docs` should retrieve the new section.
+
+---
+
+## M4 — verification toggle + provenance footer (manual gate)
+
+1. Ctrl+, → "Verify answers" ON → Save → restart. Ask a question the agent will answer thinly
+   ("how many rows?" with no table named) → occasionally a dim `verifier: insufficient — …`
+   status line appears and the agent continues; final answer then carries `verifier ✓ (1 round)`
+   in its footer. With a good first answer the footer shows `verifier ✓`.
+2. Ask "any reference notes on orders? then count the orders" → footer like
+   `⚑ grounded: scent ×1 (fresh) · 1 query`.
+3. Corrupt `.schema_fingerprint` (see M2 gate) and relaunch → the same flow shows `scent ×1 (stale)`.
+4. A pure-prose turn (e.g. "thanks") → no footer line at all.
+5. Verify OFF (default): no verifier segment ever appears in footers.

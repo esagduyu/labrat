@@ -354,7 +354,9 @@ class MainScreen(Screen[None]):
             ledger_dir=ledger_dir,
         )
         self._agent_loop = loop
-        self.query_one("#chat-content", ChatPanel).set_agent_loop(loop)
+        chat_panel = self.query_one("#chat-content", ChatPanel)
+        chat_panel.set_agent_loop(loop)
+        chat_panel.set_scent_stale_provider(lambda: self._scent_stale)
 
         # Wire SQL autocomplete into the editor.
         from labrat.sql.completer import SQLCompleter
