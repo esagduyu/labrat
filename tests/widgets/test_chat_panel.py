@@ -140,3 +140,56 @@ async def test_chat_panel_tool_call_appears_in_transcript() -> None:
         panel._start_agent("show tables")
         await pilot.pause(delay=0.3)
         assert "list_tables" in panel.transcript
+
+
+# ── first-class hooks contract ──────────────────────────────────────────────
+
+
+class _FakeLoop:
+    """Drives the ChatPanel contract: run(msg, on_text=, on_status=, on_tool_call=)."""
+
+    def __init__(self) -> None:
+        self.received_kwargs: set[str] = set()
+
+    async def run(
+        self,
+        message: str,
+        *,
+        on_text: Any = None,
+        on_status: Any = None,
+        on_tool_call: Any = None,
+    ) -> None:
+        self.received_kwargs = {
+            k
+            for k, v in {
+                "on_text": on_text,
+                "on_status": on_status,
+                "on_tool_call": on_tool_call,
+            }.items()
+            if v is not None
+        }
+        if on_tool_call:
+            on_tool_call("run_sql", {"query": "SELECT 1"}, True, '{"ok": true}', 12.5)
+        if on_status:
+            on_status("verifier: insufficient — missing filter")
+        if on_text:
+            on_text("done")
+
+
+class _PanelHost(App[None]):
+    def compose(self) -> ComposeResult:
+        yield ChatPanel(id="chat")
+
+
+async def test_chat_panel_uses_first_class_hooks() -> None:
+    """ChatPanel._start_agent wires on_text/on_status/on_tool_call into loop.run()."""
+    async with _PanelHost().run_test() as pilot:
+        panel = pilot.app.query_one("#chat", ChatPanel)
+        loop = _FakeLoop()
+        panel.set_agent_loop(loop)
+        panel._start_agent("hi")
+        await pilot.pause(delay=0.3)
+        assert loop.received_kwargs == {"on_text", "on_status", "on_tool_call"}
+        assert "run_sql" in panel.transcript  # trace line landed
+        assert "verifier" in panel.transcript  # status line landed
+        assert "done" in panel.transcript

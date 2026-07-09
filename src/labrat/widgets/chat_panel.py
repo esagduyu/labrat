@@ -137,25 +137,29 @@ class ChatPanel(Widget):
             streaming.write("".join(self._stream_buf))
             self.post_message(ChatPanel.AgentText(text))
 
+        def on_tool_call(
+            name: str, args: dict[str, Any], ok: bool, output: str, latency_ms: float
+        ) -> None:
+            self.post_message(ChatPanel.AgentToolCall(name=name, args=args))
+            args_str = json.dumps(args, separators=(",", ":"))
+            if len(args_str) > 120:
+                args_str = args_str[:117] + "…"
+            mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+            tool_line = (
+                f"[dim]▸[/dim] [bold]{name}[/bold]({args_str}) {mark} [dim]{latency_ms:.0f}ms[/dim]"
+            )
+            self._append_history(tool_line, f"▸ {name}({args_str})", is_trace=True)
+
+        def on_status(text: str) -> None:
+            self._append_history(f"[dim italic]{text}[/dim italic]", text, is_trace=True)
+
         _agent_error: Exception | None = None
         try:
-            # Monkey-patch: wrap registry dispatch to emit AgentToolCall messages.
-            orig_dispatch = self._agent_loop._registry.dispatch
-
-            async def _traced_dispatch(name: str, args: dict[str, Any], ctx: Any) -> Any:
-                self.post_message(ChatPanel.AgentToolCall(name=name, args=args))
-                args_str = json.dumps(args, separators=(",", ":"))
-                tool_line = f"[dim]▸[/dim] [bold]{name}[/bold]({args_str})"
-                self._append_history(tool_line, f"▸ {name}({args_str})", is_trace=True)
-                return await orig_dispatch(name, args, ctx)
-
-            self._agent_loop._registry.dispatch = _traced_dispatch
-            try:
-                await self._agent_loop.run(message, on_text=on_text)
-            except Exception as e:
-                _agent_error = e
-            finally:
-                self._agent_loop._registry.dispatch = orig_dispatch
+            await self._agent_loop.run(
+                message, on_text=on_text, on_status=on_status, on_tool_call=on_tool_call
+            )
+        except Exception as e:
+            _agent_error = e
         finally:
             full_response = "".join(self._stream_buf)
             streaming.remove_class("visible")
