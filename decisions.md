@@ -634,3 +634,13 @@ Connect-time deterministic pre-pass into the user store (`~/.labrat/maze/<profil
 idempotent via cartograph_prepass's existing-docs cache; sidecar `.schema_fingerprint` enables
 detect-and-offer staleness (never auto-regenerate — user-scope dir only, project layer preserved).
 Controller is pure (`maze/first_connect.py`); the screen only notifies. Semantics stays off (T1c).
+
+## 2026-07-09 — TUI M3: M5 harvest surface (first production caller)
+
+CorrectionBuffer captures chat-correction pairs + draft-vs-executed edits for free; harvest runs
+only on explicit action (Ctrl+Shift+H) or a thread-switch confirm, gated by
+harvesting_enabled(interactive, Profile.harvest_opt_in) — fail-closed. Extractors now stamp
+Memory.table_scope (single-known-table sqlglot attribution, conservative None on ambiguity), and
+draft_harvested_sections returns domain-keyed drafts, so approved sections land in per-table Scent
+docs (project scope; `__global__` → `general`) instead of one global dump. Writes stay audited
+fail-loud (ScentContaminationError surfaces in the review modal, nothing written).

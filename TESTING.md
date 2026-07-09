@@ -1140,3 +1140,21 @@ read-only profile these self-report "blocked: read-only Analyst mode" (expected)
    If Ctrl+Shift+M does not register in your terminal, note it — rebind to F6 per the plan.
 5. Create `./labrat_maze/scent/manual-note.md` (any heading/body), run refresh → the project-scope
    file must be untouched.
+
+---
+
+## M3 — harvest surface (manual gate)
+
+Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle → Save). Chat needs a working provider.
+
+1. Ask the agent a question that yields SQL; then reply "no — exclude test orders". Ask another;
+   edit the drafted SQL in the editor before running it. → two capture events (no LLM calls yet;
+   verify no latency).
+2. Ctrl+Shift+H → "Harvesting…" toast → review modal lists drafted Gotchas rows with domains
+   (table name or `general`). Toggle one row to skip (space). Apply → success toast; verify
+   `./labrat_maze/scent/<domain>.md` gained a `**Source:** harvested` section; skipped row absent.
+3. Re-run Ctrl+Shift+H → re-drafts appear; Apply again → doc unchanged (body dedup, idempotent).
+4. With harvest_opt_in OFF: Ctrl+Shift+H → "Harvesting is off" warning, no modal, no LLM call.
+5. Switch threads (Ctrl+T) with captured corrections pending → confirm prompt appears; Cancel
+   proceeds with the switch, nothing harvested.
+6. Ask in chat about the harvested topic → `search_reference_docs` should retrieve the new section.
