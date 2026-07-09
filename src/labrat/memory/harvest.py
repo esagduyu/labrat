@@ -9,6 +9,8 @@ opt in).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from labrat.history.events import QueryEvent
 from labrat.memory.extractor import ChatCorrectionExtractor, EditExtractor, LLMFn
 from labrat.memory.model import Memory
@@ -23,13 +25,18 @@ class SessionHarvester:
     """
 
     def __init__(
-        self, profile: str, llm_fn: LLMFn, store: MemoryStore, enabled: bool = False
+        self,
+        profile: str,
+        llm_fn: LLMFn,
+        store: MemoryStore,
+        enabled: bool = False,
+        known_tables: Sequence[str] | None = None,
     ) -> None:
         self._profile = profile
         self._store = store
         self._enabled = enabled
-        self._edit = EditExtractor(profile, llm_fn)
-        self._chat = ChatCorrectionExtractor(profile, llm_fn)
+        self._edit = EditExtractor(profile, llm_fn, known_tables=known_tables)
+        self._chat = ChatCorrectionExtractor(profile, llm_fn, known_tables=known_tables)
 
     async def harvest_events(self, events: list[QueryEvent]) -> list[Memory]:
         if not self._enabled:

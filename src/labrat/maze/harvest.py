@@ -34,8 +34,16 @@ def draft_harvested_sections(
     *,
     generated_at: str,
     model_id: str | None = None,
-) -> list[Section]:
-    sections: list[Section] = []
+) -> dict[str, list[Section]]:
+    """Draft harvested Gotchas sections per cluster.
+
+    Returns a dict keyed by cluster key (a ``table_scope`` value, or
+    ``"__global__"`` for the ungrouped cluster) mapping to the drafted
+    sections for that cluster (one per cluster today; list-valued for
+    future headroom). Callers map ``"__global__"`` to a Scent domain via
+    ``harvest_controller.domain_for_cluster``.
+    """
+    out: dict[str, list[Section]] = {}
     for key in sorted(clusters):
         seen: set[str] = set()
         bullets: list[str] = []
@@ -52,16 +60,15 @@ def draft_harvested_sections(
             raise ScentContaminationError(
                 f"harvested draft for {key!r} tripped contamination guard: {hit}"
             )
-        sections.append(
-            Section(
-                heading="Gotchas",
-                body=body,
-                source="harvested",
-                generated_at=generated_at,
-                model_id=model_id,
-            )
+        section = Section(
+            heading="Gotchas",
+            body=body,
+            source="harvested",
+            generated_at=generated_at,
+            model_id=model_id,
         )
-    return sections
+        out.setdefault(key, []).append(section)
+    return out
 
 
 def apply_approved_sections(store: MazeStore, domain: str, approved: list[Section]) -> None:

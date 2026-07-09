@@ -77,6 +77,13 @@ class ChatPanel(Widget):
     class AgentDone(Message):
         """Posted when the agent finishes a turn."""
 
+    class UserMessage(Message):
+        """Posted when the user submits a chat message (for capture seams)."""
+
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
     # ── init ──────────────────────────────────────────────────────────────────
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -116,6 +123,7 @@ class ChatPanel(Widget):
             return
         event.input.value = ""
         self._append_history(f"[bold blue]You:[/bold blue] {message}", f"You: {message}")
+        self.post_message(ChatPanel.UserMessage(message))
         self._start_agent(message)
 
     # ── agent worker ──────────────────────────────────────────────────────────

@@ -25,19 +25,26 @@ def review_corrections(
     *,
     generated_at: str,
     model_id: str | None = None,
-) -> list[Section]:
+) -> dict[str, list[Section]]:
     """Cluster correction memories and draft Scent sections for human review.
 
     Pure pipeline over the already-tested helpers: clusters -> drafted
     sections, ready to hand to an approval UI. Nothing here writes to the
     MazeStore — that only happens once a human approves specific sections
-    via ``apply_approved_sections``.
+    via ``apply_approved_sections``. Returned dict is keyed by cluster key
+    (see ``draft_harvested_sections``); use ``domain_for_cluster`` to map a
+    key to a Scent domain.
     """
     from labrat.maze.harvest import cluster_corrections, draft_harvested_sections
 
     return draft_harvested_sections(
         cluster_corrections(memories), generated_at=generated_at, model_id=model_id
     )
+
+
+def domain_for_cluster(key: str) -> str:
+    """Map a cluster key to a Scent domain doc name (``__global__`` → ``general``)."""
+    return "general" if key == "__global__" else key
 
 
 def harvesting_enabled(is_interactive: bool, profile_opt_in: bool) -> bool:
