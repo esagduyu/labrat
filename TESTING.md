@@ -1121,3 +1121,6 @@ expect a one-time "degraded" warning toast (claude CLI fallback).
 6. `ctrl+,` → toggle "Verify answers" on, Save → restart → ask a question → expect a dim
    `verifier: …` status line only if the first answer was judged insufficient (usually none).
 7. `ctrl+\` toggles tool-trace lines off/on including the new status lines.
+
+Note: to exercise `run_program`/`llm_extract` the profile must be read-write; on a default
+read-only profile these self-report "blocked: read-only Analyst mode" (expected).

@@ -623,4 +623,7 @@ multi-DB ToolContext (`primary="main"`, `read_only` from the profile), Context L
 (`Profile.verify_enabled`). Provider is per-profile (`agent_provider`, default "auto": Anthropic
 with API key, else claude CLI + degraded warning). Spec:
 docs/superpowers/specs/2026-07-06-tui-integration-design.md. Consensus verification stays
-benchmark-only by design.
+benchmark-only by design. Because default profiles have `is_read_only=True` and the tool-dispatch
+gate blocks every `mutating=True` tool, mutating tools (`run_program`, `llm_extract`/`llm_classify`,
+`load_file`, `attach_database`) self-report "blocked: read-only Analyst mode" on a fresh profile
+and require a read-write profile to exercise.

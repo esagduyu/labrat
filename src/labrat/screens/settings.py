@@ -59,6 +59,7 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                     [(c, c) for c in _PROVIDER_CHOICES],
                     value=self._profile.agent_provider,
                     id="provider-select",
+                    allow_blank=False,
                 )
             with Horizontal(classes="row"):
                 yield Label("Model")
