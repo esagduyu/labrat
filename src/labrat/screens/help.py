@@ -47,6 +47,7 @@ _SECTIONS = [
             ("Ctrl+R", "Query history — browse and reload past queries"),
             ("Ctrl+G", "Agent memories — view and delete"),
             ("Ctrl+,", "Settings — provider / harvest / verify toggles"),
+            ("Ctrl+Shift+M", "Regenerate scent docs (after schema changes)"),
         ],
     ),
     (

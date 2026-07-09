@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import polars as pl
@@ -152,6 +153,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+g", "view_memories", "Memories", show=True),
         Binding("ctrl+backslash", "toggle_traces", "Traces", show=False),
         Binding("ctrl+comma", "open_settings", "Settings", show=True),
+        Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
     ]
 
     def __init__(
@@ -163,6 +165,7 @@ class MainScreen(Screen[None]):
         catalog: Catalog | None = None,
         connection: Connection | None = None,
         profile_obj: Profile | None = None,
+        scent_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self._profile = profile
@@ -176,6 +179,9 @@ class MainScreen(Screen[None]):
         self._last_sql: str = ""
         self._agent_loop = None
         self._provider = None
+        self._scent_dir_override = scent_dir
+        self._scent_stale = False
+        self._scent_dir: Path | None = None
 
     def compose(self) -> ComposeResult:
         connected = self._connection is not None
@@ -348,12 +354,82 @@ class MainScreen(Screen[None]):
         completer = SQLCompleter(catalog=self._catalog)
         editor.set_completer(completer)
 
+        # First-connect Cartographer pre-pass (T2c) — runs after agent wiring so
+        # chat is usable immediately regardless of pre-pass timing.
+        from labrat.maze.store import user_scent_dir
+
+        self._scent_dir = self._scent_dir_override or user_scent_dir(profile_obj.name)
+        self._run_scent_prepass()
+
     def on_resize(self, event: events.Resize) -> None:
         """Enter narrow mode below 80 columns."""
         if event.size.width < 80:
             self.add_class("narrow")
         else:
             self.remove_class("narrow")
+
+    # ── Cartographer scent (T2c) ────────────────────────────────────────────
+
+    @work(exclusive=True, group="scent")
+    async def _run_scent_prepass(self) -> None:
+        from labrat.maze.first_connect import tui_first_connect_prepass
+
+        if self._connection is None or self._catalog is None or self._scent_dir is None:
+            return
+        self.notify("\U0001f5fa mapping schema (Cartographer)…", timeout=3)
+        try:
+            outcome = await tui_first_connect_prepass(
+                connections={"main": self._connection},
+                catalogs={"main": self._catalog},
+                primary="main",
+                catalog=self._catalog,
+                scent_dir=self._scent_dir,
+            )
+        except Exception as exc:  # fail-open: chat works without scent
+            self.notify(
+                f"Cartographer pre-pass failed (chat unaffected): {exc}",
+                severity="warning",
+                timeout=8,
+            )
+            return
+        self._scent_stale = outcome.stale
+        if outcome.generated:
+            self.notify(f"scent ready · {len(outcome.doc_paths)} docs", timeout=4)
+        elif outcome.stale:
+            self.notify(
+                "schema changed since scent was mapped — refresh with Ctrl+Shift+M",
+                severity="warning",
+                timeout=8,
+            )
+
+    def action_refresh_scent(self) -> None:
+        from labrat.screens.confirm import ConfirmScreen
+
+        if self._scent_dir is None:
+            self.notify("No scent store for this session.", severity="warning")
+            return
+
+        def _after(confirmed: bool | None) -> None:
+            if confirmed:
+                self._do_refresh_scent()
+
+        self.app.push_screen(
+            ConfirmScreen(
+                "[bold]Regenerate scent?[/bold]\n\n"
+                "Deletes and re-maps this profile's user-scope scent docs.\n"
+                "[dim]Project-scope docs (incl. harvested sections) are untouched.[/dim]"
+            ),
+            _after,
+        )
+
+    def _do_refresh_scent(self) -> None:
+        import shutil
+
+        assert self._scent_dir is not None
+        if self._scent_dir.exists():
+            shutil.rmtree(self._scent_dir)  # user-scope Cartographer output only
+        self._scent_stale = False
+        self._run_scent_prepass()
 
     # ── SQL run handler ───────────────────────────────────────────────────────
 
