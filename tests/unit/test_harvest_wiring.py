@@ -20,15 +20,23 @@ def test_review_then_apply_writes_only_approved(tmp_path: Path) -> None:
         )
     ]
     drafted = review_corrections(mems, generated_at="2026-07-06T00:00:00Z")
-    assert drafted and drafted[0].source == "harvested"
+    assert set(drafted) == {"sales"}
+    assert drafted["sales"] and drafted["sales"][0].source == "harvested"
 
     # Simulate a human approving the first bullet only.
-    approved = [drafted[0]]
+    approved = [drafted["sales"][0]]
     store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="default")
     apply_approved_sections(store, domain="sales", approved=approved)
     doc = store.load_domain("sales")
     assert doc is not None
     assert any("deleted_at IS NULL" in s.body for s in doc.sections)
+
+
+def test_domain_for_cluster_maps_global() -> None:
+    from labrat.screens.harvest_controller import domain_for_cluster
+
+    assert domain_for_cluster("__global__") == "general"
+    assert domain_for_cluster("orders") == "orders"
 
 
 def test_harvesting_enabled_requires_interactive_and_opt_in() -> None:

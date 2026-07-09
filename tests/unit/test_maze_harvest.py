@@ -24,17 +24,18 @@ def test_cluster_ignores_non_correction_kinds() -> None:
     assert {m.text for m in clusters["orders"]} == {"keep"}
 
 
-def test_draft_produces_harvested_gotchas_sections() -> None:
-    clusters = cluster_corrections([_mem("Filter deleted_at IS NULL.", "orders")])
-    sections = draft_harvested_sections(
-        clusters, generated_at="2026-07-06T00:00:00Z", model_id="claude-sonnet-4-6"
+def test_draft_produces_domain_keyed_harvested_sections() -> None:
+    clusters = cluster_corrections(
+        [_mem("filter test orders", "orders"), _mem("dates are UTC", None)]
     )
-    assert len(sections) == 1
-    s = sections[0]
-    assert s.heading == "Gotchas"
-    assert s.source == "harvested"
-    assert s.generated_at == "2026-07-06T00:00:00Z"
-    assert "- Filter deleted_at IS NULL." in s.body
+    drafts = draft_harvested_sections(clusters, generated_at="2026-07-06")
+    assert set(drafts) == {"orders", "__global__"}
+    for sections in drafts.values():
+        for s in sections:
+            assert s.heading == "Gotchas"
+            assert s.source == "harvested"
+            assert s.generated_at == "2026-07-06"
+    assert "filter test orders" in drafts["orders"][0].body
 
 
 def test_draft_fails_loud_on_contamination() -> None:
