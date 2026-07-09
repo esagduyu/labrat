@@ -17,7 +17,6 @@ class TurnProvenance:
     def __init__(self, scent_stale: bool = False) -> None:
         self._scent_stale = scent_stale
         self._scent_hits = 0
-        self._scent_domains: set[str] = set()
         self._join_verified = False
         self._lineage_used = False
         self._sql_runs = 0
@@ -35,15 +34,16 @@ class TurnProvenance:
                     else []
                 )
                 if isinstance(results, list):
-                    result_list = cast("list[Any]", results)
-                    self._scent_hits += len(result_list)
-                    for doc in result_list:
-                        if isinstance(doc, dict) and isinstance(
-                            cast(dict[str, Any], doc).get("domain"), str
-                        ):
-                            self._scent_domains.add(cast(str, cast(dict[str, Any], doc)["domain"]))
+                    self._scent_hits += len(cast("list[Any]", results))
             except (ValueError, TypeError):
-                self._scent_hits += 1  # summarized/non-JSON output: fall back to a call count
+                # Not JSON — production shape is a Pydantic repr of search_reference_docs'
+                # _Output (e.g. "question='q' results=[]" or "...results=[DocResult(...), ...]").
+                if "results=[]" in output:
+                    pass  # zero hits: not grounding evidence, don't increment
+                elif "DocResult(" in output:
+                    self._scent_hits += output.count("DocResult(")
+                else:
+                    self._scent_hits += 1  # truly opaque output: fall back to a call count
         elif name == "verify_join":
             self._join_verified = True
         elif name == "explain_lineage":
@@ -68,7 +68,8 @@ class TurnProvenance:
             parts.append(f"{self._sql_runs} {noun}")
         if self._verifier_rounds is not None:
             if self._verifier_rounds > 0:
-                parts.append(f"verifier ✓ ({self._verifier_rounds} rounds)")
+                noun = "round" if self._verifier_rounds == 1 else "rounds"
+                parts.append(f"verifier ✓ ({self._verifier_rounds} {noun})")
             else:
                 parts.append("verifier ✓")
         if not parts:

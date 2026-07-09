@@ -210,8 +210,11 @@ class _GroundedFakeLoop:
                 "search_reference_docs",
                 {"question": "q"},
                 True,
-                '{"question": "q", "results": '
-                '[{"domain": "orders", "quick_reference": null, "sections": []}]}',
+                # Production shape: str(dispatch.value) on the tool's Pydantic _Output,
+                # which has no __str__ override — a repr, not JSON (loop.py:168).
+                "question='q' results=[DocResult(domain='orders', quick_reference=None, "
+                "sections=[SectionMatch(heading='h1', body='b1', score=1.0, "
+                "matched_terms=['a'])])]",
                 8.0,
             )
             on_tool_call("run_sql", {"query": "SELECT 1"}, True, '{"ok": true}', 5.0)

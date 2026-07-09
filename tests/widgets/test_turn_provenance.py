@@ -44,6 +44,29 @@ def test_unparseable_scent_output_degrades_to_count() -> None:
     assert "scent ×1" in (prov.footer() or "")  # noqa: RUF001
 
 
+def test_empty_repr_scent_output_is_not_grounding_evidence() -> None:
+    """Production shape: Pydantic repr (no __str__ override), not JSON. Empty case."""
+    prov = TurnProvenance()
+    prov.record_tool("search_reference_docs", True, "question='q' results=[]")
+    assert prov.footer() is None
+
+
+def test_multi_hit_repr_scent_output_counted() -> None:
+    """Production shape: Pydantic repr with two DocResult hits."""
+    prov = TurnProvenance()
+    output = (
+        "question='q' results=[DocResult(domain='orders', quick_reference=None, "
+        "sections=[SectionMatch(heading='h1', body='b1', score=1.0, matched_terms=['a'])]), "
+        "DocResult(domain='users', quick_reference='qr', "
+        "sections=[SectionMatch(heading='h2', body='b2', score=2.0, matched_terms=['b']), "
+        "SectionMatch(heading='h3', body='b3', score=3.0, matched_terms=['c'])])]"
+    )
+    prov.record_tool("search_reference_docs", True, output)
+    footer = prov.footer()
+    assert footer is not None
+    assert "scent ×2" in footer  # noqa: RUF001
+
+
 def test_join_lineage_and_query_count() -> None:
     prov = TurnProvenance()
     prov.record_tool("verify_join", True, "{}")
@@ -67,6 +90,9 @@ def test_verifier_outcome() -> None:
     prov = TurnProvenance()
     prov.set_verifier(rounds_used=0)
     assert "verifier ✓" in (prov.footer() or "")
+    prov1 = TurnProvenance()
+    prov1.set_verifier(rounds_used=1)
+    assert "verifier ✓ (1 round)" in (prov1.footer() or "")
     prov2 = TurnProvenance()
     prov2.set_verifier(rounds_used=2)
     assert "verifier ✓ (2 rounds)" in (prov2.footer() or "")

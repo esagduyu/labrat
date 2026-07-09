@@ -1165,7 +1165,7 @@ Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle → Save). Chat needs
 
 1. Ctrl+, → "Verify answers" ON → Save → restart. Ask a question the agent will answer thinly
    ("how many rows?" with no table named) → occasionally a dim `verifier: insufficient — …`
-   status line appears and the agent continues; final answer then carries `verifier ✓ (1 rounds)`
+   status line appears and the agent continues; final answer then carries `verifier ✓ (1 round)`
    in its footer. With a good first answer the footer shows `verifier ✓`.
 2. Ask "any reference notes on orders? then count the orders" → footer like
    `⚑ grounded: scent ×1 (fresh) · 1 query`.
