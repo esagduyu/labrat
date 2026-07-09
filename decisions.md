@@ -613,3 +613,14 @@ wiring one is a product decision plus needs manual TUI verification, not a unit-
 build step); T2b v2 (autonomous scheduled harvest, embedding-based clustering instead
 of `table_scope`); moat Increments 2/3 (`project_moat_roadmap`: T1b lineage integration,
 T3c provenance footer).
+
+## 2026-07-09 — TUI M1: chat through the real agent stack
+
+The TUI chat path now builds its AgentLoop via `agent/session.py::build_agent_session` — the
+same factory `run_agent_task` uses — with `build_data_tools_registry()` + 5 TUI extras (~25 tools),
+multi-DB ToolContext (`primary="main"`, `read_only` from the profile), Context Ledger (durable under
+`~/.labrat/ledger/<profile>/`), injected `llm_fn`, and an optional sufficiency verifier
+(`Profile.verify_enabled`). Provider is per-profile (`agent_provider`, default "auto": Anthropic
+with API key, else claude CLI + degraded warning). Spec:
+docs/superpowers/specs/2026-07-06-tui-integration-design.md. Consensus verification stays
+benchmark-only by design.
