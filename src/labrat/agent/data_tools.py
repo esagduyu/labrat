@@ -30,7 +30,9 @@ from labrat.agent.tools.verify_join import VerifyJoinTool
 from labrat.agent.tools.workflow import WorkflowTool
 
 
-def build_data_tools_registry(include_program: bool = True) -> ToolRegistry:
+def build_data_tools_registry(
+    include_program: bool = True, *, run_sql_tool: RunSqlTool | None = None
+) -> ToolRegistry:
     """Return a registry with the standard read-only data-access tools.
 
     Tools included: search_reference_docs, workflow, profile_dataset, list_tables,
@@ -49,6 +51,11 @@ def build_data_tools_registry(include_program: bool = True) -> ToolRegistry:
     run_program (no nested programs / recursion by construction). Constructing
     the tool here builds NO registry — no construction recursion.
 
+    ``run_sql_tool`` lets a caller supply its own callback-wired ``RunSqlTool``
+    instance (``on_result``/``on_draft``) — e.g. the TUI, which needs to react to
+    every drafted/executed query. When omitted, a bare ``RunSqlTool()`` is
+    registered as before; all other consumers are unaffected.
+
     Excluded by design: draft_sql / create_chart (TUI callbacks),
     run_validations / recall_memories / search_query_history (profile-keyed,
     TUI-specific).
@@ -63,7 +70,7 @@ def build_data_tools_registry(include_program: bool = True) -> ToolRegistry:
     registry.register(LinkSchemaTool())
     registry.register(SampleRowsTool())
     registry.register(ColumnStatsTool())
-    registry.register(RunSqlTool())
+    registry.register(run_sql_tool if run_sql_tool is not None else RunSqlTool())
     registry.register(ExplainSqlTool())
     registry.register(ExplainLineageTool())
     registry.register(VerifyJoinTool())

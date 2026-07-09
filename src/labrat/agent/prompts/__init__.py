@@ -32,3 +32,8 @@ def build_system_prompt(dialect: str) -> str:
     base = _read("system_base.md")
     specific = _read(f"dialect_{dialect}.md")
     return f"{base}\n\n{specific}"
+
+
+def build_tui_system_prompt(dialect: str) -> str:
+    """Base system prompt plus TUI-specific tool guidance."""
+    return f"{build_system_prompt(dialect)}\n\n{_read('tui_addendum.md')}"

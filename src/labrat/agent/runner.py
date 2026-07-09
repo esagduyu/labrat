@@ -8,7 +8,6 @@ Used by:
 
 from __future__ import annotations
 
-import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -16,21 +15,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from labrat.agent.loop import AgentLoop
 from labrat.agent.providers.base import ModelProvider
+from labrat.agent.session import build_agent_session
 from labrat.agent.tools.base import ToolContext, ToolRegistry
-from labrat.agent.verifier import provider_llm_fn
-from labrat.results.store import ResultStore
-from labrat.runtime.context_ledger import ContextLedger
-
-# System prompt for the injected per-row llm_fn (llm_extract / llm_classify).
-# Kept terse and format-obsessed: each per-row prompt carries its own full
-# instructions; this only reinforces the output discipline.
-_LLM_FN_SYSTEM = (
-    "You are a precise per-row data-extraction engine. Follow the output-format "
-    "instructions in each request exactly: reply with ONLY the requested JSON object "
-    "or category value — no prose, no markdown fences, no explanation."
-)
 
 
 class AgentTaskResult(BaseModel):
@@ -84,38 +71,17 @@ async def run_agent_task(
     def on_text(text: str) -> None:
         text_parts.append(text)
 
-    verifier = None
-    if verify:
-        from labrat.agent.verifier import LLMVerifier
-
-        verifier = LLMVerifier(provider_llm_fn(provider))
-
-    # Per-row LLM primitives (llm_extract / llm_classify) need an injected llm_fn.
-    # The loop's own provider doubles as the per-row caller (same model + billing).
-    # Only set when the caller hasn't provided one — caller injection wins; every
-    # other ToolContext builder (TUI, MCP server, DAB claude-mcp) leaves it None.
-    if ctx.llm_fn is None:
-        ctx.llm_fn = provider_llm_fn(provider, system=_LLM_FN_SYSTEM)
-
-    ledger: ContextLedger | None = None
-    if enable_ledger:
-        root = (
-            ledger_dir
-            if ledger_dir is not None
-            else Path(tempfile.mkdtemp(prefix="labrat-ledger-"))
-        )
-        ledger = ContextLedger(ResultStore(root))
-
-    loop = AgentLoop(
-        provider=provider,
-        registry=registry,
+    loop = build_agent_session(
         ctx=ctx,
-        system=system_prompt,
+        registry=registry,
+        provider=provider,
+        system_prompt=system_prompt,
+        verify=verify,
+        max_verify_rounds=max_verify_rounds,
+        enable_ledger=enable_ledger,
+        ledger_dir=ledger_dir,
         max_turns=max_turns,
         max_tool_calls=max_tool_calls,
-        verifier=verifier,
-        max_verify_rounds=max_verify_rounds,
-        ledger=ledger,
     )
     t0 = time.monotonic()
     await loop.run(prompt, on_text=on_text, on_tool_call=on_tool_call)

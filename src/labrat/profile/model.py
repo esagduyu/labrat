@@ -32,6 +32,12 @@ class Profile(BaseModel):
     default_schema: str | None = None
     # Display
     description: str = ""
+    # Agent/TUI settings (all optional + defaulted: legacy serialized profiles
+    # missing these keys validate cleanly).
+    agent_provider: Literal["auto", "anthropic", "claude-code", "openai", "codex"] = "auto"
+    agent_model: str | None = None
+    harvest_opt_in: bool = False
+    verify_enabled: bool = False
 
     @field_validator("name")
     @classmethod

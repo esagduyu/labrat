@@ -1099,3 +1099,28 @@ uv run labrat conn list
 # 4. Launch TUI (exit with q)
 uv run labrat
 ```
+
+---
+
+## M1 — chat through the real agent stack (manual gate)
+
+Setup: `uv run labrat` against a profile pointing at `tests/fixtures/sample_dbs/ecommerce.duckdb`
+(or any DuckDB file; create the profile via onboarding). With no ANTHROPIC_API_KEY exported,
+expect a one-time "degraded" warning toast (claude CLI fallback).
+
+1. Ask in chat: "profile this dataset" → expect a `profile_dataset` trace line (`▸ profile_dataset(...) ✓`)
+   and a structured summary. This tool did not exist in the TUI before M1.
+2. Ask: "which tables are relevant to revenue by product category?" → expect `link_schema` and/or
+   `search_columns` traces.
+3. Ask: "run a query counting orders per status and chart it" → expect `run_sql` trace, results table
+   populating, then `create_chart` rendering in the results pane.
+4. Ask: "draft (don't run) a query for top customers by spend" → expect `draft_sql` trace and SQL
+   appearing in the editor, NOT executed.
+5. With a read-only profile, ask the agent to `CREATE TABLE tmp1 AS SELECT 1` → expect the tool
+   result to show "blocked: read-only Analyst mode" and the agent to relay the refusal.
+6. `ctrl+,` → toggle "Verify answers" on, Save → restart → ask a question → expect a dim
+   `verifier: …` status line only if the first answer was judged insufficient (usually none).
+7. `ctrl+\` toggles tool-trace lines off/on including the new status lines.
+
+Note: to exercise `run_program`/`llm_extract` the profile must be read-write; on a default
+read-only profile these self-report "blocked: read-only Analyst mode" (expected).

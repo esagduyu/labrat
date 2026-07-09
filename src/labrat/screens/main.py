@@ -15,6 +15,7 @@ from textual.widget import Widget
 if TYPE_CHECKING:
     from labrat.db.base import Connection
     from labrat.db.catalog import Catalog
+    from labrat.profile.model import Profile
 
 
 class _StatusBar(Widget):
@@ -150,6 +151,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+r", "view_history", "History", show=True),
         Binding("ctrl+g", "view_memories", "Memories", show=True),
         Binding("ctrl+backslash", "toggle_traces", "Traces", show=False),
+        Binding("ctrl+comma", "open_settings", "Settings", show=True),
     ]
 
     def __init__(
@@ -160,6 +162,7 @@ class MainScreen(Screen[None]):
         thread: str = "untitled",
         catalog: Catalog | None = None,
         connection: Connection | None = None,
+        profile_obj: Profile | None = None,
     ) -> None:
         super().__init__()
         self._profile = profile
@@ -167,9 +170,12 @@ class MainScreen(Screen[None]):
         self._thread = thread
         self._catalog = catalog
         self._connection = connection
+        self._profile_obj = profile_obj
         self._current_thread_id: str | None = None
         self._current_thread_name: str = "untitled"
         self._last_sql: str = ""
+        self._agent_loop = None
+        self._provider = None
 
     def compose(self) -> ComposeResult:
         connected = self._connection is not None
@@ -254,21 +260,17 @@ class MainScreen(Screen[None]):
 
         from rich.text import Text
 
-        from labrat.agent.loop import AgentLoop
-        from labrat.agent.providers.claude_code import ClaudeCodeProvider
-        from labrat.agent.tools.base import ToolContext, ToolRegistry
-        from labrat.agent.tools.column_stats import ColumnStatsTool
+        from labrat.agent.data_tools import build_data_tools_registry
+        from labrat.agent.prompts import build_tui_system_prompt
+        from labrat.agent.session import build_agent_session, resolve_provider
+        from labrat.agent.tools.base import ToolContext
         from labrat.agent.tools.create_chart import CreateChartTool
-        from labrat.agent.tools.describe_table import DescribeTableTool
         from labrat.agent.tools.draft_sql import DraftSqlTool
-        from labrat.agent.tools.explain_sql import ExplainSqlTool
-        from labrat.agent.tools.list_tables import ListTablesTool
         from labrat.agent.tools.recall_memories import RecallMemoriesTool
         from labrat.agent.tools.run_sql import RunSqlTool
         from labrat.agent.tools.run_validations import RunValidationsTool
-        from labrat.agent.tools.sample_rows import SampleRowsTool
-        from labrat.agent.tools.search_columns import SearchColumnsTool
         from labrat.agent.tools.search_query_history import SearchQueryHistoryTool
+        from labrat.profile.model import Profile
         from labrat.widgets.chat_panel import ChatPanel
         from labrat.widgets.query_editor import QueryEditor
 
@@ -291,32 +293,53 @@ class MainScreen(Screen[None]):
             chart_log.display = True
             table.display = False
 
-        ctx = ToolContext(
-            connection=self._connection,
-            catalog=self._catalog,
-            profile_name=self._profile,
+        profile_obj = self._profile_obj or Profile(
+            name=self._profile if self._profile != "—" else "default",
+            dialect=self._dialect if self._dialect != "—" else "duckdb",
         )
-        registry = ToolRegistry()
-        registry.register(RunSqlTool(on_result=on_result, on_draft=on_draft))
+
+        registry = build_data_tools_registry(
+            run_sql_tool=RunSqlTool(on_result=on_result, on_draft=on_draft)
+        )
         registry.register(DraftSqlTool(on_draft=on_draft))
         registry.register(CreateChartTool(on_chart=on_chart))
-        registry.register(ListTablesTool())
-        registry.register(DescribeTableTool())
-        registry.register(SampleRowsTool())
-        registry.register(SearchColumnsTool())
-        registry.register(ColumnStatsTool())
-        registry.register(ExplainSqlTool())
-        registry.register(SearchQueryHistoryTool())
-        registry.register(RecallMemoriesTool())
         registry.register(RunValidationsTool())
+        registry.register(RecallMemoriesTool())
+        registry.register(SearchQueryHistoryTool())
 
-        provider = ClaudeCodeProvider()
-        loop = AgentLoop(
-            provider=provider,
-            registry=registry,
-            ctx=ctx,
-            dialect=self._dialect,
+        catalogs: dict[str, object] = {}
+        if self._catalog is not None:
+            catalogs["main"] = self._catalog
+        ctx = ToolContext(
+            connections={"main": self._connection},
+            catalogs=catalogs,
+            primary="main",
+            profile_name=profile_obj.name,
+            read_only=profile_obj.is_read_only,
         )
+
+        provider, degraded_warning = resolve_provider(profile_obj)
+        if degraded_warning:
+            self.notify(degraded_warning, severity="warning", timeout=8)
+        self._provider = provider
+
+        import time as _time
+        from pathlib import Path as _Path
+
+        ledger_dir = _Path.home() / ".labrat" / "ledger" / profile_obj.name / str(int(_time.time()))
+        loop = build_agent_session(
+            ctx=ctx,
+            registry=registry,
+            provider=provider,
+            system_prompt=build_tui_system_prompt(
+                self._dialect if self._dialect != "—" else "duckdb"
+            ),
+            dialect=self._dialect if self._dialect != "—" else "duckdb",
+            verify=profile_obj.verify_enabled,
+            enable_ledger=True,
+            ledger_dir=ledger_dir,
+        )
+        self._agent_loop = loop
         self.query_one("#chat-content", ChatPanel).set_agent_loop(loop)
 
         # Wire SQL autocomplete into the editor.
@@ -458,6 +481,22 @@ class MainScreen(Screen[None]):
         from labrat.screens.memories_viewer import MemoriesViewerScreen
 
         self.app.push_screen(MemoriesViewerScreen(profile_name=self._profile))
+
+    def action_open_settings(self) -> None:
+        from labrat.screens.settings import SettingsScreen
+
+        if self._profile_obj is None:
+            self.notify("No profile loaded — settings unavailable.", severity="warning")
+            return
+
+        def _on_result(updated: object) -> None:
+            from labrat.profile.model import Profile
+
+            if isinstance(updated, Profile):
+                self._profile_obj = updated
+                self.notify("Settings saved. Provider/verify apply on next start.", timeout=4)
+
+        self.app.push_screen(SettingsScreen(self._profile_obj), _on_result)
 
     def action_toggle_traces(self) -> None:
         from labrat.widgets.chat_panel import ChatPanel

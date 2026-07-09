@@ -56,6 +56,7 @@ class LabRatApp(App[None]):
             dialect=profile.dialect,
             catalog=catalog,
             connection=conn if connected else None,
+            profile_obj=profile,
         )
 
     def _launch_main(
@@ -65,9 +66,11 @@ class LabRatApp(App[None]):
         dialect: str = "—",
         catalog: object = None,
         connection: object = None,
+        profile_obj: object = None,
     ) -> None:
         from labrat.db.base import Connection
         from labrat.db.catalog import Catalog
+        from labrat.profile.model import Profile
         from labrat.screens.main import MainScreen
 
         self.push_screen(
@@ -76,6 +79,7 @@ class LabRatApp(App[None]):
                 dialect=dialect,
                 catalog=catalog if isinstance(catalog, Catalog) else None,
                 connection=connection if isinstance(connection, Connection) else None,
+                profile_obj=profile_obj if isinstance(profile_obj, Profile) else None,
             )
         )
 

@@ -40,6 +40,19 @@ class ProfileManager:
             raise ProfileError(f"Profile '{name}' not found.")
         return profiles[name]
 
+    def update(self, profile: Profile) -> None:
+        """Replace an existing profile by name.
+
+        Raises ProfileError if the name is unknown. Never touches keyring
+        secrets (unlike remove(), which deletes them) — settings edits must
+        not invalidate stored credentials.
+        """
+        profiles = self._load()
+        if profile.name not in profiles:
+            raise ProfileError(f"Profile {profile.name!r} not found")
+        profiles[profile.name] = profile
+        self._save(profiles)
+
     def list_all(self) -> list[Profile]:
         """Return all profiles sorted by name."""
         return sorted(self._load().values(), key=lambda p: p.name)

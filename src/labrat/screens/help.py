@@ -46,6 +46,7 @@ _SECTIONS = [
             ("Ctrl+K", "Pinned findings — view / delete / export HTML"),
             ("Ctrl+R", "Query history — browse and reload past queries"),
             ("Ctrl+G", "Agent memories — view and delete"),
+            ("Ctrl+,", "Settings — provider / harvest / verify toggles"),
         ],
     ),
     (
