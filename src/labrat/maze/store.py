@@ -66,3 +66,12 @@ class MazeStore:
         path = directory / f"{doc.domain}.md"
         path.write_text(render_document(doc), encoding="utf-8")
         return path
+
+
+def user_scent_dir(profile: str, home: Path | None = None) -> Path:
+    """The user-scope scent directory for *profile* — MazeStore's user layer + 'scent'.
+
+    Single source of truth for the TUI pre-pass target: cartograph_prepass writes
+    here, and SearchReferenceDocsTool reads it back via MazeStore.from_env(profile).
+    """
+    return (home or Path.home()) / ".labrat" / "maze" / profile / "scent"

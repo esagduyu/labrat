@@ -1124,3 +1124,19 @@ expect a one-time "degraded" warning toast (claude CLI fallback).
 
 Note: to exercise `run_program`/`llm_extract` the profile must be read-write; on a default
 read-only profile these self-report "blocked: read-only Analyst mode" (expected).
+
+---
+
+## M2 — first-connect Cartographer (manual gate)
+
+1. Delete `~/.labrat/maze/<profile>/scent` if present. Launch `uv run labrat` → expect
+   "🗺 mapping schema…" then "scent ready · N docs" toasts; verify `~/.labrat/maze/<profile>/scent/*.md`
+   plus `.schema_fingerprint` exist.
+2. Relaunch → no "scent ready" toast (idempotent reuse, no stale warning).
+3. Ask in chat: "any reference notes on the orders table?" → expect a `search_reference_docs`
+   trace and content drawn from the generated docs.
+4. Add a column to the DB (or edit `.schema_fingerprint` to garbage), relaunch → expect the
+   "schema changed … Ctrl+Shift+M" warning. Press Ctrl+Shift+M → confirm → docs regenerate.
+   If Ctrl+Shift+M does not register in your terminal, note it — rebind to F6 per the plan.
+5. Create `./labrat_maze/scent/manual-note.md` (any heading/body), run refresh → the project-scope
+   file must be untouched.
