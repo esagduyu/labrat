@@ -644,3 +644,12 @@ Memory.table_scope (single-known-table sqlglot attribution, conservative None on
 draft_harvested_sections returns domain-keyed drafts, so approved sections land in per-table Scent
 docs (project scope; `__global__` → `general`) instead of one global dump. Writes stay audited
 fail-loud (ScentContaminationError surfaces in the review modal, nothing written).
+
+## 2026-07-09 — TUI M4: verification toggle live + provenance footer (T3c)
+
+Chat answers now end with a dim `⚑ grounded: …` footer aggregated purely in the UI from the
+turn's on_tool_call stream (scent hits + fresh/stale from the M2 fingerprint, verify_join,
+explain_lineage, run_sql count) plus AgentLoop.verify_rounds_used. Verification in the TUI is
+the loop sufficiency LLMVerifier only (Profile.verify_enabled, wired in M1); K-of-N consensus
+remains benchmark-only per spec D7 (ablated within-noise, wrong shape for interactive chat).
+No agent/maze core changes in this phase.
