@@ -151,6 +151,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+r", "view_history", "History", show=True),
         Binding("ctrl+g", "view_memories", "Memories", show=True),
         Binding("ctrl+backslash", "toggle_traces", "Traces", show=False),
+        Binding("ctrl+comma", "open_settings", "Settings", show=True),
     ]
 
     def __init__(
@@ -480,6 +481,22 @@ class MainScreen(Screen[None]):
         from labrat.screens.memories_viewer import MemoriesViewerScreen
 
         self.app.push_screen(MemoriesViewerScreen(profile_name=self._profile))
+
+    def action_open_settings(self) -> None:
+        from labrat.screens.settings import SettingsScreen
+
+        if self._profile_obj is None:
+            self.notify("No profile loaded — settings unavailable.", severity="warning")
+            return
+
+        def _on_result(updated: object) -> None:
+            from labrat.profile.model import Profile
+
+            if isinstance(updated, Profile):
+                self._profile_obj = updated
+                self.notify("Settings saved. Provider/verify apply on next start.", timeout=4)
+
+        self.app.push_screen(SettingsScreen(self._profile_obj), _on_result)
 
     def action_toggle_traces(self) -> None:
         from labrat.widgets.chat_panel import ChatPanel
