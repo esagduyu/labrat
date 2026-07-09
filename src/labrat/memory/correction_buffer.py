@@ -66,3 +66,12 @@ class CorrectionBuffer:
         chats, edits = self._chats, self._edits
         self._chats, self._edits = [], []
         return chats, edits
+
+    def restore(self, chats: list[ChatCorrection], edits: list[QueryEvent]) -> None:
+        """Put previously-drained items back (e.g. after a failed harvest attempt).
+
+        Restored items are prepended so they precede anything captured while
+        the failed harvest was in flight. Pure bookkeeping — no I/O.
+        """
+        self._chats = [*chats, *self._chats]
+        self._edits = [*edits, *self._edits]

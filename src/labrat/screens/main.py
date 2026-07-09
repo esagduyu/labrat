@@ -251,6 +251,7 @@ class MainScreen(Screen[None]):
         # Correction capture buffer (M5 T2b surface) — pure bookkeeping, no LLM calls.
         self._correction_buffer = CorrectionBuffer()
         self._last_draft_sql: str | None = None
+        self._harvesting: bool = False
 
         # Thread + findings managers (always available, regardless of connection).
         self._thread_manager = ThreadManager()
@@ -468,6 +469,9 @@ class MainScreen(Screen[None]):
         if not harvesting_enabled(True, self._profile_obj.harvest_opt_in):
             self.notify("Harvesting is off — enable it in Settings (Ctrl+,).", severity="warning")
             return
+        if self._harvesting:
+            self.notify("Harvest already running…", timeout=3)
+            return
         self._run_harvest_review()
 
     @work(exclusive=True, group="harvest")
@@ -475,55 +479,72 @@ class MainScreen(Screen[None]):
         from datetime import UTC, datetime
 
         from labrat.agent.verifier import provider_llm_fn
+        from labrat.maze.scent_audit import ScentContaminationError
         from labrat.maze.store import MazeStore
         from labrat.memory.harvest import SessionHarvester
         from labrat.memory.store import MemoryStore
         from labrat.screens.harvest_controller import harvesting_enabled, review_corrections
         from labrat.screens.harvest_review import HarvestReviewScreen
 
-        assert self._profile_obj is not None and self._provider is not None
-        profile_name = self._profile_obj.name
-        known_tables: list[str] = []
-        if self._catalog is not None:
-            known_tables = [t.name for s in self._catalog.schemas for t in s.tables]
-
-        store = MemoryStore()
-        harvester = SessionHarvester(
-            profile_name,
-            provider_llm_fn(self._provider),
-            store,
-            enabled=harvesting_enabled(True, self._profile_obj.harvest_opt_in),
-            known_tables=known_tables,
-        )
-        chats, edits = self._correction_buffer.drain()
-        self.notify(f"Harvesting {len(chats) + len(edits)} captured corrections…", timeout=3)
+        if self._harvesting:
+            self.notify("Harvest already running…", timeout=3)
+            return
+        self._harvesting = True
         try:
-            for chat in chats:
-                await harvester.harvest_correction(chat.user_message, chat.context_sql)
-            await harvester.harvest_events(edits)
-        except Exception as exc:
-            self.notify(f"Harvest failed: {exc}", severity="warning", timeout=8)
-            return
+            assert self._profile_obj is not None and self._provider is not None
+            profile_name = self._profile_obj.name
+            known_tables: list[str] = []
+            if self._catalog is not None:
+                known_tables = [t.name for s in self._catalog.schemas for t in s.tables]
 
-        # Draft from the FULL memory store, not just this session: cancelled
-        # reviews stay recoverable, and apply dedups so re-approval is idempotent.
-        memories = store.read_profile(profile_name)
-        drafts = review_corrections(
-            memories,
-            generated_at=datetime.now(tz=UTC).date().isoformat(),
-            model_id=getattr(self._provider, "_model", None),
-        )
-        if not drafts:
-            self.notify("No correction learnings to review yet.", timeout=4)
-            return
+            store = MemoryStore()
+            harvester = SessionHarvester(
+                profile_name,
+                provider_llm_fn(self._provider),
+                store,
+                enabled=harvesting_enabled(True, self._profile_obj.harvest_opt_in),
+                known_tables=known_tables,
+            )
+            chats, edits = self._correction_buffer.drain()
+            self.notify(f"Harvesting {len(chats) + len(edits)} captured corrections…", timeout=3)
+            try:
+                for chat in chats:
+                    await harvester.harvest_correction(chat.user_message, chat.context_sql)
+                await harvester.harvest_events(edits)
+            except Exception as exc:
+                self._correction_buffer.restore(chats, edits)
+                self.notify(f"Harvest failed: {exc}", severity="warning", timeout=8)
+                return
 
-        def _done(applied: int | None) -> None:
-            if applied:
-                self.notify(f"Applied {applied} section(s) to Scent.", timeout=4)
+            # Draft from the FULL memory store, not just this session: cancelled
+            # reviews stay recoverable, and apply dedups so re-approval is idempotent.
+            memories = store.read_profile(profile_name)
+            try:
+                drafts = review_corrections(
+                    memories,
+                    generated_at=datetime.now(tz=UTC).date().isoformat(),
+                    model_id=getattr(self._provider, "_model", None),
+                )
+            except ScentContaminationError as exc:
+                self.notify(
+                    f"Harvest drafts blocked by contamination audit: {exc}",
+                    severity="error",
+                    timeout=8,
+                )
+                return
+            if not drafts:
+                self.notify("No correction learnings to review yet.", timeout=4)
+                return
 
-        self.app.push_screen(
-            HarvestReviewScreen(drafts, MazeStore.from_env(profile=profile_name)), _done
-        )
+            def _done(applied: int | None) -> None:
+                if applied:
+                    self.notify(f"Applied {applied} section(s) to Scent.", timeout=4)
+
+            self.app.push_screen(
+                HarvestReviewScreen(drafts, MazeStore.from_env(profile=profile_name)), _done
+            )
+        finally:
+            self._harvesting = False
 
     # ── SQL run handler ───────────────────────────────────────────────────────
 
