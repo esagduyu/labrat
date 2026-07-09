@@ -34,7 +34,7 @@ class RecallMemoriesTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> object:
-        profile: str = getattr(ctx, "profile", "default")
+        profile: str = ctx.profile_name
         all_memories = _memory_store.read_profile(profile)
         top = relevant_memories(
             all_memories, tables=args.tables, query=args.context, limit=args.limit
