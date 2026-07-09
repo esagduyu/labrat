@@ -154,6 +154,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+backslash", "toggle_traces", "Traces", show=False),
         Binding("ctrl+comma", "open_settings", "Settings", show=True),
         Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
+        Binding("ctrl+shift+h", "harvest_review", "Harvest", show=False),
     ]
 
     def __init__(
@@ -238,6 +239,7 @@ class MainScreen(Screen[None]):
     def on_mount(self) -> None:
         from textual.widgets import LoadingIndicator, RichLog
 
+        from labrat.memory.correction_buffer import CorrectionBuffer
         from labrat.thread.findings import FindingsManager
         from labrat.thread.manager import ThreadManager
         from labrat.widgets.results_table import ResultsTable
@@ -245,6 +247,10 @@ class MainScreen(Screen[None]):
         # Chart log and loading indicator hidden initially.
         self.query_one("#chart-content", RichLog).display = False
         self.query_one("#sql-loading", LoadingIndicator).display = False
+
+        # Correction capture buffer (M5 T2b surface) — pure bookkeeping, no LLM calls.
+        self._correction_buffer = CorrectionBuffer()
+        self._last_draft_sql: str | None = None
 
         # Thread + findings managers (always available, regardless of connection).
         self._thread_manager = ThreadManager()
@@ -287,6 +293,7 @@ class MainScreen(Screen[None]):
         def on_draft(sql: str) -> None:
             editor.load_text(sql)
             self._last_sql = sql
+            self._last_draft_sql = sql
 
         def on_result(df: pl.DataFrame, elapsed_ms: float) -> None:
             table.load(df, execution_time=elapsed_ms)
@@ -431,6 +438,93 @@ class MainScreen(Screen[None]):
         self._scent_stale = False
         self._run_scent_prepass()
 
+    # ── correction capture seams (M5 T2b / TUI-M3) ──────────────────────────
+
+    def on_chat_panel_user_message(self, event: object) -> None:
+        from labrat.widgets.chat_panel import ChatPanel
+
+        if not isinstance(event, ChatPanel.UserMessage):
+            return
+        if self._last_sql:
+            self._correction_buffer.add_chat(event.text, self._last_sql)
+
+    def _record_edit_if_diverged(self, executed_sql: str) -> None:
+        if self._last_draft_sql is None:
+            return
+        self._correction_buffer.add_edit(
+            profile=self._profile,
+            thread_id=self._current_thread_id or "unknown",
+            draft_sql=self._last_draft_sql,
+            executed_sql=executed_sql,
+        )
+        self._last_draft_sql = None
+
+    def action_harvest_review(self) -> None:
+        from labrat.screens.harvest_controller import harvesting_enabled
+
+        if self._profile_obj is None or self._provider is None:
+            self.notify("Connect a profile first.", severity="warning")
+            return
+        if not harvesting_enabled(True, self._profile_obj.harvest_opt_in):
+            self.notify("Harvesting is off — enable it in Settings (Ctrl+,).", severity="warning")
+            return
+        self._run_harvest_review()
+
+    @work(exclusive=True, group="harvest")
+    async def _run_harvest_review(self) -> None:
+        from datetime import UTC, datetime
+
+        from labrat.agent.verifier import provider_llm_fn
+        from labrat.maze.store import MazeStore
+        from labrat.memory.harvest import SessionHarvester
+        from labrat.memory.store import MemoryStore
+        from labrat.screens.harvest_controller import harvesting_enabled, review_corrections
+        from labrat.screens.harvest_review import HarvestReviewScreen
+
+        assert self._profile_obj is not None and self._provider is not None
+        profile_name = self._profile_obj.name
+        known_tables: list[str] = []
+        if self._catalog is not None:
+            known_tables = [t.name for s in self._catalog.schemas for t in s.tables]
+
+        store = MemoryStore()
+        harvester = SessionHarvester(
+            profile_name,
+            provider_llm_fn(self._provider),
+            store,
+            enabled=harvesting_enabled(True, self._profile_obj.harvest_opt_in),
+            known_tables=known_tables,
+        )
+        chats, edits = self._correction_buffer.drain()
+        self.notify(f"Harvesting {len(chats) + len(edits)} captured corrections…", timeout=3)
+        try:
+            for chat in chats:
+                await harvester.harvest_correction(chat.user_message, chat.context_sql)
+            await harvester.harvest_events(edits)
+        except Exception as exc:
+            self.notify(f"Harvest failed: {exc}", severity="warning", timeout=8)
+            return
+
+        # Draft from the FULL memory store, not just this session: cancelled
+        # reviews stay recoverable, and apply dedups so re-approval is idempotent.
+        memories = store.read_profile(profile_name)
+        drafts = review_corrections(
+            memories,
+            generated_at=datetime.now(tz=UTC).date().isoformat(),
+            model_id=getattr(self._provider, "_model", None),
+        )
+        if not drafts:
+            self.notify("No correction learnings to review yet.", timeout=4)
+            return
+
+        def _done(applied: int | None) -> None:
+            if applied:
+                self.notify(f"Applied {applied} section(s) to Scent.", timeout=4)
+
+        self.app.push_screen(
+            HarvestReviewScreen(drafts, MazeStore.from_env(profile=profile_name)), _done
+        )
+
     # ── SQL run handler ───────────────────────────────────────────────────────
 
     def on_query_editor_run_requested(self, event: object) -> None:
@@ -484,6 +578,7 @@ class MainScreen(Screen[None]):
             self._last_sql = sql
             table.load(df, execution_time=elapsed_ms)
             table.display = True
+            self._record_edit_if_diverged(sql)
         except Exception as exc:
             chart_log.write(f"[bold red]SQL error:[/bold red] {exc}")
             chart_log.display = True
@@ -521,6 +616,26 @@ class MainScreen(Screen[None]):
         def _on_result(thread_id: str | None) -> None:
             if not thread_id:
                 return
+            if (
+                self._profile_obj is not None
+                and self._profile_obj.harvest_opt_in
+                and self._correction_buffer.pending_count > 0
+            ):
+                from labrat.screens.confirm import ConfirmScreen
+
+                n = self._correction_buffer.pending_count
+
+                def _maybe_harvest(confirmed: bool | None) -> None:
+                    if confirmed:
+                        self._run_harvest_review()
+
+                self.app.push_screen(
+                    ConfirmScreen(
+                        f"[bold]{n} correction(s) captured this session.[/bold]\n\n"
+                        "Review learnings before switching threads?"
+                    ),
+                    _maybe_harvest,
+                )
             t = self._thread_manager.get_thread(thread_id)
             if t is None:
                 return
