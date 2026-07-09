@@ -1,5 +1,8 @@
 # TUI Integration Handoff (2026-07-06)
 
+> **STATUS (2026-07-09): ALL FOUR MILESTONES SHIPPED — this document is now historical context.**
+> M1 agent stack (`7b87232`), M2 cartographer (`974ec9f`), M3 harvest (`f37c483`), M4 verify+provenance (`38522c6`) are merged to master; manual TUI gates passed on M1/M3. The gaps this document catalogues below (no `run_agent_task` wiring, no Context Ledger, no Cartographer, no harvest caller, no verifier) are **resolved** — see `CLAUDE.md`'s MCP-server NOTE (dated 2026-07-09) for the current-state summary. Kept as-is for the build history/rationale; do not treat the tables below as current.
+
 **Purpose:** a session-start map for the work of integrating the milestones shipped this week (M0–M5) into the LabRat TUI experience. All the machinery exists and is tested on the benchmark/agent paths; almost none of it is surfaced in the interactive TUI yet.
 
 ## The core finding
