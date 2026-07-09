@@ -372,12 +372,12 @@ class MainScreen(Screen[None]):
 
     @work(exclusive=True, group="scent")
     async def _run_scent_prepass(self) -> None:
-        from labrat.maze.first_connect import tui_first_connect_prepass
-
         if self._connection is None or self._catalog is None or self._scent_dir is None:
             return
-        self.notify("\U0001f5fa mapping schema (Cartographer)…", timeout=3)
         try:
+            from labrat.maze.first_connect import tui_first_connect_prepass
+
+            self.notify("\U0001f5fa mapping schema (Cartographer)…", timeout=3)
             outcome = await tui_first_connect_prepass(
                 connections={"main": self._connection},
                 catalogs={"main": self._catalog},
