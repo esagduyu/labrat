@@ -113,13 +113,13 @@ Either way the process is the same: the check found a *fingerprint mismatch* bet
 committed in `labrat_maze/scent/` and what the current dbt project would produce — it doesn't
 try to infer intent from the diff, it just proves the two are out of sync.
 
-Two special cases exit non-zero for a different reason and print their own guidance:
+Two special cases print their own guidance instead of a fingerprint-mismatch report:
 
-- No `target/manifest.json` — the CI job forgot the `dbt parse` step, or ran it against the
-  wrong path. Fix the workflow, not the Scent.
-- No committed Scent at all for this project — this is **not** treated as stale (there's nothing
-  to have drifted from), so this one actually exits `0` with a note. If you expected an ingested
-  domain and don't see it, you likely haven't run `labrat scent ingest` yet at all.
+- No `target/manifest.json` — exits non-zero. The CI job forgot the `dbt parse` step, or ran it
+  against the wrong path. Fix the workflow, not the Scent.
+- No committed Scent at all for this project — exits `0` with a note. This is **not** treated as
+  stale (there's nothing to have drifted from). If you expected an ingested domain and don't see
+  it, you likely haven't run `labrat scent ingest` yet at all.
 
 ## 4. Fix: `labrat scent ingest`
 

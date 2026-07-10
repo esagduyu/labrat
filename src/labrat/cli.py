@@ -248,11 +248,11 @@ def scent_ingest(
     # force=True above means the fingerprint-unchanged/drifted-without-force
     # branch of ingest_dbt_semantics never fires here — outcome.drifted is
     # unreachable on this path. A skip *with* warnings is an error-skip
-    # (unreadable/non-dict manifest); a skip with no warnings is benign
-    # (already fresh, or no semantic content to ingest) and stays exit 0.
+    # (unreadable/non-dict manifest); a skip with no warnings means no
+    # semantic content to ingest, and stays exit 0.
     if outcome.skipped:
         if outcome.warnings:
-            typer.echo(f"scent ingest: skipped ({'; '.join(outcome.warnings)})")
+            typer.echo("scent ingest: skipped (see warnings below)")
         else:
             typer.echo("scent ingest: skipped (no semantic content)")
     else:
@@ -287,9 +287,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Swap for `pip install dbt-core labrat` if you don't use uv.
       - name: Install dbt + labrat
-        run: uv tool install dbt-core && uv tool install labrat
+        run: pip install dbt-core labrat
 
       - name: dbt parse
         run: dbt parse
