@@ -26,7 +26,7 @@ The MCP server — LabRat's Altimate-style adoption wedge ("mount into any host"
 1. Parse `LABRAT_MCP_CONNECTIONS` exactly as today (duckdb-only, same error messages/exit semantics — extracted verbatim from `_build_context_from_env`).
 2. Parse `LABRAT_MCP_PROFILES`: for each name, `ProfileManager().get(name)` (unknown → exit 2 with the profile name), `make_connection(profile)`, `.connect()`, `.introspect_catalog()`. Connection key = profile name; collision with an env-JSON name → exit 2.
 3. `LABRAT_MCP_PRIMARY` validated against the union (default: first env-JSON name, else first profile).
-4. `read_only`: True unless every mounted profile has `is_read_only=False` AND every env-JSON duckdb spec set `read_only: false` (the current per-spec flag applies to the connection open mode as today; ctx-level read_only is the tool gate). `profile_name`: the primary's profile name when the primary is profile-backed, else `"default"`.
+4. `read_only` (amended 2026-07-09, T1 review — DAB byte-compat outranks safety-first on the legacy path): env-JSON specs contribute False unless EVERY spec explicitly sets `read_only: true` (omitted → False, preserving today's open ctx for DAB); profiles contribute safety-first (any profile with `is_read_only=True` → True). Combined = env-JSON contribution OR profiles contribution. The per-spec flag still governs the DuckDB open mode as today; ctx-level read_only is the tool gate. `profile_name`: the primary's profile name when the primary is profile-backed, else `"default"`.
 `server.py::_build_context_from_env` becomes a thin call into `resolve_from_env(os.environ)` + `ToolContext(connections=…, catalogs=…, primary=…, read_only=…, profile_name=…)`; lifecycle disconnect iterates `db.base.Connection`.
 
 ### 3.2 `src/labrat/mcp/host_configs.py` (new)
@@ -43,7 +43,7 @@ The MCP server — LabRat's Altimate-style adoption wedge ("mount into any host"
 
 1. `LABRAT_MCP_CONNECTIONS` byte-compatible: same accepted shapes, same rejections, same messages/exit codes (DAB claude-mcp + its pinned tests unaffected).
 2. Secrets never printed/logged: host-config generators emit env VAR references only when values were explicitly provided; keyring access happens only inside `make_connection` at server runtime.
-3. ctx `read_only` derivation is safety-first: any ambiguity → True.
+3. ctx `read_only` derivation is safety-first ON THE PROFILES PATH (any ambiguity → True); the legacy env-JSON path preserves today's open default (omitted → False) — DAB byte-compat outranks (amended, T1 review).
 4. Server remains loop-less: no ledger, no llm_fn, no subagent_runner — self-erroring tools stay self-erroring (documented).
 5. All seven adapters compile through the path; only duckdb+postgres are test-exercised (D6).
 6. Additive only: existing MCP tests pass unmodified (or are moved verbatim into the new file — moves noted).
