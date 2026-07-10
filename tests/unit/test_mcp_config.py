@@ -61,6 +61,17 @@ def test_missing_connections_env_rejected() -> None:
     assert exc.value.code == 2
 
 
+def test_blank_profiles_env_rejected() -> None:
+    # LABRAT_MCP_PROFILES=" , " passes the "present" top guard (non-empty
+    # string) but parses to zero profile names, and there's no env-JSON
+    # either — connections ends up empty. Must exit(2) with the same
+    # message as the missing-env case, not raise a bare StopIteration from
+    # `next(iter(connections))`.
+    with pytest.raises(SystemExit) as exc:
+        resolve_from_env({"LABRAT_MCP_PROFILES": " , "})
+    assert exc.value.code == 2
+
+
 def test_memory_primary_writable(tmp_path: Path) -> None:
     # Ported invariant from test_mcp_server.py::test_build_context_from_env_allows_in_memory_primary
     # — a :memory: primary (the DAB federation workspace) must come up writable:

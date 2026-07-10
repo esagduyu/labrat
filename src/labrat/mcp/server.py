@@ -1,8 +1,21 @@
 """LabRat MCP server — exposes the data-tools registry over MCP stdio.
 
-The server reads a connection spec from the ``LABRAT_MCP_CONNECTIONS`` env var
-(JSON, same shape as ``scripts/run_task.py`` ``--connections``), wires up a
-``ToolContext`` plus the standard data tools, and serves them as MCP tools.
+The server resolves its connections from two additive env vars (parsed by
+``labrat.mcp.config.resolve_from_env``), wires up a ``ToolContext`` plus the
+standard data tools, and serves them as MCP tools:
+
+- ``LABRAT_MCP_CONNECTIONS`` — JSON connection spec, duckdb-only (same shape
+  as ``scripts/run_task.py`` ``--connections``); the legacy path used by
+  DAB's ``claude-mcp`` driver.
+- ``LABRAT_MCP_PROFILES`` — comma-separated profile names, resolved through
+  ``labrat.profile.manager`` so any of the seven adapters can be mounted
+  with keyring-backed secrets. Connection keys are profile names.
+
+At least one of the two must be set. ``ToolContext.read_only`` is derived,
+not user-set directly: it's False unless every ``LABRAT_MCP_CONNECTIONS``
+entry explicitly sets ``"read_only": true``, OR'd with True if any resolved
+``LABRAT_MCP_PROFILES`` profile has ``is_read_only=True`` (the default) —
+see ``resolve_from_env``'s docstring for the full derivation.
 
 Any MCP-capable host harness (``claude --print --mcp-config …``, Codex, Cursor,
 OpenCode, etc.) can mount this server and drive the tools natively — no custom

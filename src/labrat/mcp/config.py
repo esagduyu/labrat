@@ -42,8 +42,8 @@ class ResolvedConnections:
 def resolve_from_env(
     env: Mapping[str, str],
     *,
-    manager_factory: Callable[[], ProfileManager] = ProfileManager,
-    connection_factory: Callable[[Profile], Connection] = make_connection,
+    manager_factory: Callable[[], ProfileManager] | None = None,
+    connection_factory: Callable[[Profile], Connection] | None = None,
 ) -> ResolvedConnections:
     """Parse ``LABRAT_MCP_CONNECTIONS`` and/or ``LABRAT_MCP_PROFILES`` into a ResolvedConnections.
 
@@ -55,9 +55,14 @@ def resolve_from_env(
     exactly as the legacy "LABRAT_MCP_CONNECTIONS env var is required" path
     did before profiles existed.
 
-    ``manager_factory``/``connection_factory`` are test seams (defaulted to
-    the real ``ProfileManager`` and ``make_connection``) — not meant to be
-    overridden by production callers.
+    ``manager_factory``/``connection_factory`` are test seams (default
+    ``None``, resolved at call time to the real ``ProfileManager``/
+    ``make_connection`` module globals) — not meant to be overridden by
+    production callers. Defaulting to ``None`` instead of binding the
+    globals at def-time means a test can monkeypatch this module's
+    ``ProfileManager``/``make_connection`` attributes directly (e.g.
+    ``monkeypatch.setattr(mcp_config, "ProfileManager", ...)``) and have it
+    take effect even when the caller doesn't pass the kwarg explicitly.
 
     ``ResolvedConnections.read_only`` (the ToolContext-level gate on mutating
     tools) is the OR of two independently-derived contributions (amended
@@ -128,7 +133,8 @@ def resolve_from_env(
 
     profile_names = [n.strip() for n in (profiles_raw or "").split(",") if n.strip()]
     if profile_names:
-        manager = manager_factory()
+        manager = (manager_factory or ProfileManager)()
+        factory = connection_factory or make_connection
         for pname in profile_names:
             if pname in connections:
                 print(
@@ -142,12 +148,24 @@ def resolve_from_env(
             except ProfileError as exc:
                 print(f"Unknown profile {pname!r}: {exc}", file=sys.stderr)
                 sys.exit(2)
-            conn = connection_factory(profile)
+            conn = factory(profile)
             conn.connect()
             connections[pname] = conn
             catalogs[pname] = conn.introspect_catalog()
             profile_backed_names.add(pname)
             profiles_used.append(profile)
+
+    if not connections:
+        # LABRAT_MCP_PROFILES parsed to zero names (e.g. " , ") with no
+        # env-JSON either: the top guard only checks that the raw strings are
+        # present/non-empty, not that they resolved to anything. Without this
+        # check, `next(iter(connections))` below raises a bare StopIteration
+        # instead of the same clear error as the missing-env case.
+        print(
+            "LABRAT_MCP_CONNECTIONS env var is required (JSON connection spec).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     primary = env.get("LABRAT_MCP_PRIMARY") or next(iter(connections))
     if primary not in connections:
