@@ -427,7 +427,7 @@ class MainScreen(Screen[None]):
             from pathlib import Path as _Path
 
             from labrat.maze.semantic_ingest import ingest_dbt_semantics
-            from labrat.maze.store import MazeStore
+            from labrat.maze.store import MazeStore, project_scent_dir
 
             if self._profile_obj is None or not self._profile_obj.dbt_project_path:
                 return
@@ -452,7 +452,7 @@ class MainScreen(Screen[None]):
                 scent_dir = self._project_root_override / "labrat_maze" / "scent"
             else:
                 store = MazeStore.from_env(profile=self._profile_obj.name)
-                scent_dir = _Path.cwd() / "labrat_maze" / "scent"
+                scent_dir = project_scent_dir()
             outcome = ingest_dbt_semantics(
                 manifest_path=manifest,
                 catalog=self._catalog,

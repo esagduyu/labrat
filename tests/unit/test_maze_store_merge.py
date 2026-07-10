@@ -2,8 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from labrat.maze.document import ScentDoc, Section, render_document
-from labrat.maze.store import MazeStore
+from labrat.maze.store import MazeStore, project_scent_dir
 
 
 def _store(tmp_path: Path) -> MazeStore:
@@ -99,3 +101,26 @@ def test_i2_scenario_refresh_regeneration_visible_through_merge(tmp_path: Path) 
     assert "- orders: 9 rows (new col added)" in bodies  # fresh content visible
     assert "- orders: 8 rows" not in bodies  # stale copy NOT shadowing
     assert "- exclude test orders" in bodies  # harvested content preserved
+
+
+def test_project_scent_dir_honors_labrat_maze_dir_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path / "envroot"))
+    assert project_scent_dir() == tmp_path / "envroot" / "labrat_maze" / "scent"
+
+
+def test_project_scent_dir_falls_back_to_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LABRAT_MAZE_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert project_scent_dir() == tmp_path / "labrat_maze" / "scent"
+
+
+def test_project_scent_dir_explicit_root_ignores_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path / "envroot"))
+    explicit = tmp_path / "explicit"
+    assert project_scent_dir(explicit) == explicit / "labrat_maze" / "scent"
