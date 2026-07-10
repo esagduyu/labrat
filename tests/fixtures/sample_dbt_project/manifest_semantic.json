@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v11/manifest.json",
+    "dbt_version": "1.8.0",
+    "generated_at": "2024-01-01T00:00:00.000000Z",
+    "invocation_id": "test-invocation-id",
+    "env": {}
+  },
+  "nodes": {},
+  "sources": {},
+  "semantic_models": {
+    "semantic_model.jaffle.orders": {
+      "name": "orders",
+      "description": "One row per order.",
+      "node_relation": {"alias": "orders", "schema_name": "main", "relation_name": "\"dev\".\"main\".\"orders\""},
+      "entities": [{"name": "order_id", "type": "primary"}, {"name": "customer_id", "type": "foreign"}],
+      "dimensions": [{"name": "status", "type": "categorical", "description": "Order lifecycle state."},
+                      {"name": "created_at", "type": "time", "description": ""}],
+      "measures": [{"name": "order_total", "agg": "sum", "description": "Order revenue.", "expr": "total_amount"},
+                    {"name": "order_count", "agg": "count", "description": "", "expr": "1"}]
+    },
+    "semantic_model.jaffle.customers": {
+      "name": "customers",
+      "description": "One row per customer.",
+      "node_relation": {"alias": "customers", "schema_name": "main", "relation_name": "\"dev\".\"main\".\"customers\""},
+      "entities": [{"name": "customer_id", "type": "primary"}],
+      "dimensions": [{"name": "region", "type": "categorical", "description": "Sales region."}],
+      "measures": [{"name": "customer_count", "agg": "count_distinct", "description": "", "expr": "customer_id"}]
+    },
+    "semantic_model.jaffle.broken": {"name": "broken"}
+  },
+  "metrics": {
+    "metric.jaffle.revenue": {
+      "name": "revenue", "type": "simple", "label": "Revenue",
+      "description": "Total completed order revenue.",
+      "type_params": {"measure": {"name": "order_total"}}
+    },
+    "metric.jaffle.revenue_per_customer": {
+      "name": "revenue_per_customer", "type": "ratio", "label": "Revenue per Customer",
+      "description": "Revenue divided by distinct customers.",
+      "type_params": {"numerator": {"name": "revenue"}, "denominator": {"name": "customer_count"}}
+    },
+    "metric.jaffle.broken_metric": {"name": "broken_metric"}
+  }
+}

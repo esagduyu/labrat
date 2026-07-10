@@ -665,3 +665,17 @@ best_source/stale (computed in-tool from ctx catalogs vs Section schema_hash met
 M4 footer renders `scent: <domain> (<tier>·<freshness>) +N` when that data is present and
 degrades to the old count format otherwise. Spec:
 docs/superpowers/specs/2026-07-09-scent-read-model-v2-design.md.
+
+## 2026-07-09 — T1b: dbt semantic-layer ingestion + freshness activation
+
+`parse_semantic_manifest` (catalog/dbt/semantic.py) reads manifest.json's `semantic_models`/
+`metrics` (dbt ≥1.6 — the roadmap's dbt_project.yml pointer was stale); `ingest_dbt_semantics`
+writes `semantic_layer`-tagged, `schema_hash`-stamped sections into project-layer Scent docs —
+replace-not-append for semantic sections (source-of-truth derived), audited fail-loud, drift
+via a `.manifest_fingerprint` sidecar (semantic subset only). Runs at first connect when
+`Profile.dbt_project_path` is set (onboarding's collected path finally persists; Settings row
+added); F9 re-ingests after drift. The Cartographer now stamps `schema_hash` on all sections
+(deterministic, no clock — `generated_at` stays unset), activating read-model-v2's per-section
+freshness: footers can now render `(semantic_layer·fresh)`/`·stale`. Benchmark paths cannot
+reach any of this (no profile sets the path). Spec:
+docs/superpowers/specs/2026-07-09-dbt-semantic-ingestion-design.md.

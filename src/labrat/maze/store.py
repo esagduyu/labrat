@@ -121,3 +121,15 @@ def user_scent_dir(profile: str, home: Path | None = None) -> Path:
     here, and SearchReferenceDocsTool reads it back via MazeStore.from_env(profile).
     """
     return (home or Path.home()) / ".labrat" / "maze" / profile / "scent"
+
+
+def project_scent_dir(project_root: Path | None = None) -> Path:
+    """The project-scope scent directory — single source of truth for the project root.
+
+    MazeStore.from_env resolves its project root as ``LABRAT_MAZE_DIR`` or the cwd;
+    this helper applies the same env-or-cwd rule so callers that need the raw
+    directory (e.g. to write a co-located drift sidecar) stay in sync with the
+    store's own layer.
+    """
+    root = project_root or Path(os.environ.get("LABRAT_MAZE_DIR") or os.getcwd())
+    return root / "labrat_maze" / "scent"

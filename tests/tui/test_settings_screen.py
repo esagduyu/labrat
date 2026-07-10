@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from textual.widgets import Static, Switch
+from textual.widgets import Input, Static, Switch
 
 from labrat.profile.manager import ProfileManager
 from labrat.profile.model import Profile
@@ -40,6 +40,18 @@ async def test_save_persists_toggles(tmp_path: Path) -> None:
     assert host.result is not None and host.result.harvest_opt_in is True
     assert mgr.get("p1").harvest_opt_in is True
     assert mgr.get("p1").verify_enabled is True
+
+
+async def test_dbt_path_round_trips(tmp_path: Path) -> None:
+    mgr = ProfileManager(profiles_path=tmp_path / "profiles.json")
+    mgr.add(Profile(name="p1", dialect="duckdb"))
+    host = _Host(SettingsScreen(mgr.get("p1"), manager=mgr))
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        pilot.app.screen.query_one("#dbt-path-input", Input).value = "/repo/dbt"
+        await pilot.click("#save-btn")
+        await pilot.pause()
+    assert mgr.get("p1").dbt_project_path == "/repo/dbt"
 
 
 async def test_cancel_dismisses_none(tmp_path: Path) -> None:

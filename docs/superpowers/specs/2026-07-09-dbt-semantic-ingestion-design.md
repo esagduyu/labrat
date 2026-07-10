@@ -35,13 +35,13 @@ Typed models + one function:
 `build_semantic_sections(artifacts: SemanticArtifacts, schema_hash: str | None) -> dict[str, list[Section]]`:
 
 - Per semantic model: one section `heading="Semantic Model: <name>"` on domain `<table>`; body = description line + entity/dimension/measure bullets (name, type/agg, description; measure `expr` included when present).
-- Per metric: section `heading="Metric: <label-or-name>"`; **simple** metrics route to the domain of the semantic model owning their referenced measure; **ratio/derived/other** (or unresolvable measure) route to domain `"metrics"`; body = description + type + referenced measures (with owning model names when resolvable).
+- Per metric: section `heading="Metric: <label-or-name>"`; **simple** metrics route to the domain of the semantic model owning their referenced measure; **ratio/derived/other** (or unresolvable measure) route to domain `"metrics"`; body = description + type + referenced measures (annotated with the owning model's TABLE when resolvable — the table is the grounding token domains key on; amended 2026-07-09 during build, T2 review).
 - Every section: `source="semantic_layer"`, `schema_hash=schema_hash` (may be `None` when no catalog — honest unknown).
 - Deterministic ordering: models and metrics sorted by name; bullet order follows manifest order within a def.
 
 ### 3.3 Ingestion controller — `maze/semantic_ingest.py::ingest_dbt_semantics`
 
-`ingest_dbt_semantics(*, manifest_path: Path, catalog: Catalog | None, store: MazeStore) -> IngestOutcome` where `IngestOutcome(domains: tuple[str, ...], sections_written: int, warnings: tuple[str, ...], skipped: bool)`:
+`ingest_dbt_semantics(*, manifest_path: Path, catalog: Catalog | None, store: MazeStore, project_scent_dir: Path, force: bool = False) -> IngestOutcome` where `IngestOutcome(domains: tuple[str, ...], sections_written: int, warnings: tuple[str, ...], skipped: bool, drifted: bool)` (signature as built; synced 2026-07-09, T3 review):
 
 1. Missing/unreadable/invalid-JSON manifest → `skipped=True` with one warning (fail-open at the controller level; the TUI renders it as a toast).
 2. Parse → build sections with `schema_hash = fingerprint_from_catalog(catalog)` when a catalog is given, else `None`.

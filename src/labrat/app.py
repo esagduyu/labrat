@@ -118,6 +118,11 @@ class LabRatApp(App[None]):
             username=result.username,
             has_secret=result.secret is not None,
             description="Created via onboarding",
+            dbt_project_path=(
+                result.catalog_path
+                if result.catalog_type == "dbt" and result.catalog_path
+                else None
+            ),
         )
         try:
             ProfileManager().add(profile, secret=result.secret)

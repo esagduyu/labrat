@@ -49,6 +49,7 @@ _SECTIONS = [
             ("Ctrl+,", "Settings — provider / harvest / verify toggles"),
             ("Ctrl+Shift+M", "Regenerate scent docs (after schema changes)"),
             ("Ctrl+Shift+H", "Review harvested learnings → write approved to Scent"),
+            ("F9", "Re-ingest dbt semantic layer into Scent docs"),
         ],
     ),
     (
