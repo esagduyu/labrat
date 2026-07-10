@@ -41,6 +41,11 @@ class ResultsTable(DataTable[str]):
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    @property
+    def source_df(self) -> pl.DataFrame:
+        """The full, unfiltered DataFrame currently loaded (pin-time capture)."""
+        return self._source_df
+
     def load(self, df: pl.DataFrame, *, execution_time: float = 0.0) -> None:
         """Replace contents with a new Polars DataFrame."""
         self._source_df = df

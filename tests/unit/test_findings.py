@@ -123,6 +123,21 @@ def test_finding_carries_standalone_info(mgr: FindingsManager) -> None:
     assert f.pinned_at
 
 
+def test_pin_uses_explicit_finding_id_verbatim(mgr: FindingsManager) -> None:
+    """An explicit finding_id (cheese capture path) is used as-is, not overwritten
+    by a freshly minted uuid4 — keeps results_ref = cheese://<finding.id> coherent."""
+    f = mgr.pin(
+        version_id="v1",
+        question="q",
+        sql="s",
+        results_ref="cheese://explicit-id-123",
+        chart_spec=None,
+        finding_id="explicit-id-123",
+    )
+    assert f.id == "explicit-id-123"
+    assert mgr.list_findings()[0].id == "explicit-id-123"
+
+
 def test_pin_persists_provenance(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 

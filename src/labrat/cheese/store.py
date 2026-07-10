@@ -42,8 +42,14 @@ class FindingDataStore:
         df.head(_ROW_CAP).write_parquet(self._root / f"{finding_id}.parquet")
         meta = {"total_rows": df.height, "columns": df.columns}
         (self._root / f"{finding_id}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        chart_path = self._root / f"{finding_id}.chart.png"
         if chart_png is not None:
-            (self._root / f"{finding_id}.chart.png").write_bytes(chart_png)
+            chart_path.write_bytes(chart_png)
+        else:
+            # No chart this capture — remove any stale chart from a prior
+            # capture of the same finding_id so load_chart_png never pairs
+            # fresh results with an old chart image.
+            chart_path.unlink(missing_ok=True)
         return f"{_REF_PREFIX}{finding_id}"
 
     def _finding_id(self, ref: str) -> str | None:
@@ -162,9 +168,12 @@ class CheeseStore:
             if not mp.is_file():
                 continue
             try:
-                manifest = CheeseManifest.model_validate_json(mp.read_text())
-            except ValueError:
-                continue  # corrupt manifest — skip rather than brick the whole listing
-            out.append((mp.stat().st_mtime, manifest))
+                mtime = mp.stat().st_mtime
+                manifest = CheeseManifest.model_validate_json(mp.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                # Corrupt manifest, or deleted mid-listing (TOCTOU) — skip
+                # rather than brick the whole listing.
+                continue
+            out.append((mtime, manifest))
         out.sort(key=lambda t: t[0], reverse=True)
         return [m for _, m in out]

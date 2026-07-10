@@ -53,10 +53,17 @@ class FindingsManager:
         chart_spec: dict[str, Any] | None,
         note: str = "",
         provenance: FindingProvenance | None = None,
+        finding_id: str | None = None,
     ) -> Finding:
-        """Pin a new finding. Appended to the end of the list."""
+        """Pin a new finding. Appended to the end of the list.
+
+        ``finding_id`` lets a caller mint the ID up front (e.g. so it can
+        coherently key a results snapshot written before ``pin()`` is called)
+        instead of discovering it only via the returned ``Finding``. Defaults
+        to a fresh uuid4, as before.
+        """
         finding = Finding(
-            id=str(uuid.uuid4()),
+            id=finding_id or str(uuid.uuid4()),
             version_id=version_id,
             question=question,
             sql=sql,

@@ -32,8 +32,13 @@ class CreateChartTool(Tool[_Input]):
     The chart appears in the results pane. Use to visualise aggregated data.
     """
 
-    def __init__(self, on_chart: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_chart: Callable[[str], None] | None = None,
+        on_spec: Callable[[ChartSpec, pl.DataFrame], None] | None = None,
+    ) -> None:
         self._on_chart = on_chart
+        self._on_spec = on_spec
 
     @property
     def name(self) -> str:
@@ -73,6 +78,9 @@ class CreateChartTool(Tool[_Input]):
             chart_str = render_unicode(spec, df)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+
+        if self._on_spec is not None:
+            self._on_spec(spec, df)
 
         if self._on_chart is not None:
             self._on_chart(chart_str)

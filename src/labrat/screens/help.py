@@ -37,6 +37,7 @@ _SECTIONS = [
             ("P", "Pin current result as a Finding"),
             ("S", "Sort by focused column"),
             ("Ctrl+C", "Copy focused cell"),
+            ("F8", "Share current answer as a Cheese (pin + export HTML)"),
         ],
     ),
     (

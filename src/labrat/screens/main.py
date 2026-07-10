@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import polars as pl
 from textual import events, work
@@ -15,9 +16,11 @@ from textual.widget import Widget
 
 if TYPE_CHECKING:
     from labrat.agent.tools.base import SubagentRunner
+    from labrat.chart.spec import ChartSpec
     from labrat.db.base import Connection
     from labrat.db.catalog import Catalog
     from labrat.profile.model import Profile
+    from labrat.thread.model import Finding
 
 
 class _StatusBar(Widget):
@@ -157,6 +160,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
         Binding("ctrl+shift+h", "harvest_review", "Harvest", show=False),
         Binding("f9", "reingest_semantics", "Re-ingest dbt", show=False),
+        Binding("f8", "share_answer", "Share", show=True),
     ]
 
     def __init__(
@@ -182,6 +186,8 @@ class MainScreen(Screen[None]):
         self._current_thread_id: str | None = None
         self._current_thread_name: str = "untitled"
         self._last_sql: str = ""
+        self._last_user_prompt: str = ""
+        self._last_chart: tuple[ChartSpec, pl.DataFrame] | None = None
         self._agent_loop = None
         self._provider = None
         self._scent_dir_override = scent_dir
@@ -331,6 +337,9 @@ class MainScreen(Screen[None]):
             chart_log.display = True
             table.display = False
 
+        def on_spec(spec: ChartSpec, df: pl.DataFrame) -> None:
+            self._last_chart = (spec, df)
+
         profile_obj = self._profile_obj or Profile(
             name=self._profile if self._profile != "—" else "default",
             dialect=self._dialect if self._dialect != "—" else "duckdb",
@@ -340,7 +349,7 @@ class MainScreen(Screen[None]):
             run_sql_tool=RunSqlTool(on_result=on_result, on_draft=on_draft)
         )
         registry.register(DraftSqlTool(on_draft=on_draft))
-        registry.register(CreateChartTool(on_chart=on_chart))
+        registry.register(CreateChartTool(on_chart=on_chart, on_spec=on_spec))
         registry.register(RunValidationsTool())
         registry.register(RecallMemoriesTool())
         registry.register(SearchQueryHistoryTool())
@@ -559,6 +568,8 @@ class MainScreen(Screen[None]):
 
         if not isinstance(event, ChatPanel.UserMessage):
             return
+        self._last_user_prompt = event.text
+        self._last_chart = None
         if self._last_sql:
             self._correction_buffer.add_chat(event.text, self._last_sql)
 
@@ -722,6 +733,71 @@ class MainScreen(Screen[None]):
 
     # ── actions ──────────────────────────────────────────────────────────────
 
+    # ── pin-time capture (Cheese v1 Task 5) ─────────────────────────────────
+
+    def _capture_finding(self, *, question: str, sql: str, note: str = "") -> Finding | None:
+        """Shared capture path for both the upgraded pin handler and f8 share.
+
+        Snapshots the current results (+ chart, if any) into FindingDataStore,
+        snapshots this turn's grounding provenance, and pins a Finding. Never
+        raises into the TUI: a chart-render failure just omits the chart PNG.
+        Returns None (after notifying) if the agent is still mid-turn — pinning
+        then would snapshot a partial answer.
+        """
+        import labrat.cheese.store as cheese_store_mod
+        from labrat.chart.render_image import render_image
+        from labrat.cheese.store import FindingDataStore
+        from labrat.maze.gitmeta import current_git_sha
+        from labrat.maze.staleness import fingerprint_from_catalog
+        from labrat.thread.findings import FindingsManager
+        from labrat.widgets.chat_panel import ChatPanel
+        from labrat.widgets.results_table import ResultsTable
+
+        chat = self.query_one("#chat-content", ChatPanel)
+        if chat.is_agent_busy:
+            self.notify("Wait for the agent to finish before sharing.", severity="warning")
+            return None
+
+        table = self.query_one("#results-content", ResultsTable)
+        df = table.source_df
+        finding_id = str(uuid.uuid4())
+        results_ref: str | None = None
+        chart_spec_dump: dict[str, Any] | None = None
+        if df.height > 0 or self._last_chart is not None:
+            chart_png: bytes | None = None
+            if self._last_chart is not None:
+                spec, chart_df = self._last_chart
+                chart_spec_dump = spec.model_dump(mode="json")
+                try:
+                    chart_png = render_image(spec, chart_df)
+                except Exception:  # chart failure degrades to omission, never raises
+                    chart_png = None
+            data_store = FindingDataStore(cheese_store_mod.DEFAULT_DATA_ROOT)
+            results_ref = data_store.capture(finding_id, df, chart_png=chart_png)
+
+        prov = None
+        if chat.last_turn_provenance is not None:
+            schema_fingerprint = (
+                fingerprint_from_catalog(self._catalog) if self._catalog is not None else None
+            )
+            prov = chat.last_turn_provenance.snapshot(
+                schema_fingerprint=schema_fingerprint,
+                git_sha=current_git_sha(Path.cwd()),
+                model_id=getattr(self._profile_obj, "agent_model", None),
+            )
+
+        mgr = FindingsManager()
+        return mgr.pin(
+            finding_id=finding_id,
+            version_id=self._current_thread_id or "unknown",
+            question=question,
+            sql=sql,
+            results_ref=results_ref,
+            chart_spec=chart_spec_dump,
+            note=note,
+            provenance=prov,
+        )
+
     # ── pin finding handler (M18) ─────────────────────────────────────────────
 
     def on_results_table_pin_requested(self) -> None:
@@ -729,18 +805,38 @@ class MainScreen(Screen[None]):
         if not sql:
             self.notify("Run a query first before pinning.", severity="warning")
             return
-        from labrat.thread.findings import FindingsManager
-
-        mgr = FindingsManager()
-        mgr.pin(
-            version_id=self._current_thread_id or "unknown",
-            question="Pinned from results table",
-            sql=sql,
-            results_ref=None,
-            chart_spec=None,
-            note="",
-        )
+        finding = self._capture_finding(question=self._last_user_prompt or sql, sql=sql)
+        if finding is None:
+            return  # _capture_finding already notified (agent busy)
         self.notify("Finding pinned!  Press Ctrl+K to view findings.", timeout=3)
+
+    # ── share answer (Cheese v1 Task 5, f8) ─────────────────────────────────
+
+    def action_share_answer(self) -> None:
+        if not self._last_sql:
+            self.notify("Run a query first, then share.", severity="warning")
+            return
+        finding = self._capture_finding(
+            question=self._last_user_prompt or self._last_sql, sql=self._last_sql
+        )
+        if finding is None:
+            return  # _capture_finding already notified (agent busy)
+        try:
+            import labrat.cheese.store as cheese_store_mod
+            from labrat.cheese.export import export_cheese
+            from labrat.cheese.store import CheeseStore, FindingDataStore
+
+            path = export_cheese(
+                [finding],
+                kind="single",
+                title=finding.question,
+                cheese_store=CheeseStore(cheese_store_mod.DEFAULT_CHEESE_ROOT),
+                data_store=FindingDataStore(cheese_store_mod.DEFAULT_DATA_ROOT),
+            )
+        except Exception as exc:  # never raise into the TUI
+            self.notify(f"Cheese export failed: {exc}", severity="error")
+            return
+        self.notify(f"\U0001f9c0 Cheese exported: {path}", timeout=6)
 
     # ── new modal actions ─────────────────────────────────────────────────────
 

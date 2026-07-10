@@ -1,5 +1,7 @@
 """FindingDataStore (pin-time capture) + CheeseStore (versioned artifacts)."""
 
+from pathlib import Path
+
 import polars as pl
 import pytest
 
@@ -89,6 +91,54 @@ def test_list_cheeses_skips_corrupt_manifest_and_lists_valid(tmp_path):
     bad_dir = tmp_path / "corrupt123"
     bad_dir.mkdir()
     (bad_dir / "manifest.json").write_text("{not valid json", encoding="utf-8")
+    listed = cs.list_cheeses()
+    assert [m.cheese_id for m in listed] == [good.cheese_id]
+
+
+def test_capture_without_chart_png_deletes_stale_chart(tmp_path):
+    """t4-n5: a re-capture that omits chart_png must not leave a stale chart
+    paired with fresh results (the finding_id is reused across re-pins)."""
+    ds = FindingDataStore(tmp_path)
+    ds.capture("f1", pl.DataFrame({"x": [1]}), chart_png=b"\x89PNG-fake")
+    assert (tmp_path / "f1.chart.png").exists()
+    ds.capture("f1", pl.DataFrame({"x": [2]}))
+    assert not (tmp_path / "f1.chart.png").exists()
+    assert ds.load_chart_png("cheese://f1") is None
+
+
+def test_list_cheeses_reads_utf8_titles(tmp_path):
+    """t4-m1: manifest.json is read with an explicit utf-8 encoding."""
+    cs = CheeseStore(tmp_path)
+    cs.create_or_get("single", ["f1"], "Café Ünïcode \U0001f9c0")
+    listed = cs.list_cheeses()
+    assert listed[0].title == "Café Ünïcode \U0001f9c0"
+
+
+def test_list_cheeses_skips_manifest_deleted_mid_listing(tmp_path, monkeypatch):
+    """t4-m2: a manifest deleted between the is_file() check and the
+    stat()/read (TOCTOU) is skipped, not raised — mirrors the corrupt-JSON
+    skip-not-brick behaviour above."""
+    cs = CheeseStore(tmp_path)
+    good = cs.create_or_get("single", ["f1"], "good")
+    doomed = cs.create_or_get("single", ["f2"], "doomed")
+    doomed_path = tmp_path / doomed.cheese_id / "manifest.json"
+
+    real_stat = Path.stat
+    calls = {"n": 0}
+
+    def flaky_stat(self: Path, *args: object, **kwargs: object) -> object:
+        if self == doomed_path:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # First call is is_file()'s own stat() — let it see the file.
+                return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+            # Second call is list_cheeses()'s explicit stat() inside the try —
+            # simulate a concurrent delete landing between the two calls.
+            doomed_path.unlink()
+            raise FileNotFoundError(str(doomed_path))
+        return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
     listed = cs.list_cheeses()
     assert [m.cheese_id for m in listed] == [good.cheese_id]
 
