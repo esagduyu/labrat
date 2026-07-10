@@ -285,13 +285,22 @@ def scent_ingest(
     project_path = _resolve_dbt_project(dbt_project, profile)
     manifest_path = project_path / "target" / "manifest.json"
     catalog = catalog_from_dbt(project_path)
-    store = MazeStore.from_env(profile)
+
+    # Root at the *resolved* dbt project path, same rule `scent check` uses
+    # (see its comment above) — MazeStore.from_env/project_scent_dir()'s
+    # default env-or-cwd resolution would otherwise write Scent under the
+    # cwd when `scent ingest` is run from a SUBDIRECTORY of the project,
+    # creating a stray labrat_maze/scent that `scent check` (rooted at the
+    # resolved project) never reads. LABRAT_MAZE_DIR still wins when set.
+    maze_dir = os.environ.get("LABRAT_MAZE_DIR")
+    maze_root = Path(maze_dir) if maze_dir else project_path
+    store = MazeStore(project_root=maze_root, home=Path.home(), profile=profile)
 
     outcome = ingest_dbt_semantics(
         manifest_path=manifest_path,
         catalog=catalog,
         store=store,
-        project_scent_dir=project_scent_dir(),
+        project_scent_dir=project_scent_dir(project_root=maze_root),
         force=True,
         git_root=Path.cwd(),
     )

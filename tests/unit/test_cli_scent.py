@@ -232,6 +232,47 @@ def test_scent_ingest_writes(runner: CliRunner, tmp_path: Path, maze_env: Path) 
     assert written, "expected scent ingest to write at least one domain doc"
 
 
+def test_scent_ingest_from_subdir_roots_at_project_and_check_agrees(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare `scent ingest` (no --scent-dir flag, no LABRAT_MAZE_DIR) run from
+    a SUBDIRECTORY of the dbt project must root the write at the *resolved*
+    project path — the same rule `scent check` uses — not at the raw subdir
+    cwd. Otherwise ingest writes a stray labrat_maze/scent under the subdir
+    that a subsequent `scent check` (rooted at the project) never sees,
+    reprinting the exact "fix" command that doesn't fix anything (the
+    reviewer-demonstrated asymmetry)."""
+    from labrat.profile.manager import ProfileError, ProfileManager
+
+    def _raise_missing(self: ProfileManager, name: str) -> None:
+        raise ProfileError(f"Profile {name!r} not found.")
+
+    monkeypatch.setattr(ProfileManager, "get", _raise_missing)
+    monkeypatch.delenv("LABRAT_MAZE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    project = tmp_path / "proj"
+    _write_manifest(project, _manifest())
+    nested = project / "models" / "staging"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+
+    ingest_result = runner.invoke(app, ["scent", "ingest"])
+    assert ingest_result.exit_code == 0, ingest_result.output
+
+    # Scent lands under the PROJECT root, not the subdir.
+    project_scent_dir = project / "labrat_maze" / "scent"
+    assert list(project_scent_dir.glob("*.md")), (
+        "expected scent ingest to write under the resolved project root"
+    )
+    stray_scent_dir = nested / "labrat_maze" / "scent"
+    assert not stray_scent_dir.exists(), "ingest must not write a stray subdir scent store"
+
+    # A subsequent `scent check` from the same subdir must see it fresh.
+    check_result = runner.invoke(app, ["scent", "check"])
+    assert check_result.exit_code == 0, check_result.output
+
+
 def test_scent_ingest_unreadable_manifest_exits_nonzero(
     runner: CliRunner, tmp_path: Path, maze_env: Path
 ) -> None:
