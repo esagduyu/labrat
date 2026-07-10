@@ -19,6 +19,11 @@ uv run pyright                # type checking (must be clean)
 # Run the app
 uv run labrat
 
+# dbt-CI Scent pairing (docs/dbt-ci-pairing.md)
+uv run labrat scent check     # read-only dbt<->Scent fingerprint staleness gate (offline dbt parse; exit 0/1)
+uv run labrat scent ingest    # headless fix: re-ingest dbt semantics into project Scent
+uv run labrat scent init-ci   # scaffold the GitHub Actions workflow
+
 # Evals
 uv run python scripts/eval_duckdb.py             # no API key needed
 uv run scripts/eval_ade_bench.py --tasks helixops_saas001   # wrapper; needs ADE_BENCH_DIR + Docker
@@ -81,11 +86,11 @@ Built on Textual. `app.py` is the root `App`. Main screen is a 3-pane layout: ch
 
 | Package | Purpose |
 |---------|---------|
-| `maze/` | Scent grounding layer: `cartographer.py` (Cartographer pre-pass, `generate_scent`, `cartograph_prepass`); `search_reference_docs` tool retrieves from the store (#26a/#26b SHIPPED). **M5 moat foundation + T2b:** `provenance.py` (`SOURCE_TIERS` trust ladder + `source_rank`/`best_source`); `document.py` `Section` optional freshness metadata (`generated_at`/`schema_hash`/`model_id`/`git_sha`, back-compat `**Meta:**` line); `harvest.py` (`cluster_corrections` + `draft_harvested_sections` → `harvested`-tagged Gotchas, contamination-audited **fail-loud, draft-only**; `apply_approved_sections` audits+merges before write); `store.py` **write path** (`write_doc`/`load_domain` — was read-only); `staleness.py` (`schema_fingerprint`/`is_stale`). Every Scent write runs through `scent_audit.py` |
+| `maze/` | Scent grounding layer: `cartographer.py` (Cartographer pre-pass, `generate_scent`, `cartograph_prepass`); `search_reference_docs` tool retrieves from the store (#26a/#26b SHIPPED). **M5 moat foundation + T2b:** `provenance.py` (`SOURCE_TIERS` trust ladder + `source_rank`/`best_source`); `document.py` `Section` optional freshness metadata (`generated_at`/`schema_hash`/`model_id`/`git_sha`, back-compat `**Meta:**` line); `harvest.py` (`cluster_corrections` + `draft_harvested_sections` → `harvested`-tagged Gotchas, contamination-audited **fail-loud, draft-only**; `apply_approved_sections` audits+merges before write); `store.py` **write path** (`write_doc`/`load_domain` — was read-only); `staleness.py` (`schema_fingerprint`/`is_stale`). **dbt-CI pairing (2026-07-10, `5b99444`/`3a637d7`):** `ci.py` (`check_scent_freshness`/`catalog_from_dbt`) backs the `labrat scent check|ingest|init-ci` CLI group — read-only dbt↔Scent staleness gate for CI (guide: `docs/dbt-ci-pairing.md`). Every Scent write runs through `scent_audit.py` |
 | `catalog/` | External catalog adapters: `DbtLoader` (manifest.json/schema.yml) and `McpCatalogAdapter` |
 | `context_engine/` | Personal domain: table relevance scoring (frequency × recency), `ContextBundle`, `ContextAnalyzer` |
 | `history/` | Always-on `QueryHistoryLog` (JSONL, PII-redacted). Singleton in `run_sql.py`, monkeypatched in tests |
-| `memory/` | Self-healing memories: global/table/thread scopes, JSONL store, LLM-driven extraction. **M5 T2b:** `harvest.py::SessionHarvester` wires the once-dormant `EditExtractor`/`ChatCorrectionExtractor` into a session-boundary loop (`enabled` defaults **False** = fail-closed; never harvests on benchmark paths). Gating helper in `screens/harvest_controller.py`. **⚠️ No production caller yet — the TUI harvest-review trigger is deferred (see `docs/tui-integration-handoff.md`)** |
+| `memory/` | Self-healing memories: global/table/thread scopes, JSONL store, LLM-driven extraction. **M5 T2b:** `harvest.py::SessionHarvester` wires the once-dormant `EditExtractor`/`ChatCorrectionExtractor` into a session-boundary loop (`enabled` defaults **False** = fail-closed; never harvests on benchmark paths). Gating helper in `screens/harvest_controller.py`; production caller = the TUI harvest loop (TUI-M3, 2026-07-09). **Decision-trail harvesting (2026-07-10, `1dc13bd`):** `MemoryKind.explicit_user_rule` gains its first producer — TUI `ctrl+shift+d` (RecordDecisionScreen) → immediate persist → human-gated promotion to `## Decisions` Scent sections (retrieved via `search_reference_docs`); no LLM, opt-in |
 | `validations/` | Per-rule LLM checks returning `"pass"` / `"warn: ..."` / `"block: ..."` |
 | `eval/` | Legacy `EvalCase`/`EvalRunner` for internal SQL evals (`bird.py`, `latency.py`); new unified `BenchmarkSuite` protocol (`types.py`) for DAB + ADE-bench under `benchmarks/<bench>/{suite,external_runner,scorer,reporter}.py`. `smoke.py` = `SubsetSuite` + `ade_smoke_suite()`. Contract: `docs/superpowers/specs/2026-05-28-unified-benchmark-suite-design.md` |
 | `audit/` | JSONL event sourcing for every interaction |

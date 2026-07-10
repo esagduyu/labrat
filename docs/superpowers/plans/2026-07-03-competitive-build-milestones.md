@@ -34,6 +34,8 @@ Execute in order (M3 needs only M1; M4 needs M1+M2); manual TUI gates on M1/M3. 
 
 **Update (2026-07-10):** all four TUI sub-milestones **shipped 2026-07-09** (see the table above). Of the follow-on list: **T1b dbt semantic-layer ingestion shipped** (`b8500ed`), **T1d Phase 2 `dispatch_subagent` shipped** (`5941fbe`), **extra 2.3 team Scent shipped** (`2c77bbc`, 2026-07-10). The still-open list now reads: **extras 2.4 + 2.5 and the DAB `enable_ledger` A/B only** (the A/B parked with the benchmark track, post-2026-07-13).
 
+**Update (2026-07-10, later — autonomous weekend run):** **extra 2.5 decision-trail harvesting SHIPPED** (`1dc13bd`) — explicit capture (`ctrl+shift+d` RecordDecisionScreen) → immediate persist as `MemoryKind.explicit_user_rule` (its first producer) → human-gated promotion to `## Decisions` Scent sections; no LLM, no retrieval-scorer change (benchmark-safe), opt-in/default-off. The same run also shipped **dbt-CI at-source pairing** (`5b99444`, follow-ups `3a637d7`) — `labrat scent check` (read-only fingerprint-consistency staleness gate, offline via dbt parse, exit 0/1) / `scent ingest` (headless fix) / `scent init-ci` (GitHub Actions scaffold), backed by `maze/ci.py`; a T2b-v2 item that closes north-star §8a freshness mechanism (a) colocation+CI pairing (doc: `docs/dbt-ci-pairing.md`) — plus the Cheese+Trail ticket sweep (`9c6b263`). **Hybrid-RRF retrieval + embedding-based clustering (T2b v2): spec-only, build DEFERRED** (`docs/superpowers/specs/2026-07-10-hybrid-rrf-retrieval-design.md`) — any retrieval-scoring change alters the DAB leaderboard-path retrieval while the benchmark track is parked, and the embedding-dependency choice is the user's. Still open from this doc: **extra 2.4 (customer-facing evals) and the DAB `enable_ledger` A/B only.**
+
 ---
 
 ## Guiding sequence logic
@@ -134,14 +136,14 @@ Rationale from the analysis: the top of the board wins with *bigger models + ben
 
 ## M5 — Compounding memory moat (T2b+)  ·  branch `feat/correction-harvesting`
 
-> **Scope note (2026-07-10):** despite the ✅ in the progress table, the M5 merge (`ec1526e`) covered **only the moat-roadmap foundation + T2b v1** — *not* the full 2.3/2.4/2.5 feature list below. **2.3 git-versioned team memory shipped separately 2026-07-10** (`2c77bbc`, as team *Scent*); **2.4 customer-facing evals and 2.5 decision-trail harvesting remain open.** T2b's production surface landed via TUI-M3 (`f37c483`, 2026-07-09).
+> **Scope note (2026-07-10):** despite the ✅ in the progress table, the M5 merge (`ec1526e`) covered **only the moat-roadmap foundation + T2b v1** — *not* the full 2.3/2.4/2.5 feature list below. **2.3 git-versioned team memory shipped separately 2026-07-10** (`2c77bbc`, as team *Scent*); **2.4 customer-facing evals and 2.5 decision-trail harvesting remain open** *(update, later 2026-07-10: **2.5 shipped** — `1dc13bd`, explicit-capture variant; **2.4 is now the last open extra**)*. T2b's production surface landed via TUI-M3 (`f37c483`, 2026-07-09).
 
 **Goal:** ship the durable, defensible moat the funded incumbents (Altimate Decision Graph, PromptQL "team skills") are also racing toward — on the open/terminal wedge they can't match.
 
 **Features (moat-roadmap Plan 0/1 + Tier 2.3–2.5):**
 - Moat-roadmap **foundation + T2b v1** — wire the dormant extractors → human-gated promotion into Scent + staleness (already spec'd in `docs/superpowers/plans/2026-07-02-moat-foundation-and-t2b-harvesting.md`).
 - **2.3 Git-versioned, team-inherited memory** — memory blocks in `./labrat_maze/memory/`, size-capped (Oracle Forge cautionary tale: unbounded log = 70× tokens), tagged, propagating on `git pull`. [Altimate]
-- **2.5 Decision-trail harvesting** — `decisions.jsonl` beside `agent_tool_calls.jsonl`; harvest recorded verdicts, not just edits. [Spacedock]
+- **2.5 Decision-trail harvesting** — `decisions.jsonl` beside `agent_tool_calls.jsonl`; harvest recorded verdicts, not just edits. [Spacedock] *(✅ shipped 2026-07-10, `1dc13bd`, as the explicit-capture variant: `ctrl+shift+d` → `explicit_user_rule` → gated `## Decisions` Scent promotion)*
 - **2.4 Customer-facing evals** — `labrat evals` (question → assertion → expected, incl. "cannot answer") to make context quality measurable — closes the flywheel. [MinusX] *(v2 — larger; can split out.)*
 
 **Deps:** `memory/` (extractors, `MemoryStore`), moat-roadmap shared Scent-provenance foundation, `history/`.
