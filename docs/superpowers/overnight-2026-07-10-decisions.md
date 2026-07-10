@@ -46,3 +46,19 @@ Primary driver = background-task notifications (as all session). Fallback = Sche
   - **Scheduled autonomous harvesting (T2b v2) — parked.** The human review gate is the moat's integrity mechanism; autonomous scheduling fights it. Revisit only with a batch-review UX.
   - **dbt-CI at-source pairing (T2b v2) — parked.** Write-back into the user's dbt repo = highest-trust surface; needs its own careful spec.
   - **2.4 customer-facing evals — parked.** Product-shaped and big; belongs with the platform track (post-T2a runtime modes).
+
+- **D-10 (Q3 review outcome + one deliberate non-fix):** Fable whole-branch review of feat/team-scent came back APPROVED WITH MINORS — code fully clean (all six non-negotiables verified at source: read-only status, None-safe stamp-before-audit, T1b relaxation as specced, no LLM/clock, benchmark isolation), but two claims in `docs/team-scent.md`'s merge-guidance were **empirically false** (the reviewer reproduced both): (a) concurrent same-domain applies do NOT merge cleanly — both append at EOF, so git raises a trivial add/add conflict; (b) "duplicates self-heal at read" only holds when BOTH scent layers contribute a domain — project-only domains (the normal harvested-gotcha case) surface both copies. Both corrected pre-merge (70ace93), plus the per-domain-atomicity softening. **Deliberately NOT fixed:** making single-layer read-time body-dedup true in `_merge_domain` — that would change RMv2's single-layer golden-equivalence property, so it needs its own daytime decision, not a review-fix. Recorded as a follow-up candidate.
+
+## Morning summary (read this first)
+
+**All three queue items are done; master is at `2c77bbc`, pushed, CI monitored. No open fix-waves, no uncommitted work.**
+
+| Item | Outcome |
+|------|---------|
+| **Q1 — ticket bundle** | **MERGED** `63270ee` (CI green). Sub-loop tool calls now propagate to the parent's `on_tool_call` tagged `subagent:*` (trace-validity for any future dispatching DAB submission); TUI transcript filters them; `_last_draft_sql` baseline protected around dispatch; footer forgery hole closed with positional alignment + `+N` undercount fixed. |
+| **Q2 — Cartographer attached-DB C1/C2** | **NO BUILD NEEDED** — anchor re-verification proved the 2026-07-04 plan was already fully executed in a prior session (D-08). Plan doc annotated. C3/C4 re-ablation stays tabled with the benchmark track. |
+| **Q3 — team-scent v1 (moat extra 2.3)** | **MERGED** `2c77bbc`. Maze status surface + read-only CLI (`python -m labrat.maze.print_status`), `git_sha` provenance stamping on harvest-apply + dbt-ingest writes, `docs/team-scent.md` team workflow guide. Review-corrected doc claims (D-10). Suite 1262 green. |
+
+**Decisions for your review:** D-04..D-07 (Q1 designs), D-08 (Q2 already-shipped finding), D-09 (moat-extra scoping — 2.3 built, embedding-clustering next-recommended), D-10 (doc corrections + the one deliberate non-fix).
+
+**Carried tickets (unchanged):** DAB-driver → host_configs migration (leaderboard path, needs attended session); `_merge_domain` single-part dedup (D-10, needs a decision on RMv2 golden equivalence); post-Fable regression validation (memory: `project_post_fable_todo`).
