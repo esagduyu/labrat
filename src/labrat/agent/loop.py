@@ -90,6 +90,12 @@ class AgentLoop:
         self.turns_used = 0
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
+        # True iff the loop's final answer was returned WITHOUT a final
+        # verifier re-check because the round (or turn) budget ran out —
+        # i.e. the last real verdict (if any) was insufficient and nothing
+        # re-checked the corrected answer. Callers must not report this
+        # turn as verifier-passed (see TurnProvenance.set_verifier).
+        self.verify_exhausted = False
         # Set from run()'s on_tool_call argument for the duration of the call,
         # cleared in a finally. Lets a session runner closure (build_agent_session)
         # forward a sub-loop's dispatches to the parent's hook, read at call time.
@@ -118,6 +124,7 @@ class AgentLoop:
         self.turns_used = 0
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
+        self.verify_exhausted = False
         self.active_on_tool_call = on_tool_call
 
         try:
@@ -212,17 +219,27 @@ class AgentLoop:
         Returns True if the answer was judged insufficient and feedback was appended
         as a new user turn (the loop should continue); False if there's no verifier,
         the round budget is spent, the turn budget is spent, or the answer passed.
+
+        When returning False WITHOUT the verifier actually re-checking this
+        answer (round or turn budget exhausted), sets ``verify_exhausted`` so
+        callers know the final answer was never judged sufficient — it's
+        just what's left after the budget ran out (whole-branch F2).
         """
-        if self._verifier is None or self.verify_rounds_used >= self._max_verify_rounds:
+        if self._verifier is None:
+            return False
+        if self.verify_rounds_used >= self._max_verify_rounds:
+            self.verify_exhausted = True
             return False
         # Don't re-prompt if we couldn't afford to answer the feedback anyway.
         if self._max_turns is not None and self.turns_used >= self._max_turns:
+            self.verify_exhausted = True
             return False
 
         verdict = await self._verifier.verify(
             question=question, answer=answer, transcript=self.history
         )
         if verdict.sufficient:
+            self.verify_exhausted = False
             return False
 
         self.verify_rounds_used += 1

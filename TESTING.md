@@ -617,39 +617,11 @@ EOF
 
 ---
 
-## M20 · HTML Export
+## M20 · HTML Export — retired, superseded by Cheese v1
 
-**Goal:** `export_findings()` writes a self-contained HTML file with all findings.
-
-```bash
-uv run python - <<'EOF'
-import tempfile
-from pathlib import Path
-from datetime import datetime, UTC
-from labrat.audit.export import export_findings
-from labrat.thread.model import Finding
-
-findings = [
-    Finding(id="f1", version_id="v1",
-            question="Top customers by revenue?",
-            sql="SELECT name, SUM(total_amount) FROM customers JOIN orders USING (customer_id) GROUP BY 1",
-            results_ref=None, chart_spec=None, note="Alice leads.", pinned_at=datetime.now(tz=UTC)),
-]
-with tempfile.TemporaryDirectory() as tmp:
-    out = export_findings(findings, output_dir=Path(tmp))
-    html = out.read_text()
-    print(f"File: {out.name}")
-    print(f"Size: {len(html)} bytes")
-    print(f"Contains finding: {'Top customers' in html}")
-    print(html[:300])
-EOF
-```
-
-**Check:**
-- [ ] HTML file created with a unique filename
-- [ ] File size > 1000 bytes
-- [ ] Contains the question text and SQL
-- [ ] `<!DOCTYPE html>` at the top — valid self-contained HTML
+`labrat.audit.export.export_findings()` has been removed. Its one-shot, unversioned HTML
+export is superseded by the Cheese v1 share surface (`labrat.cheese.export.export_cheese`) —
+versioned, provenance-stamped artifacts. See "Cheese share (v1)" below.
 
 ---
 
@@ -1202,3 +1174,40 @@ whose `target/manifest.json` contains `semantic_models` (run `dbt parse` first).
    final answer citing the sub-agent's result, and NO sub-agent tool chatter in the parent
    transcript (the sub-loop's own run_sql traces do not appear — only the one dispatch line).
 2. Budget echo: the answer/trace completes within the default budgets (no hang).
+
+## Cheese share (v1)
+
+**Goal:** any pinned answer exports as a free, versioned, self-contained HTML artifact — no
+LabRat, no network, needed to view it.
+
+1. Run a query in chat (ask a question that produces rows and, ideally, a chart).
+2. Press **f8** ("Share") → toast `🧀 Cheese exported: <path>`. Open that path in a browser:
+   - chart image (if one was drawn this turn) and a bounded results table render
+   - a trust block: either attested (Scent sources / join-verified / lineage / verifier
+     verdict / schema+git+model stamp) or the honest line
+     `unattested (pinned before provenance capture)` — never fabricated
+   - footer `Made with LabRat — terminal-native data agent` linking the GitHub repo, and no
+     other external URLs anywhere in the page source
+   - the page renders fully offline (airplane mode / disconnect works)
+3. Pin a couple of answers from the results table (pin icon / existing M18 flow), then
+   **Ctrl+K** to open the Findings viewer:
+   - **e** → exports all pinned findings as one report (`LabRat Report`) → toast + artifact
+   - select a row, **x** → exports just that finding (single) → a second, separate artifact
+   - **Shift+E** / **Shift+X** → same two exports with rows omitted (open the HTML — the table
+     rows are gone, replaced by `Result rows omitted at export.`)
+4. **v** → opens the version browser: lists every Cheese with its versions
+   (`v{n} · <date> · rows:<mode>`, current version marked `← current`).
+   - Press **Enter** on an older version → toast with that version's file path; open it — it's
+     the exact old artifact, unchanged.
+   - Press **r** on an older version → rollback toast; the list's `← current` marker moves.
+5. Re-run the same export (**e** again on the same pinned set) → a new `v(N+1).html` appears
+   next to the untouched older versions (immutable — `v1.html`'s bytes never change), and the
+   version browser's `current` marker moves to the newest version.
+
+**Check:**
+- [ ] f8 export opens standalone in a browser with zero network requests
+- [ ] Trust block never shows fabricated grounding data for a pre-Cheese finding
+- [ ] Report vs. single-finding exports land in separate artifacts; rows-omitted variants never
+      leak row values
+- [ ] Rollback moves the `current` pointer without deleting or rewriting any version file
+- [ ] Re-export continues the version sequence (never overwrites an existing `v<N>.html`)

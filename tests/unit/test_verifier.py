@@ -133,6 +133,21 @@ async def test_loop_respects_max_verify_rounds() -> None:
     # one re-prompt allowed; the second would-be-final answer is accepted as-is
     assert loop.verify_rounds_used == 1
     assert verifier.calls == 1
+    # ...but that final answer was NEVER re-checked — the round budget ran
+    # out before a re-verify could happen, so callers must not report this
+    # turn as verifier-passed (whole-branch F2).
+    assert loop.verify_exhausted is True
+
+
+async def test_loop_verify_exhausted_false_when_verdict_passes() -> None:
+    """A verdict that genuinely passes (first try or after a re-prompt) must
+    NOT be flagged as exhausted."""
+    provider = _MockProvider([[TextBlock(text="only")]])
+    verifier = _ScriptedVerifier([Verdict(True)])
+    loop = AgentLoop(provider=provider, registry=ToolRegistry(), ctx=_ctx(), verifier=verifier)
+    await loop.run("q")
+    assert loop.verify_rounds_used == 0
+    assert loop.verify_exhausted is False
 
 
 async def test_loop_skips_verifier_when_turn_budget_spent() -> None:

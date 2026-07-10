@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from labrat.cheese.model import FindingProvenance
+
 
 class Thread(BaseModel):
     """A conversation thread. Each thread contains an ordered sequence of Versions."""
@@ -40,3 +42,4 @@ class Finding(BaseModel):
     chart_spec: dict[str, Any] | None
     note: str
     pinned_at: datetime
+    provenance: FindingProvenance | None = None
