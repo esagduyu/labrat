@@ -78,7 +78,15 @@ def build_agent_session(
         left it None (enables llm_extract/llm_classify; caller injection wins);
       - ContextLedger attached when ``enable_ledger`` (durable at ``ledger_dir``
         or a per-call temp dir);
-      - optional LLMVerifier (the sufficiency judge — NOT consensus).
+      - optional LLMVerifier (the sufficiency judge — NOT consensus);
+      - ``ctx.subagent_runner`` installed when the caller left it None (same
+        caller-wins precedent as ``llm_fn``). The closure derives its
+        sub-registry from THIS session's ``registry`` minus ``dispatch_subagent``
+        (depth-1 guard #1) and its sub-ctx shares the connections/catalog/llm_fn
+        substrate but resets ``subagent_runner`` to None (depth-1 guard #2). It
+        runs a fresh, bounded ``AgentLoop`` on the same provider and the parent's
+        ledger instance, splicing artifact-ref previews (via the ledger's
+        ResultStore) into the sub-agent's seed prompt.
 
     The caller owns the loop lifecycle: run once (run_agent_task) or keep it
     across turns (TUI chat — ``loop.history`` accumulates).
@@ -99,7 +107,7 @@ def build_agent_session(
     if verify:
         verifier = LLMVerifier(provider_llm_fn(provider))
 
-    return AgentLoop(
+    loop = AgentLoop(
         provider=provider,
         registry=registry,
         ctx=ctx,
@@ -110,4 +118,75 @@ def build_agent_session(
         verifier=verifier,
         max_verify_rounds=max_verify_rounds,
         ledger=ledger,
+    )
+
+    if ctx.subagent_runner is None:
+        parent_registry = registry
+        parent_ledger = ledger  # may be None (enable_ledger=False)
+
+        async def _run_subagent(
+            *,
+            seed_prompt: str,
+            artifact_refs: list[str],
+            max_turns: int,
+            max_tool_calls: int,
+        ) -> tuple[str, int, int]:
+            seed = seed_prompt
+            if artifact_refs and parent_ledger is not None:
+                previews: list[str] = []
+                for ref in artifact_refs:
+                    try:
+                        previews.append(f"### {ref}\n{parent_ledger.store.preview(ref)}")
+                    except Exception:
+                        previews.append(f"[unresolvable ref: {ref}]")
+                seed = seed + "\n\n## Provided artifacts\n\n" + "\n\n".join(previews)
+            elif artifact_refs:
+                seed = (
+                    seed
+                    + "\n\n## Provided artifacts\n\n"
+                    + "\n\n".join(f"[unresolvable ref: {ref}]" for ref in artifact_refs)
+                )
+            sub_loop = AgentLoop(
+                provider=provider,
+                registry=_sub_registry(parent_registry),
+                ctx=_sub_ctx(ctx),
+                system=system_prompt,
+                dialect=dialect,
+                max_turns=max_turns,
+                max_tool_calls=max_tool_calls,
+                ledger=parent_ledger,
+            )
+            chunks: list[str] = []
+            await sub_loop.run(seed, on_text=chunks.append)
+            return ("".join(chunks), sub_loop.turns_used, sub_loop.tool_calls_used)
+
+        ctx.subagent_runner = _run_subagent
+
+    return loop
+
+
+def _sub_registry(hosting: ToolRegistry) -> ToolRegistry:
+    """The hosting registry minus dispatch_subagent — depth-1 guard #1.
+
+    Derived from the HOST (never rebuilt from the standard set) so restricted
+    hosts cannot be confused-deputied into wider tool access (retires the M4
+    review's I1 advisory for this consumer).
+    """
+    sub = ToolRegistry()
+    for tool in hosting.tools:
+        if tool.name != "dispatch_subagent":
+            sub.register(tool)
+    return sub
+
+
+def _sub_ctx(parent: ToolContext) -> ToolContext:
+    """Shared execution substrate, fresh guard: subagent_runner stays None."""
+    return ToolContext(
+        connections=parent.connections,
+        catalogs=parent.catalogs,
+        primary=parent.primary,
+        profile_name=parent.profile_name,
+        read_only=parent.read_only,
+        llm_fn=parent.llm_fn,
+        subagent_runner=None,
     )
