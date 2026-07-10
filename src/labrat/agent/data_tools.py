@@ -12,6 +12,7 @@ from labrat.agent.tools.base import ToolRegistry
 from labrat.agent.tools.check_sql import CheckSqlTool
 from labrat.agent.tools.column_stats import ColumnStatsTool
 from labrat.agent.tools.describe_table import DescribeTableTool
+from labrat.agent.tools.dispatch_subagent import DispatchSubagentTool
 from labrat.agent.tools.explain_lineage import ExplainLineageTool
 from labrat.agent.tools.explain_sql import ExplainSqlTool
 from labrat.agent.tools.link_schema import LinkSchemaTool
@@ -38,12 +39,13 @@ def build_data_tools_registry(
     Tools included: search_reference_docs, workflow, profile_dataset, list_tables,
     describe_table, search_columns, link_schema, sample_rows, column_stats,
     run_sql, explain_sql, explain_lineage, verify_join, attach_database, load_file,
-    load_mongo_collection, llm_extract, llm_classify, run_program.
+    load_mongo_collection, llm_extract, llm_classify, dispatch_subagent, run_program.
 
     llm_extract / llm_classify are per-row LLM primitives: they self-error with a
     structured result whenever ``ctx.llm_fn`` is None (every path except the
     labrat-agent runner, which injects it) — so registering them here adds no LLM
-    dependency to deterministic consumers.
+    dependency to deterministic consumers. dispatch_subagent follows the same
+    self-gating pattern on ``ctx.subagent_runner`` (T1d Phase 2).
 
     ``include_program`` (default True) registers the run_program pipeline tool.
     RunProgramTool builds its own step-dispatch registry with
@@ -80,6 +82,7 @@ def build_data_tools_registry(
     registry.register(LoadMongoCollectionTool())
     registry.register(LlmExtractTool())
     registry.register(LlmClassifyTool())
+    registry.register(DispatchSubagentTool())
     if include_program:
         registry.register(RunProgramTool())
     return registry
