@@ -743,3 +743,36 @@ self-contained-output, and unique-filename guarantees now live in `test_cheese_r
 (`test_escaping`, `test_self_contained_and_footer`) and `test_cheese_export.py`
 (`test_reexport_same_set_bumps_version`, which upgrades "unique filenames" to "linear versioned
 filenames"). Spec: `docs/superpowers/plans/2026-07-10-cheese-v1.md`.
+
+## 2026-07-10 — Trail v1: save-as-Trail (procedural Scent, "Scent for procedures")
+
+A Trail is a named, intent-retrieved analysis SOP — reuses the Scent store/parser/provenance/
+audit machinery parameterized by `kind="trail"` (zero `ScentDoc` schema changes; `domain =
+intent_slug(question)`). Strictly **read-as-guidance, never auto-executed**: `search_trails`
+(the retrieval tool, Task 2) returns a Trail's five sections (When to use / Steps / Reference
+SQL / Validations / Gotchas) as text for the agent to read and reason over, the same as any
+other Scent section — there is no execution path from a Trail back into `run_sql`. Promotion
+is **manual and human-gated only**: a Trail is drafted from an already-pinned `Finding` via
+`maze/trail.py::draft_trail_from_finding` (Task 1), reviewed and edited by an analyst in the
+new `TrailReviewScreen` (mirrors `HarvestReviewScreen`'s audited-apply contract), and written
+via `apply_trail` only on explicit approval (`a`) — never a background/automatic harvest.
+Executable and auto-harvested Trails (e.g. promoting a Trail straight from an agent's own
+successful run without a human pinning + approving it first) are explicitly **deferred to
+v2** — v1 ships the read/write primitives and the human gate, not the compounding loop.
+
+Fail-closed by construction, same shape as `harvest_opt_in`: `Profile.trail_opt_in: bool =
+False` gates the TUI's `t` binding on the Findings viewer (`FindingsViewerScreen.
+action_save_as_trail`) — off by default, back-compat for serialized profiles missing the key,
+toggled in Settings next to the existing Harvest row. Every draft is contamination-audited
+twice on the way to disk: once at draft time (`draft_trail_from_finding` raises
+`ScentContaminationError` before the review screen ever opens) and again at apply time inside
+`apply_trail` (in case an analyst's edit reintroduces answer-shaped text) — both fail loud,
+write nothing, and surface a status-line/notify message, never raise into the TUI. Unlike
+harvest's per-domain bullet-append, a Trail is one authored document per intent-slug: re-
+promoting the same question **overwrites** (`store.write_doc(..., kind="trail")`), which is
+the correct replace-semantics for "the current best procedure for this question," not an
+accumulating log. `referenced_tables` (t2-f1 fix, `maze/trail.py`) now only treats an
+*unqualified* table reference as a CTE self-reference — a schema-qualified table sharing a
+CTE's bare name (`WITH events AS (...) ... FROM raw.events`) is correctly kept instead of
+being dropped. Design: `docs/superpowers/specs/2026-07-10-trail-v1-design.md`; plan (3 tasks,
+this entry covers Task 3, the TUI authoring surface): `docs/superpowers/plans/2026-07-10-trail-v1.md`.

@@ -79,6 +79,9 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                 yield Label("Harvest corrections (M5)")
                 yield Switch(value=self._profile.harvest_opt_in, id="harvest-switch")
             with Horizontal(classes="row"):
+                yield Label("Trails (save-as-Trail)")
+                yield Switch(value=self._profile.trail_opt_in, id="trail-switch")
+            with Horizontal(classes="row"):
                 yield Label("Verify answers")
                 yield Switch(value=self._profile.verify_enabled, id="verify-switch")
             with Horizontal(id="actions"):
@@ -97,6 +100,7 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                 "agent_provider": provider_value if isinstance(provider_value, str) else "auto",
                 "agent_model": model_text or None,
                 "harvest_opt_in": self.query_one("#harvest-switch", Switch).value,
+                "trail_opt_in": self.query_one("#trail-switch", Switch).value,
                 "verify_enabled": self.query_one("#verify-switch", Switch).value,
                 "dbt_project_path": (
                     self.query_one("#dbt-path-input", Input).value.strip() or None

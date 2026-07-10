@@ -904,9 +904,14 @@ class MainScreen(Screen[None]):
         )
 
     def action_view_findings(self) -> None:
+        from labrat.profile.model import Profile
         from labrat.screens.findings_viewer import FindingsViewerScreen
 
-        self.app.push_screen(FindingsViewerScreen())
+        profile_obj = self._profile_obj or Profile(
+            name=self._profile if self._profile != "—" else "default",
+            dialect=self._dialect if self._dialect != "—" else "duckdb",
+        )
+        self.app.push_screen(FindingsViewerScreen(profile_obj=profile_obj, catalog=self._catalog))
 
     def action_view_history(self) -> None:
         from labrat.screens.history_browser import HistoryBrowserScreen

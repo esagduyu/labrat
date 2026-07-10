@@ -12,6 +12,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Label, Static
 
 if TYPE_CHECKING:
+    from labrat.db.catalog import Catalog
+    from labrat.profile.model import Profile
     from labrat.thread.model import Finding
 
 
@@ -26,6 +28,7 @@ class FindingsViewerScreen(ModalScreen[None]):
         Binding("E", "export_html_no_rows", "Report (no rows)", show=False),
         Binding("X", "export_selected_no_rows", "Finding (no rows)", show=False),
         Binding("v", "cheese_versions", "Versions", show=True),
+        Binding("t", "save_as_trail", "Save as Trail", show=True),
     ]
 
     DEFAULT_CSS = """
@@ -44,11 +47,15 @@ class FindingsViewerScreen(ModalScreen[None]):
     FindingsViewerScreen #status { margin-top: 1; color: $text-muted; }
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, profile_obj: Profile | None = None, catalog: Catalog | None = None
+    ) -> None:
         super().__init__()
         from labrat.thread.findings import FindingsManager
 
         self._mgr = FindingsManager()
+        self._profile_obj = profile_obj
+        self._catalog = catalog
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -59,6 +66,7 @@ class FindingsViewerScreen(ModalScreen[None]):
                 yield Button("Export Report  [E]", id="export-btn", variant="primary")
                 yield Button("Export Finding  [X]", id="export-selected-btn")
                 yield Button("Versions  [V]", id="versions-btn")
+                yield Button("Save as Trail  [T]", id="save-trail-btn")
                 yield Button("Close  [Esc]", id="close-btn")
             yield Label("", id="status")
 
@@ -170,6 +178,61 @@ class FindingsViewerScreen(ModalScreen[None]):
         from labrat.screens.cheese_versions import CheeseVersionsScreen
 
         self.app.push_screen(CheeseVersionsScreen())
+
+    @on(Button.Pressed, "#save-trail-btn")
+    def action_save_as_trail(self) -> None:
+        """Draft a Trail from the highlighted Finding and push the review screen.
+
+        Fail-closed on `trail_opt_in` (mirrors the harvest opt-in gate); a
+        drafted-but-contaminated Trail is blocked before the review screen ever
+        opens (mirrors draft_trail_from_finding's own fail-loud audit).
+        """
+        finding = self._selected_finding()
+        if finding is None:
+            self.query_one("#status", Label).update("No finding selected.")
+            return
+        if self._profile_obj is None or not self._profile_obj.trail_opt_in:
+            self.notify("Enable Trails in Settings (ctrl+,) to save.", timeout=6)
+            return
+
+        import os
+        from datetime import UTC, datetime
+        from pathlib import Path
+
+        from labrat.maze.gitmeta import current_git_sha
+        from labrat.maze.scent_audit import ScentContaminationError
+        from labrat.maze.staleness import fingerprint_from_catalog
+        from labrat.maze.store import MazeStore
+        from labrat.maze.trail import draft_trail_from_finding
+        from labrat.screens.trail_review import TrailReviewScreen
+        from labrat.validations.store import ValidationRuleStore
+
+        # Mirrors MazeStore.from_env's project-root rule (LABRAT_MAZE_DIR or cwd) so
+        # the sha stamped at draft/apply time matches the repo the store writes into
+        # (same rationale as HarvestReviewScreen.action_apply).
+        git_root = Path(os.environ.get("LABRAT_MAZE_DIR") or os.getcwd())
+
+        try:
+            all_rules = ValidationRuleStore().read_profile(self._profile_obj.name)
+        except Exception:
+            all_rules = []
+
+        schema_hash = fingerprint_from_catalog(self._catalog) if self._catalog is not None else None
+        try:
+            doc = draft_trail_from_finding(
+                finding,
+                all_validations=all_rules,
+                generated_at=datetime.now(tz=UTC).isoformat(),
+                model_id=self._profile_obj.agent_model,
+                schema_hash=schema_hash,
+                git_sha=current_git_sha(git_root),
+            )
+        except ScentContaminationError:
+            self.notify("Draft blocked by contamination audit.", severity="error", timeout=8)
+            return
+
+        store = MazeStore.from_env(profile=self._profile_obj.name)
+        self.app.push_screen(TrailReviewScreen(doc, store, git_root=git_root))
 
     @on(Button.Pressed, "#close-btn")
     def action_cancel(self) -> None:
