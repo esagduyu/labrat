@@ -307,6 +307,26 @@ async def test_thread_switch_clears_stale_turn_provenance(tmp_path: Path, monkey
         assert chat.last_turn_provenance is None
 
 
+async def test_capture_finding_survives_store_error(tmp_path: Path, monkeypatch) -> None:
+    """A data-store OSError degrades to a notify, never raises into Textual."""
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+
+    def _boom(*a: object, **k: object) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("labrat.cheese.store.FindingDataStore.capture", _boom)
+    async with _MainHost().run_test() as pilot:
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, MainScreen)
+        screen._last_sql = "SELECT 1 AS x"
+        screen._last_user_prompt = "q"
+        screen.query_one("#results-content", ResultsTable).load(pl.DataFrame({"x": [1]}))
+        finding = screen._capture_finding(question="q", sql="SELECT 1 AS x")
+        assert finding is None  # degraded, did not raise
+        await pilot.pause()
+
+
 async def test_capture_finding_carries_turn_provenance(tmp_path: Path, monkeypatch) -> None:
     """A populated TurnProvenance snapshot is captured onto the pinned Finding."""
     from labrat.widgets.turn_provenance import TurnProvenance

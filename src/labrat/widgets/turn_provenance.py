@@ -33,7 +33,7 @@ class TurnProvenance:
         # (domain, best_source, stale) per matched doc, in arrival order; empty
         # when only count data was recoverable (fallback rendering).
         self._scent_docs: list[tuple[str, str, bool | None]] = []
-        self._join_verified = False
+        self._joins_verified: int = 0
         self._lineage_used = False
         self._sql_runs = 0
         self._verifier_rounds: int | None = None
@@ -111,7 +111,7 @@ class TurnProvenance:
                 else:
                     self._scent_hits += 1  # truly opaque output
         elif name == "verify_join":
-            self._join_verified = True
+            self._joins_verified += 1
         elif name == "explain_lineage":
             self._lineage_used = True
         elif name == "run_sql":
@@ -151,7 +151,7 @@ class TurnProvenance:
             else:
                 freshness = "stale" if self._scent_stale else "fresh"
                 parts.append(f"scent ×{self._scent_hits} ({freshness})")  # noqa: RUF001
-        if self._join_verified:
+        if self._joins_verified:
             parts.append("join verified")
         if self._lineage_used:
             parts.append("lineage")
@@ -188,7 +188,7 @@ class TurnProvenance:
 
         if not (
             self._scent_hits
-            or self._join_verified
+            or self._joins_verified
             or self._lineage_used
             or self._sql_runs
             or self._verifier_rounds is not None
@@ -212,7 +212,7 @@ class TurnProvenance:
                 verdict = "sufficient"
         return FindingProvenance(
             scent_sources=sources,
-            joins_verified=1 if self._join_verified else 0,
+            joins_verified=self._joins_verified,
             lineage_used=self._lineage_used,
             verifier_verdict=verdict,
             run_sql_count=self._sql_runs,
