@@ -679,3 +679,13 @@ added); F9 re-ingests after drift. The Cartographer now stamps `schema_hash` on 
 freshness: footers can now render `(semantic_layer·fresh)`/`·stale`. Benchmark paths cannot
 reach any of this (no profile sets the path). Spec:
 docs/superpowers/specs/2026-07-09-dbt-semantic-ingestion-design.md.
+
+## 2026-07-09 — dispatch_subagent (T1d Phase 2): scoped sub-agent dispatch
+
+The 2026-06-26 Phase-2 design (stranded on feat/context-ledger) shipped with refreshes:
+ctx.subagent_runner seam injected by build_agent_session (llm_fn precedent — MCP/claude-mcp
+hosts self-error structurally), sub-registry derived from the HOSTING registry minus the tool
+(retires the M4 I1 confused-deputy advisory), two structural depth-1 guards, shared
+connections/ledger substrate, budgets clamped 1-8 turns / 1-15 calls, and a ledger_payload
+return so oversized sub-results bound through the parent ledger like any other output.
+Spec: docs/superpowers/specs/2026-07-09-dispatch-subagent-design.md.
