@@ -1,5 +1,6 @@
 """CLI entry point for LabRat."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -13,6 +14,9 @@ app = typer.Typer(
 conn_app = typer.Typer(name="conn", help="Manage database connection profiles.")
 app.add_typer(conn_app, name="conn")
 app.add_typer(conn_app, name="connection")
+
+scent_app = typer.Typer(name="scent", help="Check and refresh dbt-paired Scent.")
+app.add_typer(scent_app, name="scent")
 
 _OPT = typer.Option  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 _ARG = typer.Argument  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -125,3 +129,244 @@ def conn_set_default(
     except ProfileError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
+
+
+def _find_dbt_project_upward(start: Path) -> Path | None:
+    """Walk up from *start* looking for the nearest `dbt_project.yml`.
+
+    Returns the directory containing it, or None if none is found by the
+    filesystem root. Lets a bare `labrat scent check` (no --dbt-project, no
+    profile dbt_project_path) work when run from inside a dbt project — the
+    common case for a CI job whose workflow doesn't pass --dbt-project.
+    """
+    current = start.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "dbt_project.yml").is_file():
+            return candidate
+    return None
+
+
+def _resolve_dbt_project(dbt_project: str | None, profile: str) -> Path:
+    """Resolve the dbt project root: explicit flag, else `profile`'s
+    `dbt_project_path`, else the nearest `dbt_project.yml` found by walking
+    up from the current directory."""
+    if dbt_project:
+        return Path(dbt_project)
+
+    from labrat.profile.manager import ProfileError, ProfileManager
+
+    path: str | None = None
+    try:
+        path = ProfileManager().get(profile).dbt_project_path
+    except ProfileError:
+        path = None
+
+    if path:
+        return Path(path)
+
+    detected = _find_dbt_project_upward(Path.cwd())
+    if detected is not None:
+        return detected
+
+    typer.echo(
+        "Error: no --dbt-project given, profile "
+        f"{profile!r} has no dbt_project_path configured, and no "
+        "dbt_project.yml was found in the current directory or its parents. "
+        "Pass --dbt-project <path> or configure one on the profile.",
+        err=True,
+    )
+    raise typer.Exit(1) from None
+
+
+@scent_app.command("check")
+def scent_check(
+    dbt_project: Annotated[
+        str | None, _OPT("--dbt-project", help="Path to the dbt project root.")
+    ] = None,
+    scent_dir: Annotated[
+        str | None, _OPT("--scent-dir", help="Path to the project Scent directory.")
+    ] = None,
+    profile: Annotated[
+        str, _OPT("--profile", help="Connection profile to resolve --dbt-project from.")
+    ] = "default",
+    warn_only: Annotated[bool, _OPT("--warn-only", help="Report drift but always exit 0.")] = False,
+    skip_if_no_manifest: Annotated[
+        bool,
+        _OPT("--skip-if-no-manifest", help="Exit 0 (instead of 1) if manifest.json is missing."),
+    ] = False,
+    output_format: Annotated[
+        str, _OPT("--format", help="Output format: 'text' or 'json'.")
+    ] = "text",
+) -> None:
+    """Check whether the committed Scent still matches the committed dbt project.
+
+    Read-only gate — never writes to disk. Intended for CI: run `dbt parse`
+    first so `target/manifest.json` exists, then run this against the
+    committed `labrat_maze/scent` directory.
+    """
+    from labrat.maze.ci import check_scent_freshness
+    from labrat.maze.store import MazeStore, project_scent_dir
+
+    if output_format not in ("text", "json"):
+        typer.echo(f"Error: --format must be 'text' or 'json', got {output_format!r}", err=True)
+        raise typer.Exit(1) from None
+
+    project_path = _resolve_dbt_project(dbt_project, profile)
+    if scent_dir:
+        resolved_scent_dir = Path(scent_dir)
+        # Root the store's project layer at the same place the sidecar is
+        # read from, so sections and the fingerprint sidecar always agree —
+        # scent_dir is always `<root>/labrat_maze/scent` (project_scent_dir's
+        # own convention), so strip those two segments back off to get root.
+        store = MazeStore(
+            project_root=resolved_scent_dir.parent.parent, home=Path.home(), profile=profile
+        )
+    else:
+        resolved_scent_dir = project_scent_dir()
+        store = MazeStore.from_env(profile)
+
+    res = check_scent_freshness(project_path, resolved_scent_dir, store=store)
+
+    if output_format == "json":
+        typer.echo(res.model_dump_json())
+    else:
+        if res.ok:
+            typer.echo(f"scent check: OK ({res.checked} domain(s) checked)")
+        elif not res.stale:
+            # No genuinely-stale domains — this is the missing/unreadable
+            # manifest.json case, not a fingerprint mismatch, so don't call
+            # it "STALE".
+            typer.echo("scent check: CANNOT VERIFY")
+        else:
+            typer.echo(f"scent check: STALE ({len(res.stale)} stale domain(s))")
+            for s in res.stale:
+                typer.echo(f"  - {s.domain}: {s.reason}")
+        for w in res.warnings:
+            typer.echo(f"  warning: {w}")
+        if not res.ok:
+            typer.echo(f"fix: {res.fix_command}")
+
+    exit_ok = res.ok or warn_only or (not res.manifest_found and skip_if_no_manifest)
+    raise typer.Exit(0 if exit_ok else 1)
+
+
+@scent_app.command("ingest")
+def scent_ingest(
+    dbt_project: Annotated[
+        str | None, _OPT("--dbt-project", help="Path to the dbt project root.")
+    ] = None,
+    profile: Annotated[
+        str, _OPT("--profile", help="Connection profile to resolve --dbt-project from.")
+    ] = "default",
+) -> None:
+    """Ingest the dbt project's semantic layer into Scent — headless fix for `scent check`.
+
+    The only write path in this command group: replaces each affected
+    domain's `semantic_layer` section and refreshes the manifest-fingerprint
+    sidecar, through the same audited write path as the Cartographer.
+    """
+    from labrat.maze.ci import catalog_from_dbt
+    from labrat.maze.semantic_ingest import ingest_dbt_semantics
+    from labrat.maze.store import MazeStore, project_scent_dir
+
+    project_path = _resolve_dbt_project(dbt_project, profile)
+    manifest_path = project_path / "target" / "manifest.json"
+    catalog = catalog_from_dbt(project_path)
+    store = MazeStore.from_env(profile)
+
+    outcome = ingest_dbt_semantics(
+        manifest_path=manifest_path,
+        catalog=catalog,
+        store=store,
+        project_scent_dir=project_scent_dir(),
+        force=True,
+        git_root=Path.cwd(),
+    )
+
+    # force=True above means the fingerprint-unchanged/drifted-without-force
+    # branch of ingest_dbt_semantics never fires here — outcome.drifted is
+    # unreachable on this path. A skip *with* warnings is an error-skip
+    # (unreadable/non-dict manifest); a skip with no warnings means no
+    # semantic content to ingest, and stays exit 0.
+    if outcome.skipped:
+        if outcome.warnings:
+            typer.echo("scent ingest: skipped (see warnings below)")
+        else:
+            typer.echo("scent ingest: skipped (no semantic content)")
+    else:
+        typer.echo(
+            f"scent ingest: wrote {outcome.sections_written} section(s) "
+            f"across {len(outcome.domains)} domain(s): {', '.join(outcome.domains)}"
+        )
+    for w in outcome.warnings:
+        typer.echo(f"  warning: {w}")
+
+    if outcome.skipped and outcome.warnings:
+        raise typer.Exit(1) from None
+
+
+_INIT_CI_WORKFLOWS: dict[str, str] = {
+    "github": """\
+name: labrat-scent
+
+on:
+  pull_request:
+    paths:
+      - "models/**"
+      - "labrat_maze/**"
+
+jobs:
+  scent-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dbt + labrat
+        run: pip install dbt-core labrat
+
+      - name: dbt parse
+        run: dbt parse
+
+      - name: labrat scent check
+        run: labrat scent check --dbt-project .
+""",
+}
+
+
+@scent_app.command("init-ci")
+def scent_init_ci(
+    platform: Annotated[
+        str, _OPT("--platform", help="CI platform to scaffold a workflow for.")
+    ] = "github",
+    path: Annotated[
+        str, _OPT("--path", help="Where to write the workflow file.")
+    ] = ".github/workflows/labrat-scent.yml",
+) -> None:
+    """Scaffold a starter CI workflow that runs `dbt parse` then `labrat scent check`.
+
+    No-clobber: refuses to overwrite an existing file at --path. See
+    docs/dbt-ci-pairing.md for the full setup + fix-a-failure walkthrough.
+    """
+    if platform not in _INIT_CI_WORKFLOWS:
+        typer.echo(
+            f"Error: --platform must be one of {tuple(_INIT_CI_WORKFLOWS)}, got {platform!r}",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    target = Path(path)
+    if target.exists():
+        typer.echo(
+            f"Error: {target} already exists — not overwriting. "
+            "Remove it first, or pass a different --path.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_INIT_CI_WORKFLOWS[platform], encoding="utf-8")
+    typer.echo(f"wrote {target}")

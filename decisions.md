@@ -776,3 +776,30 @@ accumulating log. `referenced_tables` (t2-f1 fix, `maze/trail.py`) now only trea
 CTE's bare name (`WITH events AS (...) ... FROM raw.events`) is correctly kept instead of
 being dropped. Design: `docs/superpowers/specs/2026-07-10-trail-v1-design.md`; plan (3 tasks,
 this entry covers Task 3, the TUI authoring surface): `docs/superpowers/plans/2026-07-10-trail-v1.md`.
+
+## 2026-07-10 — dbt-CI pairing: a read-only staleness gate for committed Scent
+
+Closes mechanism (a) of the north-star's two-part freshness thesis (§8a) — LabRat already ships
+(b) correction-harvesting; this adds at-source colocation + CI pairing. Three-task build:
+`maze/ci.py::check_scent_freshness` (Task 1, pure read-only) compares the *committed* dbt
+project's recomputed fingerprints against the *committed* Scent's `.manifest_fingerprint`
+sidecar + per-section `schema_hash` stamps — fingerprint-consistency (Approach B), not a same-PR
+git-diff heuristic (rejected: gameable, needs PR context, false-positives on non-semantic
+edits). `labrat scent check`/`labrat scent ingest` (Task 2) expose it + the headless fix path
+over the CLI; `labrat scent init-ci` (Task 3) scaffolds a starter GitHub Actions workflow
+(`--platform github` only in v1, no-clobber by construction) and `docs/dbt-ci-pairing.md`
+documents the workflow end to end. Read-only by construction: `maze/ci.py` and `scent check`
+never call `write_doc`/write a sidecar/create a directory; the only write path is the separate,
+explicit `scent ingest`. Offline by construction: no live warehouse, just `target/manifest.json`
+from `dbt parse`. Two review-ticket folds landed alongside Task 3: the Task-1 bridge helper
+`maze/ci.py::_catalog_from_dbt` is renamed to the public `catalog_from_dbt` (it has 2 prod + 2
+test consumers, so it was never really private); `scent ingest`'s exit code now keys off
+`outcome.skipped and outcome.warnings` (an error-skip — unreadable/non-dict manifest — is
+non-zero; a benign no-content/no-drift skip stays exit 0), and the unreachable `outcome.drifted`
+branch is deleted (the CLI always calls `ingest_dbt_semantics(force=True)`, so that branch of
+`IngestOutcome` can never be true on this path). Per the commercial-model memo (Option B): free,
+git-versioned Team Scent (`docs/team-scent.md`) is the adoption wedge; dbt-CI pairing is the
+paid, team-scale complement that makes it *operate* automatically at team scale instead of
+relying on every contributor to remember to re-ingest by hand. Design:
+`docs/superpowers/specs/2026-07-10-dbt-ci-pairing-design.md`; plan (3 tasks, this entry covers
+all three): `docs/superpowers/plans/2026-07-10-dbt-ci-pairing.md`.
