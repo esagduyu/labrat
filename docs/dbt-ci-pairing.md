@@ -33,15 +33,20 @@ Once both pieces exist, the CI job is two commands:
   run: dbt parse
 
 - name: labrat scent check
-  run: labrat scent check
+  run: labrat scent check --dbt-project .
 ```
 
 `dbt parse` compiles the project without hitting a warehouse, which is what produces
 `target/manifest.json`. `labrat scent check` then reads that manifest plus the committed
-`labrat_maze/scent/` directory and exits `0` (fresh) or `1` (stale). Useful flags:
+`labrat_maze/scent/` directory and exits `0` (fresh) or `1` (stale). The `--dbt-project .`
+above assumes the dbt project lives at the repo root, matching where `dbt parse` above just
+ran — a CI runner has no LabRat connection profile, so without an explicit `--dbt-project` (or
+a `dbt_project.yml` findable by walking up from the working directory) the check has nothing to
+resolve the project root from. Useful flags:
 
-- `--dbt-project PATH` — defaults to the active profile's `dbt_project_path`, or pass it
-  explicitly in CI.
+- `--dbt-project PATH` — defaults to the active profile's `dbt_project_path`, then to the
+  nearest `dbt_project.yml` found by walking up from the working directory; pass it explicitly
+  in CI, where there's no LabRat profile.
 - `--warn-only` — report drift but always exit `0` (use while rolling the gate out before making
   it required).
 - `--skip-if-no-manifest` — exit `0` instead of `1` if `target/manifest.json` is missing (useful
@@ -86,8 +91,12 @@ jobs:
         run: dbt parse
 
       - name: labrat scent check
-        run: labrat scent check
+        run: labrat scent check --dbt-project .
 ```
+
+The generated workflow assumes the dbt project lives at the repo root (`--dbt-project .`, and
+`dbt parse` running from the checkout root above it). If your dbt project is in a subdirectory,
+edit the `--dbt-project` path (and the `on.paths` filters) to match after scaffolding.
 
 ## 3. What a stale-Scent PR failure looks like
 

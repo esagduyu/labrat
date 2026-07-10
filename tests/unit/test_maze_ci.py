@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from labrat.maze.ci import CiCheckResult, check_scent_freshness
+from labrat.maze.ci import CiCheckResult, catalog_from_dbt, check_scent_freshness
 from labrat.maze.store import MazeStore
 
 
@@ -45,7 +45,6 @@ def _write_manifest(project: Path, manifest: dict) -> None:
 
 def _ingest(project: Path, scent_root: Path) -> MazeStore:
     """Run the real ingest so the committed Scent + sidecar are 'fresh'."""
-    from labrat.maze.ci import catalog_from_dbt  # the shared bridge helper
     from labrat.maze.semantic_ingest import ingest_dbt_semantics
 
     store = MazeStore(project_root=scent_root, home=scent_root / "home", profile="default")
@@ -89,6 +88,21 @@ def test_schema_drift_flagged(tmp_path):
     res = check_scent_freshness(project, scent / "labrat_maze" / "scent", store=store)
     assert res.ok is False
     assert any(s.reason == "schema_drift" for s in res.stale)
+
+
+def test_catalog_from_dbt_prefers_target_over_stale_root_manifest(tmp_path):
+    """F4: a stale root-level manifest.json beside a fresh target/manifest.json
+    must not shadow the fresh one — catalog_from_dbt (and therefore schema-drift
+    detection) has to agree with check_scent_freshness's own target/ convention."""
+    project = tmp_path / "proj"
+    project.mkdir(parents=True)
+    (project / "manifest.json").write_text(json.dumps(_manifest()))  # stale root copy
+    _write_manifest(project, _manifest(extra_col=True))  # fresh target/ copy
+
+    catalog = catalog_from_dbt(project)
+    assert catalog is not None
+    cols = {c.name for schema in catalog.schemas for t in schema.tables for c in t.columns}
+    assert "region" in cols  # only present in the fresh target/ manifest
 
 
 def test_missing_manifest(tmp_path):

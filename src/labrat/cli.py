@@ -131,8 +131,25 @@ def conn_set_default(
         raise typer.Exit(1) from None
 
 
+def _find_dbt_project_upward(start: Path) -> Path | None:
+    """Walk up from *start* looking for the nearest `dbt_project.yml`.
+
+    Returns the directory containing it, or None if none is found by the
+    filesystem root. Lets a bare `labrat scent check` (no --dbt-project, no
+    profile dbt_project_path) work when run from inside a dbt project — the
+    common case for a CI job whose workflow doesn't pass --dbt-project.
+    """
+    current = start.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "dbt_project.yml").is_file():
+            return candidate
+    return None
+
+
 def _resolve_dbt_project(dbt_project: str | None, profile: str) -> Path:
-    """Resolve the dbt project root: explicit flag, else `profile`'s `dbt_project_path`."""
+    """Resolve the dbt project root: explicit flag, else `profile`'s
+    `dbt_project_path`, else the nearest `dbt_project.yml` found by walking
+    up from the current directory."""
     if dbt_project:
         return Path(dbt_project)
 
@@ -144,15 +161,21 @@ def _resolve_dbt_project(dbt_project: str | None, profile: str) -> Path:
     except ProfileError:
         path = None
 
-    if not path:
-        typer.echo(
-            "Error: no --dbt-project given and profile "
-            f"{profile!r} has no dbt_project_path configured. "
-            "Pass --dbt-project <path> or configure one on the profile.",
-            err=True,
-        )
-        raise typer.Exit(1) from None
-    return Path(path)
+    if path:
+        return Path(path)
+
+    detected = _find_dbt_project_upward(Path.cwd())
+    if detected is not None:
+        return detected
+
+    typer.echo(
+        "Error: no --dbt-project given, profile "
+        f"{profile!r} has no dbt_project_path configured, and no "
+        "dbt_project.yml was found in the current directory or its parents. "
+        "Pass --dbt-project <path> or configure one on the profile.",
+        err=True,
+    )
+    raise typer.Exit(1) from None
 
 
 @scent_app.command("check")
@@ -189,8 +212,18 @@ def scent_check(
         raise typer.Exit(1) from None
 
     project_path = _resolve_dbt_project(dbt_project, profile)
-    resolved_scent_dir = Path(scent_dir) if scent_dir else project_scent_dir()
-    store = MazeStore.from_env(profile)
+    if scent_dir:
+        resolved_scent_dir = Path(scent_dir)
+        # Root the store's project layer at the same place the sidecar is
+        # read from, so sections and the fingerprint sidecar always agree —
+        # scent_dir is always `<root>/labrat_maze/scent` (project_scent_dir's
+        # own convention), so strip those two segments back off to get root.
+        store = MazeStore(
+            project_root=resolved_scent_dir.parent.parent, home=Path.home(), profile=profile
+        )
+    else:
+        resolved_scent_dir = project_scent_dir()
+        store = MazeStore.from_env(profile)
 
     res = check_scent_freshness(project_path, resolved_scent_dir, store=store)
 
@@ -199,6 +232,11 @@ def scent_check(
     else:
         if res.ok:
             typer.echo(f"scent check: OK ({res.checked} domain(s) checked)")
+        elif not res.stale:
+            # No genuinely-stale domains — this is the missing/unreadable
+            # manifest.json case, not a fingerprint mismatch, so don't call
+            # it "STALE".
+            typer.echo("scent check: CANNOT VERIFY")
         else:
             typer.echo(f"scent check: STALE ({len(res.stale)} stale domain(s))")
             for s in res.stale:
@@ -294,7 +332,7 @@ jobs:
         run: dbt parse
 
       - name: labrat scent check
-        run: labrat scent check
+        run: labrat scent check --dbt-project .
 """,
 }
 

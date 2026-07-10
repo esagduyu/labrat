@@ -51,16 +51,15 @@ def catalog_from_dbt(dbt_project_path: Path) -> Catalog | None:
 
     ``DbtLoader`` reads ``manifest.json`` directly out of the path it's given
     (see ``catalog/dbt/loader.py``), while a real dbt project's compiled
-    artifact lives at ``<project>/target/manifest.json``. Try the project
-    root first (matches ``DbtLoader``'s own test fixtures), then fall back to
-    ``target/`` (matches a real dbt project layout, and this module's own
-    ``manifest_path`` convention below).
+    artifact lives at ``<project>/target/manifest.json``. Try ``target/``
+    first — that matches a real dbt project layout *and* this module's own
+    ``check_scent_freshness`` ``manifest_path`` convention below, so both
+    read the same file and can't disagree on drift when a stale root-level
+    manifest.json sits beside a fresh target/ one. Fall back to the project
+    root (matches ``DbtLoader``'s own test fixtures) only if target/ has none.
     """
-    loader_path = dbt_project_path
-    if not (loader_path / "manifest.json").exists():
-        target_path = dbt_project_path / "target"
-        if (target_path / "manifest.json").exists():
-            loader_path = target_path
+    target_path = dbt_project_path / "target"
+    loader_path = target_path if (target_path / "manifest.json").exists() else dbt_project_path
     try:
         entries = DbtLoader(loader_path).load()
     except Exception:  # unloadable dbt project -> honest-unknown None

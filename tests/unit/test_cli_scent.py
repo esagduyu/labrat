@@ -83,6 +83,85 @@ def test_scent_check_json(runner: CliRunner, tmp_path: Path, maze_env: Path) -> 
     assert parsed.model_dump(mode="json") == data
 
 
+def test_scent_check_autodetects_dbt_project_from_cwd(
+    runner: CliRunner, tmp_path: Path, maze_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare `scent check` (no --dbt-project, no profile dbt_project_path)
+    resolves the project by walking up from cwd to the nearest
+    dbt_project.yml — F1 part 2. Guards against a real 'default' profile on
+    the host machine by forcing ProfileManager.get to miss."""
+    from labrat.profile.manager import ProfileError, ProfileManager
+
+    def _raise_missing(self: ProfileManager, name: str) -> None:
+        raise ProfileError(f"Profile {name!r} not found.")
+
+    monkeypatch.setattr(ProfileManager, "get", _raise_missing)
+
+    project = tmp_path / "proj"
+    _write_manifest(project, _manifest())
+    nested = project / "models" / "staging"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+
+    result = runner.invoke(app, ["scent", "check"])
+
+    # Resolution must succeed (walked up from `nested` to `project`, found
+    # dbt_project.yml there) rather than hitting the "no --dbt-project given"
+    # resolution error.
+    assert "no --dbt-project given" not in result.output
+    assert result.exit_code == 0, result.output
+
+
+def test_scent_check_scent_dir_from_different_cwd_still_detects_drift(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--scent-dir must root the MazeStore's project layer at the SAME place
+    the sidecar comes from — F2. Without the fix, semantic sections come
+    from MazeStore.from_env's cwd (empty here) while the sidecar comes from
+    --scent-dir, producing a silent '0 domains checked' false pass."""
+    from labrat.maze.ci import catalog_from_dbt
+    from labrat.maze.semantic_ingest import ingest_dbt_semantics
+    from labrat.maze.store import MazeStore
+
+    monkeypatch.delenv("LABRAT_MAZE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    project = tmp_path / "proj"
+    scent_root = tmp_path / "scentroot"
+    _write_manifest(project, _manifest())
+
+    store = MazeStore(project_root=scent_root, home=tmp_path / "home", profile="default")
+    ingest_dbt_semantics(
+        manifest_path=project / "target" / "manifest.json",
+        catalog=catalog_from_dbt(project),
+        store=store,
+        project_scent_dir=scent_root / "labrat_maze" / "scent",
+        force=True,
+    )
+
+    # Introduce schema drift (add a column) without re-ingesting.
+    _write_manifest(project, _manifest(extra_col=True))
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    result = runner.invoke(
+        app,
+        [
+            "scent",
+            "check",
+            "--dbt-project",
+            str(project),
+            "--scent-dir",
+            str(scent_root / "labrat_maze" / "scent"),
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "schema_drift" in result.output
+
+
 def test_scent_check_missing_manifest_exit_1(
     runner: CliRunner, tmp_path: Path, maze_env: Path
 ) -> None:
@@ -140,6 +219,7 @@ def test_init_ci_writes_workflow(runner: CliRunner, tmp_path: Path) -> None:
     content = target.read_text(encoding="utf-8")
     assert "dbt parse" in content
     assert "labrat scent check" in content
+    assert "--dbt-project" in content
 
 
 def test_init_ci_no_clobber(runner: CliRunner, tmp_path: Path) -> None:
