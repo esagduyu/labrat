@@ -57,3 +57,28 @@ def test_log_tool_call_noop_without_dir(tmp_path: Path) -> None:
     # No directory configured → silent no-op, no file, no exception.
     _log_tool_call(None, name="run_sql", arguments={}, ok=True, output="x", latency_ms=1.0)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_build_context_profiles_path(tmp_path: Path, monkeypatch: Any) -> None:
+    import duckdb
+
+    from labrat.profile.manager import ProfileManager, make_profile
+
+    db = tmp_path / "s.duckdb"
+    duckdb.connect(str(db)).close()
+    mgr = ProfileManager(profiles_path=tmp_path / "profiles.json")
+    mgr.add(make_profile(name="served", dialect="duckdb", path=str(db)))
+    # Route the module-level default manager at the config seam:
+    import labrat.mcp.config as mcp_config
+
+    monkeypatch.setattr(mcp_config, "ProfileManager", lambda: mgr)
+    monkeypatch.setenv("LABRAT_MCP_PROFILES", "served")
+    monkeypatch.delenv("LABRAT_MCP_CONNECTIONS", raising=False)
+
+    from labrat.mcp.server import _build_context_from_env
+
+    ctx, live = _build_context_from_env()
+    assert ctx.profile_name == "served" and ctx.read_only is True
+    assert set(ctx.connections) == {"served"} and len(live) == 1
+    for conn in live:
+        conn.disconnect()

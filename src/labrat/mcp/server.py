@@ -1,8 +1,21 @@
 """LabRat MCP server — exposes the data-tools registry over MCP stdio.
 
-The server reads a connection spec from the ``LABRAT_MCP_CONNECTIONS`` env var
-(JSON, same shape as ``scripts/run_task.py`` ``--connections``), wires up a
-``ToolContext`` plus the standard data tools, and serves them as MCP tools.
+The server resolves its connections from two additive env vars (parsed by
+``labrat.mcp.config.resolve_from_env``), wires up a ``ToolContext`` plus the
+standard data tools, and serves them as MCP tools:
+
+- ``LABRAT_MCP_CONNECTIONS`` — JSON connection spec, duckdb-only (same shape
+  as ``scripts/run_task.py`` ``--connections``); the legacy path used by
+  DAB's ``claude-mcp`` driver.
+- ``LABRAT_MCP_PROFILES`` — comma-separated profile names, resolved through
+  ``labrat.profile.manager`` so any of the seven adapters can be mounted
+  with keyring-backed secrets. Connection keys are profile names.
+
+At least one of the two must be set. ``ToolContext.read_only`` is derived,
+not user-set directly: it's False unless every ``LABRAT_MCP_CONNECTIONS``
+entry explicitly sets ``"read_only": true``, OR'd with True if any resolved
+``LABRAT_MCP_PROFILES`` profile has ``is_read_only=True`` (the default) —
+see ``resolve_from_env``'s docstring for the full derivation.
 
 Any MCP-capable host harness (``claude --print --mcp-config …``, Codex, Cursor,
 OpenCode, etc.) can mount this server and drive the tools natively — no custom
@@ -35,7 +48,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 import time
 from typing import Any
 
@@ -47,7 +59,8 @@ from mcp.types import TextContent, Tool
 from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.tool_trace import append_tool_trace
 from labrat.agent.tools.base import ToolContext, ToolRegistry
-from labrat.db.duckdb_engine import DuckDBConnection
+from labrat.db.base import Connection
+from labrat.mcp.config import resolve_from_env
 
 _TOOL_LOG_FILENAME = "mcp_tool_calls.jsonl"
 
@@ -76,59 +89,17 @@ def _log_tool_call(
     )
 
 
-def _build_context_from_env() -> tuple[ToolContext, list[DuckDBConnection]]:
+def _build_context_from_env() -> tuple[ToolContext, list[Connection]]:
     """Parse env vars into a ToolContext + the list of live connections to clean up."""
-    raw = os.environ.get("LABRAT_MCP_CONNECTIONS")
-    if not raw:
-        print(
-            "LABRAT_MCP_CONNECTIONS env var is required (JSON connection spec).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    spec: dict[str, dict[str, Any]] = json.loads(raw)
-    if not spec:
-        print("LABRAT_MCP_CONNECTIONS must contain at least one entry.", file=sys.stderr)
-        sys.exit(2)
-
-    live: list[DuckDBConnection] = []
-    connections: dict[str, object] = {}
-    catalogs: dict[str, object] = {}
-
-    for name, meta in spec.items():
-        db_type = str(meta.get("db_type", "")).lower()
-        if db_type != "duckdb":
-            print(
-                f"labrat-mcp only supports db_type=duckdb in --connections today "
-                f"(got {db_type!r} for {name!r}). Use the attach_database tool from "
-                f"the agent for SQLite/Postgres/MySQL.",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        db_path = str(meta["db_path"])
-        # An in-memory database cannot be opened read-only, and when it's the
-        # primary it's the agent's writable workspace (attach_database / load_file
-        # / load_mongo_collection materialize into it). Force read_only=False for
-        # :memory: regardless of the spec default.
-        read_only = False if db_path == ":memory:" else bool(meta.get("read_only", True))
-        conn = DuckDBConnection(path=db_path, read_only=read_only)
-        conn.connect()
-        live.append(conn)
-        connections[name] = conn
-        catalogs[name] = conn.introspect_catalog()
-
-    primary = os.environ.get("LABRAT_MCP_PRIMARY") or next(iter(connections))
-    if primary not in connections:
-        print(
-            f"LABRAT_MCP_PRIMARY={primary!r} not in connections {list(connections)}.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    return (
-        ToolContext(connections=connections, catalogs=catalogs, primary=primary),
-        live,
+    rc = resolve_from_env(os.environ)
+    ctx = ToolContext(
+        connections=dict(rc.connections),
+        catalogs=dict(rc.catalogs),
+        primary=rc.primary,
+        read_only=rc.read_only,
+        profile_name=rc.profile_name,
     )
+    return ctx, list(rc.connections.values())
 
 
 def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
