@@ -67,6 +67,32 @@ def test_rollback_validates_range(tmp_path):
         cs.rollback(m.cheese_id, 2)
 
 
+def test_capture_rejects_traversal_finding_id(tmp_path):
+    ds = FindingDataStore(tmp_path)
+    with pytest.raises(ValueError):
+        ds.capture("../evil", pl.DataFrame({"x": [1]}))
+    assert not (tmp_path.parent / "evil.parquet").exists()
+    assert not (tmp_path.parent / "evil.meta.json").exists()
+    assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
+
+
+def test_load_corrupt_meta_json_returns_none(tmp_path):
+    ds = FindingDataStore(tmp_path)
+    ds.capture("f1", pl.DataFrame({"x": [1]}))
+    (tmp_path / "f1.meta.json").write_text("{not valid json", encoding="utf-8")
+    assert ds.load("cheese://f1") is None
+
+
+def test_list_cheeses_skips_corrupt_manifest_and_lists_valid(tmp_path):
+    cs = CheeseStore(tmp_path)
+    good = cs.create_or_get("single", ["f1"], "good")
+    bad_dir = tmp_path / "corrupt123"
+    bad_dir.mkdir()
+    (bad_dir / "manifest.json").write_text("{not valid json", encoding="utf-8")
+    listed = cs.list_cheeses()
+    assert [m.cheese_id for m in listed] == [good.cheese_id]
+
+
 def test_identity_same_set_same_cheese_different_set_new(tmp_path):
     cs = CheeseStore(tmp_path)
     a = cs.create_or_get("single", ["f1"], "t")

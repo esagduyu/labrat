@@ -25,6 +25,10 @@ _ROW_CAP = 50
 _REF_PREFIX = "cheese://"
 
 
+def _is_safe_finding_id(fid: str) -> bool:
+    return bool(fid) and "/" not in fid and "\\" not in fid and ".." not in fid
+
+
 class FindingDataStore:
     """Bounded per-finding results + chart snapshots, keyed by finding id."""
 
@@ -32,6 +36,8 @@ class FindingDataStore:
         self._root = root
 
     def capture(self, finding_id: str, df: pl.DataFrame, *, chart_png: bytes | None = None) -> str:
+        if not _is_safe_finding_id(finding_id):
+            raise ValueError(f"invalid finding_id: {finding_id!r}")
         self._root.mkdir(parents=True, exist_ok=True)
         df.head(_ROW_CAP).write_parquet(self._root / f"{finding_id}.parquet")
         meta = {"total_rows": df.height, "columns": df.columns}
@@ -44,7 +50,7 @@ class FindingDataStore:
         if not ref.startswith(_REF_PREFIX):
             return None
         fid = ref.removeprefix(_REF_PREFIX)
-        if not fid or "/" in fid or "\\" in fid or ".." in fid:
+        if not _is_safe_finding_id(fid):
             return None
         return fid
 
@@ -56,7 +62,10 @@ class FindingDataStore:
         meta_path = self._root / f"{fid}.meta.json"
         if not parquet.exists() or not meta_path.exists():
             return None
-        raw: object = json.loads(meta_path.read_text(encoding="utf-8"))
+        try:
+            raw: object = json.loads(meta_path.read_text(encoding="utf-8"))
+        except ValueError:
+            return None
         total: object = (
             cast(dict[str, Any], raw).get("total_rows") if isinstance(raw, dict) else None
         )
@@ -150,7 +159,12 @@ class CheeseStore:
         out: list[tuple[float, CheeseManifest]] = []
         for sub in self._root.iterdir():
             mp = sub / "manifest.json"
-            if mp.is_file():
-                out.append((mp.stat().st_mtime, CheeseManifest.model_validate_json(mp.read_text())))
+            if not mp.is_file():
+                continue
+            try:
+                manifest = CheeseManifest.model_validate_json(mp.read_text())
+            except ValueError:
+                continue  # corrupt manifest — skip rather than brick the whole listing
+            out.append((mp.stat().st_mtime, manifest))
         out.sort(key=lambda t: t[0], reverse=True)
         return [m for _, m in out]
