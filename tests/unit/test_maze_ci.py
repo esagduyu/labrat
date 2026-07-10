@@ -122,6 +122,57 @@ def test_no_committed_scent_passes(tmp_path):
     assert res.ok is True and res.stale == []
 
 
+def test_removing_semantics_clears_scent_and_unblocks_check(tmp_path):
+    """F3: deleting all semantic_models from the dbt project must clear the
+    stale semantic_layer sections (and refresh the sidecar) on the next
+    `scent ingest`, not silently no-op and leave `scent check` stale forever."""
+    from labrat.maze.ci import check_scent_freshness
+    from labrat.maze.semantic_ingest import ingest_dbt_semantics
+
+    project, scent = tmp_path / "proj", tmp_path / "scent"
+    _write_manifest(project, _manifest())
+    store = _ingest(project, scent)  # fresh, has a ## Semantic Model section
+    scdir = scent / "labrat_maze" / "scent"
+    # remove ALL semantic_models from the manifest, then re-ingest (the fix path)
+    _write_manifest(project, {"nodes": _manifest()["nodes"], "semantic_models": {}, "metrics": {}})
+    outcome = ingest_dbt_semantics(
+        manifest_path=project / "target" / "manifest.json",
+        catalog=catalog_from_dbt(project),
+        store=store,
+        project_scent_dir=scdir,
+        force=True,
+    )
+    assert outcome.cleared >= 1
+    # check now passes (no stale semantic Scent left)
+    res = check_scent_freshness(project, scdir, store=store)
+    assert res.ok is True
+
+
+def test_first_ingest_on_semantics_free_project_clears_nothing(tmp_path):
+    """A genuinely-empty project (no prior ingest at all) must not run the
+    clear-pass — nothing to clear, and it shouldn't touch unrelated docs."""
+    from labrat.maze.semantic_ingest import ingest_dbt_semantics
+
+    project, scent = tmp_path / "proj", tmp_path / "scent"
+    _write_manifest(project, {"nodes": {}, "semantic_models": {}, "metrics": {}})
+    store = MazeStore(project_root=scent, home=scent / "home", profile="default")
+    scdir = scent / "labrat_maze" / "scent"
+    outcome = ingest_dbt_semantics(
+        manifest_path=project / "target" / "manifest.json",
+        catalog=catalog_from_dbt(project),
+        store=store,
+        project_scent_dir=scdir,
+    )
+    assert outcome.skipped is True
+    assert outcome.cleared == 0
+    assert outcome.domains == ()
+    # the fingerprint sidecar IS written, so a later `scent check` sees fresh
+    # rather than "no committed Scent to check".
+    from labrat.maze.semantic_ingest import read_manifest_fingerprint
+
+    assert read_manifest_fingerprint(scdir) is not None
+
+
 def test_read_only_no_writes(tmp_path):
     project, scent = tmp_path / "proj", tmp_path / "scent"
     _write_manifest(project, _manifest())

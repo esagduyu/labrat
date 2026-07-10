@@ -1,5 +1,6 @@
 """CLI entry point for LabRat."""
 
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -222,8 +223,20 @@ def scent_check(
             project_root=resolved_scent_dir.parent.parent, home=Path.home(), profile=profile
         )
     else:
-        resolved_scent_dir = project_scent_dir()
-        store = MazeStore.from_env(profile)
+        # Root at the *resolved* dbt project path (which may have been found
+        # by walking up from cwd to the nearest dbt_project.yml — see
+        # _resolve_dbt_project), not at raw cwd. Without this, a bare
+        # `scent check` run from a SUBDIRECTORY of the project resolves the
+        # manifest correctly but still looks for committed Scent under the
+        # subdir, finds nothing, and reports a false "OK (0 domains)" pass
+        # instead of the real verdict. LABRAT_MAZE_DIR, when set, still wins
+        # (matches `scent ingest` and MazeStore.from_env's own
+        # env-or-cwd convention) so existing centralized-storage setups are
+        # unaffected.
+        maze_dir = os.environ.get("LABRAT_MAZE_DIR")
+        maze_root = Path(maze_dir) if maze_dir else project_path
+        resolved_scent_dir = project_scent_dir(project_root=maze_root)
+        store = MazeStore(project_root=maze_root, home=Path.home(), profile=profile)
 
     res = check_scent_freshness(project_path, resolved_scent_dir, store=store)
 
@@ -272,13 +285,22 @@ def scent_ingest(
     project_path = _resolve_dbt_project(dbt_project, profile)
     manifest_path = project_path / "target" / "manifest.json"
     catalog = catalog_from_dbt(project_path)
-    store = MazeStore.from_env(profile)
+
+    # Root at the *resolved* dbt project path, same rule `scent check` uses
+    # (see its comment above) — MazeStore.from_env/project_scent_dir()'s
+    # default env-or-cwd resolution would otherwise write Scent under the
+    # cwd when `scent ingest` is run from a SUBDIRECTORY of the project,
+    # creating a stray labrat_maze/scent that `scent check` (rooted at the
+    # resolved project) never reads. LABRAT_MAZE_DIR still wins when set.
+    maze_dir = os.environ.get("LABRAT_MAZE_DIR")
+    maze_root = Path(maze_dir) if maze_dir else project_path
+    store = MazeStore(project_root=maze_root, home=Path.home(), profile=profile)
 
     outcome = ingest_dbt_semantics(
         manifest_path=manifest_path,
         catalog=catalog,
         store=store,
-        project_scent_dir=project_scent_dir(),
+        project_scent_dir=project_scent_dir(project_root=maze_root),
         force=True,
         git_root=Path.cwd(),
     )
@@ -287,10 +309,17 @@ def scent_ingest(
     # branch of ingest_dbt_semantics never fires here — outcome.drifted is
     # unreachable on this path. A skip *with* warnings is an error-skip
     # (unreadable/non-dict manifest); a skip with no warnings means no
-    # semantic content to ingest, and stays exit 0.
+    # semantic content to ingest, and stays exit 0. A skip that also cleared
+    # stale semantic_layer sections (F3 — the project's last semantic models
+    # were just deleted) is still an exit-0 skip, but worth calling out.
     if outcome.skipped:
         if outcome.warnings:
             typer.echo("scent ingest: skipped (see warnings below)")
+        elif outcome.cleared:
+            typer.echo(
+                f"scent ingest: cleared {outcome.cleared} stale semantic section(s) "
+                f"across {len(outcome.domains)} domain(s): {', '.join(outcome.domains)}"
+            )
         else:
             typer.echo("scent ingest: skipped (no semantic content)")
     else:
