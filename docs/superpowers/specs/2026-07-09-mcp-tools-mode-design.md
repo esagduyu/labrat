@@ -32,7 +32,7 @@ The MCP server — LabRat's Altimate-style adoption wedge ("mount into any host"
 ### 3.2 `src/labrat/mcp/host_configs.py` (new)
 
 `build_mcp_server_config(*, profiles: list[str] | None = None, connections_json: str | None = None, primary: str | None = None, log_dir: str | None = None) -> dict` — the inner `{command, args, env}` block (command `uv`, args `["run", "python", "-m", "labrat.mcp.server"]`, env only for provided values).
-`render_host_config(host: Literal["claude-code", "codex", "generic"], server: dict) -> str` — host-shaped JSON text: claude-code/generic → `{"mcpServers": {"labrat": server}}` (claude-code output includes a one-line comment header as a `//`-free preamble printed to stderr by the CLI, keeping stdout pure JSON); codex → the TOML-ish `mcp_servers.labrat` form Codex uses (`command`/`args`/`env` tables).
+`render_host_config(host: Literal["claude-code", "codex", "generic"], server: dict) -> str` — host-shaped JSON text: claude-code/generic → `{"mcpServers": {"labrat": server}}` (stdout is pure config text for every host — the once-planned stderr preamble was dropped as-built; pipeable output wins. Amended at branch review); codex → the TOML-ish `mcp_servers.labrat` form Codex uses (`command`/`args`/`env` tables).
 `src/labrat/mcp/print_config.py` — argparse CLI: `--host`, `--profiles`, `--connections-json`, `--primary`, `--log-dir`; prints to stdout; exit 2 on bad host/no source.
 
 ### 3.3 Tests

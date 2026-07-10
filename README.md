@@ -172,9 +172,12 @@ cd ~/repos/ade-bench && uv run ade run helixops_saas001 --db duckdb --project-ty
 uv run python scripts/run_task.py --prompt "How many rows in orders?" \
     --connections '{"main":{"db_type":"duckdb","db_path":"/path.duckdb"}}' --provider anthropic
 
-# Mount the Rat Core over MCP in any host
+# Mount the Rat Core over MCP in any host (or use a saved profile: LABRAT_MCP_PROFILES=myprofile)
 LABRAT_MCP_CONNECTIONS='{"main":{"db_type":"duckdb","db_path":"/path.duckdb"}}' \
     uv run python -m labrat.mcp.server
+
+# Generate a ready-to-paste host config (claude-code | codex | generic) — see docs/labrat-tools.md
+uv run python -m labrat.mcp.print_config --host claude-code --profiles myprofile
 ```
 
 ## Acknowledgments
