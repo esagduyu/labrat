@@ -907,11 +907,12 @@ async def m19_audit_log() -> None:
     await _snap(_Demo("M19 · Audit Log / Event Sourcing", populate), "m19_audit_log")
 
 
-# ─── M20: HTML Export ─────────────────────────────────────────────────────────
+# ─── M20: HTML Export (ported to Cheese v1's export_cheese) ────────────────────
 
 
 async def m20_export() -> None:
-    from labrat.audit.export import export_findings
+    from labrat.cheese.export import export_cheese
+    from labrat.cheese.store import CheeseStore, FindingDataStore
     from labrat.thread.model import Finding
 
     findings = [
@@ -938,12 +939,19 @@ async def m20_export() -> None:
     ]
 
     with tempfile.TemporaryDirectory() as tmp:
-        out = export_findings(findings, output_dir=Path(tmp), title="Revenue by User — Q1 2026")
+        out = export_cheese(
+            findings,
+            kind="report",
+            title="Revenue by User — Q1 2026",
+            cheese_store=CheeseStore(Path(tmp) / "cheese"),
+            data_store=FindingDataStore(Path(tmp) / "cheese_data"),
+        )
         html_preview = out.read_text()[:500]
 
     def populate(log: RichLog) -> None:
         log.write(
-            "[bold cyan]export_findings(findings, output_dir, title) → self-contained HTML[/bold cyan]"
+            "[bold cyan]export_cheese(findings, kind, title, cheese_store, data_store) "
+            "→ self-contained HTML[/bold cyan]"
         )
         log.write("")
         t = Table(show_header=True, header_style="bold magenta", border_style="dim")

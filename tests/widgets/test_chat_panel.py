@@ -266,6 +266,31 @@ async def test_no_footer_on_plain_turn() -> None:
         assert "⚑ grounded" not in panel.transcript
 
 
+async def test_footer_honest_when_verify_rounds_exhausted() -> None:
+    """When the loop's round budget ran out before a final re-check, the
+    footer must not fabricate 'verifier ✓' (whole-branch F2)."""
+
+    class _ExhaustedVerifyLoop:
+        verify_rounds_used = 2
+        verify_exhausted = True
+        _verifier = object()  # truthy sentinel: "verification is on"
+
+        async def run(self, message, *, on_text=None, on_status=None, on_tool_call=None):
+            if on_tool_call:
+                on_tool_call("run_sql", {"query": "SELECT 1"}, True, '{"ok": true}', 5.0)
+            if on_text:
+                on_text("best effort answer")
+
+    async with _PanelHost().run_test() as pilot:
+        panel = pilot.app.query_one(ChatPanel)
+        panel.set_agent_loop(_ExhaustedVerifyLoop())
+        await pilot.click("#user-input")
+        await pilot.press(*"hi", "enter")
+        await pilot.pause()
+        assert "verifier ✓" not in panel.transcript
+        assert "unresolved" in panel.transcript
+
+
 # ── subagent: prefix filter (session-followups R2) ──────────────────────────
 
 

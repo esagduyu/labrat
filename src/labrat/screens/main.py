@@ -706,6 +706,7 @@ class MainScreen(Screen[None]):
 
         from textual.widgets import LoadingIndicator, RichLog
 
+        from labrat.widgets.chat_panel import ChatPanel
         from labrat.widgets.results_table import ResultsTable
 
         loading = self.query_one("#sql-loading", LoadingIndicator)
@@ -725,6 +726,11 @@ class MainScreen(Screen[None]):
             # turn — without this, pinning right after would pair fresh rows
             # with a stale chart (t5-M1).
             self._last_chart = None
+            # ...and any accumulated grounding provenance — the agent didn't
+            # produce this SQL, so stamping its trust block onto hand-edited
+            # rows would fabricate provenance (whole-branch F1).
+            chat = self.query_one("#chat-content", ChatPanel)
+            chat.last_turn_provenance = None
             table.load(df, execution_time=elapsed_ms)
             table.display = True
             self._record_edit_if_diverged(sql)
@@ -877,9 +883,15 @@ class MainScreen(Screen[None]):
             self._current_thread_name = t.name
             # Switching threads leaves the old thread's chart/prompt behind —
             # otherwise a stale chart could get paired with the new thread's
-            # results at pin time (t5-M1).
+            # results at pin time (t5-M1). Also drop the old thread's
+            # grounding provenance — it belongs to a turn from a different
+            # thread and must never be stamped onto this thread's findings
+            # (whole-branch F1).
             self._last_chart = None
             self._last_user_prompt = ""
+            from labrat.widgets.chat_panel import ChatPanel
+
+            self.query_one("#chat-content", ChatPanel).last_turn_provenance = None
             for bar in self.query(_StatusBar):
                 bar.set_thread(t.name)
 

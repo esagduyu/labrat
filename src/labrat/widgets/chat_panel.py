@@ -201,9 +201,13 @@ class ChatPanel(Widget):
                     f"Agent: {full_response}",
                 )
             verifier_on = getattr(self._agent_loop, "_verifier", None) is not None
-            provenance.set_verifier(
-                getattr(self._agent_loop, "verify_rounds_used", 0) if verifier_on else None
-            )
+            if verifier_on:
+                provenance.set_verifier(
+                    getattr(self._agent_loop, "verify_rounds_used", 0),
+                    sufficient=not getattr(self._agent_loop, "verify_exhausted", False),
+                )
+            else:
+                provenance.set_verifier(None)
             footer = provenance.footer()
             if footer and full_response:
                 self._append_history(f"[dim]{footer}[/dim]", footer)

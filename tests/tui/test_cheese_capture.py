@@ -238,6 +238,75 @@ async def test_capture_finding_chart_render_failure_omits_chart(
         assert not (tmp_path / "data" / f"{finding.id}.chart.png").exists()
 
 
+async def test_execute_sql_clears_stale_turn_provenance(
+    tmp_path: Path, monkeypatch, ecommerce_db: Path
+) -> None:
+    """A manually-run query must not inherit a prior agent turn's grounding
+    trust block — otherwise pin/f8 stamps the OLD turn's provenance onto SQL
+    the agent never produced (whole-branch F1)."""
+    from labrat.widgets.turn_provenance import TurnProvenance
+
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+    screen = _connected_screen(ecommerce_db)
+    async with _ConnectedHost(screen).run_test() as pilot:
+        await pilot.pause()
+        chat = screen.query_one("#chat-content", ChatPanel)
+        tp = TurnProvenance()
+        tp.record_tool("run_sql", True, "")
+        chat.last_turn_provenance = tp
+        screen.on_query_editor_run_requested(QueryEditor.RunRequested("SELECT 1 AS x"))
+        await pilot.app.workers.wait_for_complete()
+        assert chat.last_turn_provenance is None
+        # A subsequent pin over this hand-run SQL must be unattested, not
+        # inherit the stale agent-turn provenance.
+        screen._last_sql = "SELECT 1 AS x"
+        finding = screen._capture_finding(question="q", sql="SELECT 1 AS x")
+        assert finding is not None
+        assert finding.provenance is None
+
+
+async def test_thread_switch_clears_stale_turn_provenance(tmp_path: Path, monkeypatch) -> None:
+    """Switching threads must drop the old thread's grounding provenance —
+    it belongs to a different thread's turn (whole-branch F1)."""
+    from labrat.thread.manager import ThreadManager
+    from labrat.widgets.turn_provenance import TurnProvenance
+
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+    async with _MainHost().run_test() as pilot:
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, MainScreen)
+        chat = screen.query_one("#chat-content", ChatPanel)
+        tp = TurnProvenance()
+        tp.record_tool("run_sql", True, "")
+        chat.last_turn_provenance = tp
+
+        mgr = ThreadManager(store_dir=tmp_path / "threads_store")
+        other = mgr.create_thread(name="other", profile_name=screen._profile)
+        screen._thread_manager = mgr
+
+        # action_manage_threads pushes ThreadManagerScreen and wires its result
+        # to a private _on_result closure — intercept push_screen to invoke
+        # that closure directly with a target thread id, bypassing the modal's
+        # own UI (which isn't what this seam is testing).
+        captured: list = []
+
+        def _fake_push_screen(
+            modal_screen: object, callback: object = None, **kwargs: object
+        ) -> None:
+            if callback is not None:
+                captured.append(callback)
+
+        monkeypatch.setattr(pilot.app, "push_screen", _fake_push_screen)
+
+        screen.action_manage_threads()
+        assert captured, "action_manage_threads did not push a screen with a callback"
+        captured[0](other.id)
+
+        assert screen._current_thread_id == other.id
+        assert chat.last_turn_provenance is None
+
+
 async def test_capture_finding_carries_turn_provenance(tmp_path: Path, monkeypatch) -> None:
     """A populated TurnProvenance snapshot is captured onto the pinned Finding."""
     from labrat.widgets.turn_provenance import TurnProvenance

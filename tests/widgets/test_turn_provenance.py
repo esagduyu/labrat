@@ -340,6 +340,30 @@ def test_verifier_outcome() -> None:
     assert prov3.footer() is None
 
 
+def test_verifier_rounds_exhausted_is_honest_not_sufficient():
+    """A rounds-exhausted turn must not claim verifier ✓ / sufficiency in the
+    footer or the pinned snapshot (whole-branch F2)."""
+    prov = TurnProvenance()
+    prov.set_verifier(2, sufficient=False)
+    footer = prov.footer() or ""
+    assert "✓" not in footer
+    assert "unresolved" in footer
+
+    snap = prov.snapshot()
+    assert snap is not None
+    assert snap.verifier_verdict is None or "unresolved" in snap.verifier_verdict
+
+
+def test_verifier_sufficient_default_unchanged():
+    """The default (sufficient=True, back-compat) keeps the pre-F2 phrasing."""
+    prov = TurnProvenance()
+    prov.set_verifier(1, sufficient=True)
+    assert "verifier ✓ (1 round)" in (prov.footer() or "")
+    snap = prov.snapshot()
+    assert snap is not None
+    assert snap.verifier_verdict == "sufficient (1 round)"
+
+
 def test_snapshot_structured_export():
     from labrat.widgets.turn_provenance import TurnProvenance
 
