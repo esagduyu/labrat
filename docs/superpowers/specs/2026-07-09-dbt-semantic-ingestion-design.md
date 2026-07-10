@@ -41,7 +41,7 @@ Typed models + one function:
 
 ### 3.3 Ingestion controller — `maze/semantic_ingest.py::ingest_dbt_semantics`
 
-`ingest_dbt_semantics(*, manifest_path: Path, catalog: Catalog | None, store: MazeStore) -> IngestOutcome` where `IngestOutcome(domains: tuple[str, ...], sections_written: int, warnings: tuple[str, ...], skipped: bool)`:
+`ingest_dbt_semantics(*, manifest_path: Path, catalog: Catalog | None, store: MazeStore, project_scent_dir: Path, force: bool = False) -> IngestOutcome` where `IngestOutcome(domains: tuple[str, ...], sections_written: int, warnings: tuple[str, ...], skipped: bool, drifted: bool)` (signature as built; synced 2026-07-09, T3 review):
 
 1. Missing/unreadable/invalid-JSON manifest → `skipped=True` with one warning (fail-open at the controller level; the TUI renders it as a toast).
 2. Parse → build sections with `schema_hash = fingerprint_from_catalog(catalog)` when a catalog is given, else `None`.
