@@ -1,5 +1,7 @@
 # LabRat Benchmark Plan
 
+> **Status (2026-07-10):** written at ADE 67%. ADE-bench has since reached **80%** (48/60) via the Tier-1+2 work (see `docs/ade_bench_failure_analysis.md`); DAB was integrated and is on the leaderboard at **60.88%** ("Claude Sonnet 4.6 + Cartographer" — see `docs/dab-integration.md`); Spider2-DBT Part 2 is **still not integrated**. The whole benchmark-validation track is **parked until after 2026-07-13** per explicit user call.
+
 > Roadmap for pushing benchmark coverage from "one good number" to "comprehensive, well-tested product." Three tracks: (1) raise ADE-bench score from 67%, (2) integrate Spider2-DBT as a second eval suite, (3) add a tier-2 benchmark for breadth.
 
 **Status when this plan was written (2026-05-25):**

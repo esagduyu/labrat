@@ -16,9 +16,11 @@
 | **M3** — column-level lineage + read-only Analyst mode | ✅ SHIPPED | `ad125e0` |
 | **M4** — execution white space (Context Ledger + llm_extract/classify + program mode) | ✅ SHIPPED | `ebf3bd0` · `493b3db` · `4a08a4c` |
 | **M5** — compounding memory moat (Plan 0 foundation + T2b harvesting v1) | ✅ SHIPPED | `ec1526e` |
-| **TUI integration** — product surface for M0–M5 (follow-on phase, 4 sub-milestones) | 📋 SPECCED + PLANNED | spec `196b9a3` · plans `fe2ac75` |
+| **TUI integration** — product surface for M0–M5 (follow-on phase, 4 sub-milestones) | ✅ SHIPPED 2026-07-09 | TUI-M1 `7b87232` · TUI-M2 `974ec9f` · TUI-M3 `f37c483` · TUI-M4 `38522c6` |
 
-M4 detail: Context Ledger Ph1 (`ebf3bd0`, M4 foundation), llm_extract/llm_classify per-row primitives (`493b3db`, M4 2.1), program mode `run_program` (`4a08a4c`, M4 2.2). None are claude-mcp leaderboard levers — all are AgentLoop/labrat-agent-path product wins. Ledger Phase 2 (`dispatch_subagent`) remains deferred.
+**Status note (2026-07-10) — exit criteria vs merges:** the M1/M2/M4 **exit-criterion ablation runs were never executed** — those mechanisms merged **default-off** and the whole benchmark-validation track (redo ablations, `enable_ledger` A/B, any submission) is parked until after 2026-07-13 by explicit user call. M4's "llm_extract moves patents off 0% on a dev run" exit claim is **unverified in docs** — treat it as an open exit item, not a result. "Merged" in the table means the machinery shipped, not that the milestone's measured exit bar was cleared.
+
+M4 detail: Context Ledger Ph1 (`ebf3bd0`, M4 foundation), llm_extract/llm_classify per-row primitives (`493b3db`, M4 2.1), program mode `run_program` (`4a08a4c`, M4 2.2). None are claude-mcp leaderboard levers — all are AgentLoop/labrat-agent-path product wins. Ledger Phase 2 (`dispatch_subagent`) remains deferred *(since shipped `5941fbe`, 2026-07-09 — see the 2026-07-10 update below)*.
 
 M5 shipped the **moat-roadmap Plan 0 (shared Scent section-provenance foundation) + Plan 1 (T2b correction-harvesting v1)** (merge `ec1526e`, 9 tasks + Fable review + fix wave, suite 1085). Spec/plan on master: `docs/superpowers/specs/2026-07-06-memory-moat-t2b-design.md`, `docs/superpowers/plans/2026-07-06-memory-moat-t2b.md`. **⚠️ The harvest loop has NO production caller yet** — the TUI harvest-review surface plus `Memory.table_scope` population and domain-routing were deferred as one named follow-on.
 
@@ -29,6 +31,8 @@ M5 shipped the **moat-roadmap Plan 0 (shared Scent section-provenance foundation
 - **TUI-M4** `…-tui-m4-verify-provenance.md` — verify toggle live + T3c provenance footer (pure-UI `TurnProvenance`; consensus stays benchmark-only by spec decision D7).
 
 Execute in order (M3 needs only M1; M4 needs M1+M2); manual TUI gates on M1/M3. Other still-open follow-ons: moat Increment 2 remainder (T1b dbt semantic-layer ingestion — `explain_lineage`/column-lineage already shipped in M3), extras 2.3/2.4/2.5 (git-versioned team memory, decision-trail harvesting, customer-facing evals), T1d Phase 2 `dispatch_subagent`, DAB labrat-agent `enable_ledger` A/B.
+
+**Update (2026-07-10):** all four TUI sub-milestones **shipped 2026-07-09** (see the table above). Of the follow-on list: **T1b dbt semantic-layer ingestion shipped** (`b8500ed`), **T1d Phase 2 `dispatch_subagent` shipped** (`5941fbe`), **extra 2.3 team Scent shipped** (`2c77bbc`, 2026-07-10). The still-open list now reads: **extras 2.4 + 2.5 and the DAB `enable_ledger` A/B only** (the A/B parked with the benchmark track, post-2026-07-13).
 
 ---
 
@@ -129,6 +133,8 @@ Rationale from the analysis: the top of the board wins with *bigger models + ben
 ---
 
 ## M5 — Compounding memory moat (T2b+)  ·  branch `feat/correction-harvesting`
+
+> **Scope note (2026-07-10):** despite the ✅ in the progress table, the M5 merge (`ec1526e`) covered **only the moat-roadmap foundation + T2b v1** — *not* the full 2.3/2.4/2.5 feature list below. **2.3 git-versioned team memory shipped separately 2026-07-10** (`2c77bbc`, as team *Scent*); **2.4 customer-facing evals and 2.5 decision-trail harvesting remain open.** T2b's production surface landed via TUI-M3 (`f37c483`, 2026-07-09).
 
 **Goal:** ship the durable, defensible moat the funded incumbents (Altimate Decision Graph, PromptQL "team skills") are also racing toward — on the open/terminal wedge they can't match.
 

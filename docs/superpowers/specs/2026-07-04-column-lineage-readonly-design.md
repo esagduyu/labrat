@@ -1,7 +1,7 @@
 # M3 — Column-Level Lineage + Read-Only Analyst Mode — Design
 
 **Date:** 2026-07-04
-**Status:** Design — awaiting user review before writing-plans
+**Status:** ✅ SHIPPED — merged to master 2026-07-04 as M3 (merge `ad125e0`) *(was: Design — awaiting user review)*
 **Branch:** `feat/column-lineage` (proposed)
 **Source:** Milestone M3 of `docs/superpowers/plans/2026-07-03-competitive-build-milestones.md` (T1b, upgraded with the live-parse insight). Competitive basis: Altimate's #1 differentiator is live-parsed column-level lineage (closed Rust core) + engine-enforced read-only mode. This is **moat + parity, not a DAB-score lever** (DAB datasets are base tables with no views) — verification is unit tests + the exit checks, no re-ablation.
 

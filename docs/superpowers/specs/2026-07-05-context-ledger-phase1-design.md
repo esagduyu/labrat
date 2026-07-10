@@ -1,7 +1,7 @@
 # Context Ledger — Phase 1 Foundation (M4 dependency, T1d) — Design
 
 **Date:** 2026-07-05
-**Status:** Design — awaiting user review before writing-plans
+**Status:** ✅ SHIPPED — merged to master 2026-07-05 (merge `ebf3bd0`) *(was: Design — awaiting user review)*. The §7-deferred Phase 2 `dispatch_subagent` has since shipped too (merge `5941fbe`, 2026-07-09).
 **Branch:** `feat/context-ledger-phase1`
 **Source:** Phase 1 of the T1d spec `docs/superpowers/specs/2026-06-26-context-ledger-subagent-dispatch-design.md` (on branch `feat/context-ledger`), adopted + refreshed against the post-M0–M3 codebase. **Scoped to Phase 1 (the Context Ledger foundation); Phase 2 (`dispatch_subagent`) is deferred** — not needed for M4's `llm_extract`/program-mode, kept separate to keep this build focused. This is the foundation the M4 milestone (per-row `llm_extract` primitives + program mode) builds on: "results bound outside model context" = this ledger.
 

@@ -1,5 +1,7 @@
 # Full Stack Agent Runtime Implementation Plan
 
+> **Status (2026-07-10): DEFERRED WHOLESALE 2026-06-22** (see `decisions.md`) — the 12-milestone refactor was never executed as a unit. Two slices were since cherry-picked and shipped separately: **Milestone 4's Context Ledger** (merge `ebf3bd0`, 2026-07-05) and **Milestone 5's MCP multi-warehouse slice as T2a** (merge `c6597f6`, 2026-07-09 — `LABRAT_MCP_PROFILES` + host config generators). The remainder (three runtime modes, hosted-Codex backend, GTM packaging) stays deferred.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn LabRat into a platform-agnostic full-stack data agent with three first-class paths: LabRat Tools, LabRat Agent API Mode, and LabRat Agent Hosted Mode.

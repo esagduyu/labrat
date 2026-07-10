@@ -1,5 +1,7 @@
 # LabRat Feature Depth Implementation Plan
 
+> **Status (2026-07-10): RETIRED BY SUPERSESSION — never executed as written.** Its core demands landed via later builds instead: `run_sql` safety guards + engine-enforced read-only mode (M0/M3), the provider factory + `resolve_provider` (TUI-M1), the Context Ledger + ⚑ provenance footer (M4/TUI-M4), and profile-scoped memory recall. The depth-smoke gate and the feature-depth contract were never built. Kept as the historical record of the "wire the alpha scaffold end-to-end" diagnosis.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn LabRat from a broad alpha scaffold into a deeply wired terminal data agent where safety, context, memory, catalog, audit, threads, findings, providers, and evals all participate in one end-to-end product path.
