@@ -1194,3 +1194,11 @@ whose `target/manifest.json` contains `semantic_models` (run `dbt parse` first).
    the same docs untouched.
 4. Ask about a semantic-model table in chat → footer shows `scent: <table> (semantic_layer·fresh)`.
 5. No dbt path configured → no toasts, no `metrics.md`, nothing ingested.
+
+## dispatch_subagent (manual spot-check)
+
+1. In the TUI (any connected profile), ask: "delegate a sub-task to a sub-agent: count the
+   orders and report just the number". → expect a `▸ dispatch_subagent({...}) ✓` trace, the
+   final answer citing the sub-agent's result, and NO sub-agent tool chatter in the parent
+   transcript (the sub-loop's own run_sql traces do not appear — only the one dispatch line).
+2. Budget echo: the answer/trace completes within the default budgets (no hang).

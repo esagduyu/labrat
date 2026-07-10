@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -13,6 +13,24 @@ from pydantic import BaseModel, ValidationError
 # the alias in labrat.agent.verifier (kept there for its own callers); tools import
 # this one. run_agent_task injects an implementation onto ToolContext.llm_fn.
 LLMFn = Callable[[str], Awaitable[str]]
+
+
+class SubagentRunner(Protocol):
+    """Runs a scoped sub-agent loop; injected by build_agent_session (llm_fn precedent).
+
+    The runner owns the ResultStore, so it resolves ``artifact_refs`` to previews
+    and splices them into the seed; the tool never touches the store. Returns
+    ``(final_text, turns_used, tool_calls_used)``.
+    """
+
+    async def __call__(
+        self,
+        *,
+        seed_prompt: str,
+        artifact_refs: list[str],
+        max_turns: int,
+        max_tool_calls: int,
+    ) -> tuple[str, int, int]: ...
 
 
 class ToolContext:
@@ -28,7 +46,9 @@ class ToolContext:
 
     ``llm_fn`` is an optional one-shot LLM callable (prompt -> reply) injected by
     ``run_agent_task`` for the per-row llm_extract/llm_classify tools; it defaults
-    to None, and every deterministic context leaves it None.
+    to None, and every deterministic context leaves it None. ``subagent_runner``
+    follows the same pattern for scoped sub-agent dispatch; deterministic contexts
+    leave it None.
     """
 
     def __init__(
@@ -42,6 +62,7 @@ class ToolContext:
         profile_name: str = "default",
         read_only: bool = False,
         llm_fn: LLMFn | None = None,
+        subagent_runner: SubagentRunner | None = None,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -57,6 +78,7 @@ class ToolContext:
         self.profile_name = profile_name
         self.read_only = read_only
         self.llm_fn = llm_fn
+        self.subagent_runner = subagent_runner
 
     @property
     def connection(self) -> object:

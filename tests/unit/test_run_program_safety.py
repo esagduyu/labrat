@@ -60,6 +60,43 @@ async def test_nested_run_program_step_is_unknown_tool(
     conn.disconnect()
 
 
+async def test_dispatch_subagent_step_is_unknown_tool_even_with_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Laundering guard: dispatch_subagent is NOT in run_program's step sub-registry,
+    even when the hosting ctx carries a live subagent_runner — otherwise one
+    run_program call could fire up to 20 sub-agent dispatches (Task 1 review I1)."""
+    monkeypatch.setattr(run_sql_mod, "_history_log", QueryHistoryLog(history_dir=tmp_path))
+    conn = _make_duckdb(tmp_path)
+    registry = build_data_tools_registry()
+
+    async def fake_runner(**_: object) -> tuple[str, int, int]:
+        return ("should never run", 0, 0)
+
+    ctx = ToolContext(connection=conn, catalog=None, subagent_runner=fake_runner)
+    result = await registry.dispatch(
+        "run_program",
+        {
+            "steps": [
+                {
+                    "tool": "dispatch_subagent",
+                    "args": {"sub_task": "do something"},
+                    "bind": "sub",
+                }
+            ]
+        },
+        ctx,
+    )
+    assert result.ok  # outer dispatch succeeds; the inner step fails cleanly
+    out = result.value
+    assert isinstance(out, ProgramResult)
+    assert not out.ok
+    assert out.steps[0].ok is False
+    assert out.steps[0].error is not None
+    assert "Unknown tool" in out.steps[0].error
+    conn.disconnect()
+
+
 async def test_read_only_ctx_blocks_run_program_at_dispatch(tmp_path: Path) -> None:
     """mutating=True composes with the M3 read-only Analyst-mode gate."""
     conn = _make_duckdb(tmp_path)
