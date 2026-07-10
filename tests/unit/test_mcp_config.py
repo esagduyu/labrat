@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from labrat.mcp.config import ResolvedConnections, resolve_from_env
+from labrat.profile.manager import ProfileManager, make_profile
 
 
 def _duckdb_env(tmp_path: Path, **extra: str) -> dict[str, str]:
@@ -70,3 +71,100 @@ def test_memory_primary_writable(tmp_path: Path) -> None:
     conn = rc.connections["ws"]
     # Writable check: CREATE would raise on a read-only connection.
     conn._conn.execute("CREATE TABLE t(x INTEGER)")  # type: ignore[attr-defined]
+
+
+def _mgr_with(tmp_path: Path, *profiles: object) -> ProfileManager:
+    mgr = ProfileManager(profiles_path=tmp_path / "profiles.json")
+    for p in profiles:
+        mgr.add(p)  # type: ignore[arg-type]
+    return mgr
+
+
+def test_profile_backed_duckdb_resolves(tmp_path: Path) -> None:
+    db = tmp_path / "p.duckdb"
+    import duckdb
+
+    duckdb.connect(str(db)).close()
+    mgr = _mgr_with(tmp_path, make_profile(name="warehouse", dialect="duckdb", path=str(db)))
+    rc = resolve_from_env({"LABRAT_MCP_PROFILES": "warehouse"}, manager_factory=lambda: mgr)
+    assert set(rc.connections) == {"warehouse"}
+    assert rc.primary == "warehouse"
+    assert rc.profile_name == "warehouse"
+    assert rc.read_only is True  # default is_read_only=True
+    assert "warehouse" in rc.catalogs
+
+
+def test_postgres_profile_uses_factory(tmp_path: Path) -> None:
+    # Launch-pair coverage without a live PG: assert make_connection would be
+    # called with the postgres profile, via the connection_factory seam.
+    calls: list[str] = []
+
+    class _FakeConn:
+        def connect(self) -> None: ...
+        def introspect_catalog(self) -> object:
+            return object()
+
+        def disconnect(self) -> None: ...
+
+    def fake_factory(profile: object) -> object:
+        calls.append(f"{profile.name}:{profile.dialect}")  # type: ignore[attr-defined]
+        return _FakeConn()
+
+    mgr = _mgr_with(
+        tmp_path,
+        make_profile(
+            name="pg", dialect="postgres", host="h", port=5432, database="d", username="u"
+        ),
+    )
+    rc = resolve_from_env(
+        {"LABRAT_MCP_PROFILES": "pg"},
+        manager_factory=lambda: mgr,
+        connection_factory=fake_factory,  # type: ignore[arg-type]
+    )
+    assert calls == ["pg:postgres"]
+    assert set(rc.connections) == {"pg"}
+
+
+def test_unknown_profile_exits_2(tmp_path: Path) -> None:
+    mgr = _mgr_with(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        resolve_from_env({"LABRAT_MCP_PROFILES": "ghost"}, manager_factory=lambda: mgr)
+    assert exc.value.code == 2
+
+
+def test_name_collision_exits_2(tmp_path: Path) -> None:
+    db = tmp_path / "c.duckdb"
+    import duckdb
+
+    duckdb.connect(str(db)).close()
+    mgr = _mgr_with(tmp_path, make_profile(name="main", dialect="duckdb", path=str(db)))
+    env = _duckdb_env(tmp_path)  # env-JSON already defines "main"
+    env["LABRAT_MCP_PROFILES"] = "main"
+    with pytest.raises(SystemExit) as exc:
+        resolve_from_env(env, manager_factory=lambda: mgr)
+    assert exc.value.code == 2
+
+
+def test_mixed_sources_and_writable_profile(tmp_path: Path) -> None:
+    db = tmp_path / "w.duckdb"
+    import duckdb
+
+    duckdb.connect(str(db)).close()
+    # make_profile takes is_read_only directly (checked manager.py:174-201) — no
+    # model_copy needed.
+    writable = make_profile(name="rw", dialect="duckdb", path=str(db), is_read_only=False)
+    mgr = _mgr_with(tmp_path, writable)
+    env = _duckdb_env(tmp_path)
+    env["LABRAT_MCP_PROFILES"] = "rw"
+    env["LABRAT_MCP_PRIMARY"] = "rw"
+    rc = resolve_from_env(env, manager_factory=lambda: mgr)
+    assert set(rc.connections) == {"main", "rw"}
+    assert rc.primary == "rw" and rc.profile_name == "rw"
+    # combined read_only per the shipped rule, derived:
+    # - env-JSON "main" omits "read_only" -> Task-1 default -> env-JSON
+    #   contribution is False (open/DAB-compat; not vacuously True — the
+    #   env-JSON contribution is gated on spec being non-empty).
+    # - profile "rw" is explicitly is_read_only=False -> no profile in the
+    #   profiles set has is_read_only=True -> profiles contribution is False.
+    # combined = env-JSON contribution (False) OR profiles contribution (False)
+    assert rc.read_only is False

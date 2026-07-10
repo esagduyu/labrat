@@ -1,27 +1,36 @@
-"""Env-JSON connection resolution for the LabRat MCP server.
+"""Env-JSON + profile connection resolution for the LabRat MCP server.
 
 Extracted from ``labrat.mcp.server._build_context_from_env`` so the parsing
-logic is independently testable and shareable with the (Task 2) profiles
-path. This module owns only the ``LABRAT_MCP_CONNECTIONS`` /
-``LABRAT_MCP_PRIMARY`` env-JSON path today; every message and exit path is a
-byte-compatible port of the original ``server.py`` implementation.
+logic is independently testable. Two additive sources, coexisting:
+
+- ``LABRAT_MCP_CONNECTIONS`` (JSON, duckdb-only) — the legacy path, byte-
+  compatible with the pre-extraction server and with DAB's ``claude-mcp``
+  driver (Task 1).
+- ``LABRAT_MCP_PROFILES`` (comma-separated profile names, Task 2) — resolves
+  each name through ``labrat.profile.manager`` (``ProfileManager.get`` +
+  ``make_connection``), so any of the seven adapters can be mounted with
+  keyring-backed secrets. Connection keys are profile names; a name colliding
+  with an env-JSON connection is a hard error (exit 2) checked before any
+  connection is opened for that name.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from labrat.db.base import Connection
 from labrat.db.duckdb_engine import DuckDBConnection
+from labrat.profile.manager import ProfileError, ProfileManager, make_connection
+from labrat.profile.model import Profile
 
 
 @dataclass(frozen=True)
 class ResolvedConnections:
-    """Everything a ToolContext needs, resolved from one config source."""
+    """Everything a ToolContext needs, resolved from one or both config sources."""
 
     connections: dict[str, Connection]
     catalogs: dict[str, object]
@@ -30,66 +39,115 @@ class ResolvedConnections:
     profile_name: str
 
 
-def resolve_from_env(env: Mapping[str, str]) -> ResolvedConnections:
-    """Parse ``LABRAT_MCP_CONNECTIONS`` (+ ``LABRAT_MCP_PRIMARY``) into a ResolvedConnections.
+def resolve_from_env(
+    env: Mapping[str, str],
+    *,
+    manager_factory: Callable[[], ProfileManager] = ProfileManager,
+    connection_factory: Callable[[Profile], Connection] = make_connection,
+) -> ResolvedConnections:
+    """Parse ``LABRAT_MCP_CONNECTIONS`` and/or ``LABRAT_MCP_PROFILES`` into a ResolvedConnections.
 
-    Byte-compatible port of the former ``server.py::_build_context_from_env``
-    parsing body — same JSON parsing, same duckdb-only guard (same stderr
-    message + ``sys.exit(2)``), same ``:memory:``-writable forcing, same
-    ``LABRAT_MCP_PRIMARY`` validation.
+    The env-JSON half is a byte-compatible port of the former
+    ``server.py::_build_context_from_env`` parsing body — same JSON parsing,
+    same duckdb-only guard (same stderr message + ``sys.exit(2)``), same
+    ``:memory:``-writable forcing, same ``LABRAT_MCP_PRIMARY`` validation.
+    At least one of the two env vars must be present, or resolution fails
+    exactly as the legacy "LABRAT_MCP_CONNECTIONS env var is required" path
+    did before profiles existed.
+
+    ``manager_factory``/``connection_factory`` are test seams (defaulted to
+    the real ``ProfileManager`` and ``make_connection``) — not meant to be
+    overridden by production callers.
 
     ``ResolvedConnections.read_only`` (the ToolContext-level gate on mutating
-    tools) defaults to False when a spec omits the ``"read_only"`` key. This
-    preserves TODAY's behavior byte-for-byte: the pre-extraction server never
-    passed ``read_only`` to ``ToolContext`` at all (ToolContext's own default
-    is False — see tools/base.py), and DAB's env builder
-    (src/labrat/eval/benchmarks/dab/suite.py, LABRAT_MCP_CONNECTIONS
-    construction ~line 1052) never sets a ``"read_only"`` key on its spec —
-    so DAB trials must keep running with mutating tools (run_program,
-    load_file, ...) open. The aggregate is only True when EVERY connection
-    spec explicitly opts in with ``"read_only": true`` — the safety-first
-    "True unless opted out" default belongs to the profiles path (Task 2)
-    only, not this legacy env-JSON path. This is unrelated to the
-    per-connection DuckDB open-mode flag below (``meta.get("read_only",
-    True)``), which governs how the on-disk file itself is opened and is
-    preserved verbatim from the original implementation.
+    tools) is the OR of two independently-derived contributions (amended
+    2026-07-09, T1 review — DAB byte-compat outranks safety-first on the
+    legacy path):
+
+    - env-JSON contribution: False unless every spec in
+      ``LABRAT_MCP_CONNECTIONS`` explicitly sets ``"read_only": true``
+      (omitted -> False, preserving today's open ctx for DAB — see Task 1's
+      docstring/test for the full rationale). When there is no env-JSON spec
+      at all, this contribution is False (not vacuously True) — there is
+      nothing to have opted in.
+    - profiles contribution: safety-first — True if ANY resolved profile has
+      ``is_read_only=True`` (the ``make_profile``/``Profile`` default).
+
+    This is unrelated to the per-connection DuckDB open-mode flag below
+    (``meta.get("read_only", True)``), which governs how the on-disk file
+    itself is opened and is preserved verbatim from the original
+    implementation.
+
+    ``profile_name``: the primary's profile name when the primary connection
+    is profile-backed, else ``"default"`` (matches today's behavior for the
+    env-JSON-only path).
     """
     raw = env.get("LABRAT_MCP_CONNECTIONS")
-    if not raw:
+    profiles_raw = env.get("LABRAT_MCP_PROFILES")
+
+    if not raw and not profiles_raw:
         print(
             "LABRAT_MCP_CONNECTIONS env var is required (JSON connection spec).",
             file=sys.stderr,
         )
         sys.exit(2)
 
-    spec: dict[str, dict[str, Any]] = json.loads(raw)
-    if not spec:
-        print("LABRAT_MCP_CONNECTIONS must contain at least one entry.", file=sys.stderr)
-        sys.exit(2)
-
+    spec: dict[str, dict[str, Any]] = {}
     connections: dict[str, Connection] = {}
     catalogs: dict[str, object] = {}
 
-    for name, meta in spec.items():
-        db_type = str(meta.get("db_type", "")).lower()
-        if db_type != "duckdb":
-            print(
-                f"labrat-mcp only supports db_type=duckdb in --connections today "
-                f"(got {db_type!r} for {name!r}). Use the attach_database tool from "
-                f"the agent for SQLite/Postgres/MySQL.",
-                file=sys.stderr,
-            )
+    if raw:
+        spec = json.loads(raw)
+        if not spec:
+            print("LABRAT_MCP_CONNECTIONS must contain at least one entry.", file=sys.stderr)
             sys.exit(2)
-        db_path = str(meta["db_path"])
-        # An in-memory database cannot be opened read-only, and when it's the
-        # primary it's the agent's writable workspace (attach_database / load_file
-        # / load_mongo_collection materialize into it). Force read_only=False for
-        # :memory: regardless of the spec default.
-        conn_read_only = False if db_path == ":memory:" else bool(meta.get("read_only", True))
-        conn = DuckDBConnection(path=db_path, read_only=conn_read_only)
-        conn.connect()
-        connections[name] = conn
-        catalogs[name] = conn.introspect_catalog()
+
+        for name, meta in spec.items():
+            db_type = str(meta.get("db_type", "")).lower()
+            if db_type != "duckdb":
+                print(
+                    f"labrat-mcp only supports db_type=duckdb in --connections today "
+                    f"(got {db_type!r} for {name!r}). Use the attach_database tool from "
+                    f"the agent for SQLite/Postgres/MySQL.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            db_path = str(meta["db_path"])
+            # An in-memory database cannot be opened read-only, and when it's the
+            # primary it's the agent's writable workspace (attach_database / load_file
+            # / load_mongo_collection materialize into it). Force read_only=False for
+            # :memory: regardless of the spec default.
+            conn_read_only = False if db_path == ":memory:" else bool(meta.get("read_only", True))
+            conn = DuckDBConnection(path=db_path, read_only=conn_read_only)
+            conn.connect()
+            connections[name] = conn
+            catalogs[name] = conn.introspect_catalog()
+
+    profile_backed_names: set[str] = set()
+    profiles_used: list[Profile] = []
+
+    profile_names = [n.strip() for n in (profiles_raw or "").split(",") if n.strip()]
+    if profile_names:
+        manager = manager_factory()
+        for pname in profile_names:
+            if pname in connections:
+                print(
+                    f"Connection name {pname!r} is defined by both LABRAT_MCP_CONNECTIONS "
+                    "and LABRAT_MCP_PROFILES.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            try:
+                profile = manager.get(pname)
+            except ProfileError as exc:
+                print(f"Unknown profile {pname!r}: {exc}", file=sys.stderr)
+                sys.exit(2)
+            conn = connection_factory(profile)
+            conn.connect()
+            connections[pname] = conn
+            catalogs[pname] = conn.introspect_catalog()
+            profile_backed_names.add(pname)
+            profiles_used.append(profile)
 
     primary = env.get("LABRAT_MCP_PRIMARY") or next(iter(connections))
     if primary not in connections:
@@ -99,12 +157,18 @@ def resolve_from_env(env: Mapping[str, str]) -> ResolvedConnections:
         )
         sys.exit(2)
 
-    ctx_read_only = all(spec_entry.get("read_only") is True for spec_entry in spec.values())
+    env_json_read_only = bool(spec) and all(
+        spec_entry.get("read_only") is True for spec_entry in spec.values()
+    )
+    profiles_read_only = any(profile.is_read_only for profile in profiles_used)
+    ctx_read_only = env_json_read_only or profiles_read_only
+
+    profile_name = primary if primary in profile_backed_names else "default"
 
     return ResolvedConnections(
         connections=connections,
         catalogs=catalogs,
         primary=primary,
         read_only=ctx_read_only,
-        profile_name="default",
+        profile_name=profile_name,
     )
