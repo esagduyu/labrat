@@ -444,6 +444,7 @@ class MainScreen(Screen[None]):
     @work(exclusive=True, group="semantic")
     async def _run_semantic_ingest(self, *, force: bool = False) -> None:
         try:
+            import os
             from pathlib import Path as _Path
 
             from labrat.maze.semantic_ingest import ingest_dbt_semantics
@@ -470,15 +471,19 @@ class MainScreen(Screen[None]):
                     profile=self._profile_obj.name,
                 )
                 scent_dir = self._project_root_override / "labrat_maze" / "scent"
+                git_root = self._project_root_override
             else:
                 store = MazeStore.from_env(profile=self._profile_obj.name)
                 scent_dir = project_scent_dir()
+                # Mirrors MazeStore.from_env's project-root rule.
+                git_root = _Path(os.environ.get("LABRAT_MAZE_DIR") or os.getcwd())
             outcome = ingest_dbt_semantics(
                 manifest_path=manifest,
                 catalog=self._catalog,
                 store=store,
                 project_scent_dir=scent_dir,
                 force=force,
+                git_root=git_root,
             )
             self._semantic_drifted = outcome.drifted
             if outcome.drifted:

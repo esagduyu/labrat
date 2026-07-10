@@ -6,7 +6,10 @@ MazeStore write. Every drafted body is contamination-audited (fail-loud).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from labrat.maze.document import ScentDoc, Section
+from labrat.maze.gitmeta import current_git_sha
 from labrat.maze.scent_audit import (
     ScentContaminationError,
     audit_scent_doc,
@@ -71,7 +74,13 @@ def draft_harvested_sections(
     return out
 
 
-def apply_approved_sections(store: MazeStore, domain: str, approved: list[Section]) -> None:
+def apply_approved_sections(
+    store: MazeStore,
+    domain: str,
+    approved: list[Section],
+    *,
+    git_root: Path | None = None,
+) -> None:
     """Merge human-approved harvested sections into the domain's PROJECT-layer doc.
 
     Loads only the project layer (never the merged view), so user-layer
@@ -79,14 +88,22 @@ def apply_approved_sections(store: MazeStore, domain: str, approved: list[Sectio
     shadowed by a frozen project copy (spec 2026-07-09 non-negotiable #2).
     Dedups against existing project-layer section bodies so re-approving the
     same bullet is idempotent. Audits the doc fail-loud BEFORE writing.
+
+    When ``git_root`` is given and resolves to a git sha, newly-appended
+    sections are stamped ``git_sha=<sha>`` (BEFORE the audit, so audited bytes
+    == written bytes). Dedup-skipped sections are left untouched — re-applying
+    an already-present body never overwrites its original stamp. Default
+    ``git_root=None`` is byte-identical to before this stamping existed (the
+    Meta renderer omits ``None`` fields).
     """
     if not approved:
         return
+    sha = current_git_sha(git_root) if git_root is not None else None
     doc = store.load_domain(domain, scope="project") or ScentDoc(domain=domain)
     existing_bodies = {s.body.strip() for s in doc.sections}
     for s in approved:
         if s.body.strip() not in existing_bodies:
-            doc.sections.append(s)
+            doc.sections.append(s.model_copy(update={"git_sha": sha}) if sha else s)
             existing_bodies.add(s.body.strip())
     tag = audit_scent_doc(doc)
     if tag:
