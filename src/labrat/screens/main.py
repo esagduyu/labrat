@@ -721,6 +721,10 @@ class MainScreen(Screen[None]):
             df = await asyncio.to_thread(self._connection.execute, sql)
             elapsed_ms = (time.monotonic() - t0) * 1000
             self._last_sql = sql
+            # A manually-run query invalidates any chart from a prior agent
+            # turn — without this, pinning right after would pair fresh rows
+            # with a stale chart (t5-M1).
+            self._last_chart = None
             table.load(df, execution_time=elapsed_ms)
             table.display = True
             self._record_edit_if_diverged(sql)
@@ -871,6 +875,11 @@ class MainScreen(Screen[None]):
                 return
             self._current_thread_id = t.id
             self._current_thread_name = t.name
+            # Switching threads leaves the old thread's chart/prompt behind —
+            # otherwise a stale chart could get paired with the new thread's
+            # results at pin time (t5-M1).
+            self._last_chart = None
+            self._last_user_prompt = ""
             for bar in self.query(_StatusBar):
                 bar.set_thread(t.name)
 

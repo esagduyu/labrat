@@ -7,8 +7,12 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static
 
 import labrat.cheese.store as cheese_store_mod
+from labrat.chart.spec import ChartSpec, ChartType
+from labrat.db.duckdb_engine import DuckDBConnection
+from labrat.profile.model import Profile
 from labrat.screens.main import MainScreen
 from labrat.widgets.chat_panel import ChatPanel
+from labrat.widgets.query_editor import QueryEditor
 from labrat.widgets.results_table import ResultsTable
 
 
@@ -119,8 +123,6 @@ async def test_f8_while_agent_busy_notifies_and_does_not_export(
 
 async def test_new_user_turn_clears_last_chart(tmp_path: Path, monkeypatch) -> None:
     """_last_chart is stale-chart-pairing-hazard-prone; a new user turn clears it."""
-    from labrat.chart.spec import ChartSpec, ChartType
-
     _redirect_cheese_roots(tmp_path, monkeypatch)
     async with _MainHost().run_test() as pilot:
         await pilot.pause()
@@ -134,3 +136,124 @@ async def test_new_user_turn_clears_last_chart(tmp_path: Path, monkeypatch) -> N
         await pilot.pause()
         assert screen._last_chart is None
         assert screen._last_user_prompt == "a new question"
+
+
+class _ConnectedHost(App[None]):
+    """Host that pushes an already-connected MainScreen (mirrors
+    test_main_screen_agent_wiring.py's `_Host`; needed here because
+    `_execute_sql` requires a live `self._connection`)."""
+
+    def __init__(self, screen: MainScreen) -> None:
+        super().__init__()
+        self._screen = screen
+
+    def compose(self) -> ComposeResult:
+        yield Static("")
+
+    def on_mount(self) -> None:
+        self.push_screen(self._screen)
+
+
+def _connected_screen(ecommerce_db: Path) -> MainScreen:
+    conn = DuckDBConnection(path=str(ecommerce_db), read_only=True)
+    conn.connect()
+    catalog = conn.introspect_catalog()
+    profile = Profile(name="testprof", dialect="duckdb", path=str(ecommerce_db))
+    return MainScreen(
+        profile="testprof",
+        dialect="duckdb",
+        catalog=catalog,
+        connection=conn,
+        profile_obj=profile,
+    )
+
+
+async def test_execute_sql_clears_last_chart(
+    tmp_path: Path, monkeypatch, ecommerce_db: Path
+) -> None:
+    """A manually-run query invalidates any chart left over from an agent turn
+    — otherwise pinning right after would pair fresh rows with a stale chart
+    (t5-M1)."""
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+    screen = _connected_screen(ecommerce_db)
+    async with _ConnectedHost(screen).run_test() as pilot:
+        await pilot.pause()
+        screen._last_chart = (
+            ChartSpec(chart_type=ChartType.bar, x="a", y="b"),
+            pl.DataFrame({"a": [1], "b": [2]}),
+        )
+        screen.on_query_editor_run_requested(QueryEditor.RunRequested("SELECT 1 AS x"))
+        await pilot.app.workers.wait_for_complete()
+        assert screen._last_chart is None
+
+
+async def test_capture_finding_with_chart_writes_chart_and_spec(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A real chart at capture time renders a PNG and stamps chart_spec (t5-M2)."""
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+    async with _MainHost().run_test() as pilot:
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, MainScreen)
+        screen._last_sql = "SELECT 1 AS x"
+        screen.query_one("#results-content", ResultsTable).load(
+            pl.DataFrame({"a": ["x"], "b": [2]})
+        )
+        screen._last_chart = (
+            ChartSpec(chart_type=ChartType.bar, x="a", y="b"),
+            pl.DataFrame({"a": ["x"], "b": [2]}),
+        )
+        finding = screen._capture_finding(question="chart it", sql="SELECT 1 AS x")
+        assert finding is not None
+        assert finding.chart_spec is not None
+        assert (tmp_path / "data" / f"{finding.id}.chart.png").exists()
+
+
+async def test_capture_finding_chart_render_failure_omits_chart(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """render_image raising never blocks the pin — the chart is just omitted."""
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+
+    def _boom(spec: object, df: object) -> bytes:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("labrat.chart.render_image.render_image", _boom)
+    async with _MainHost().run_test() as pilot:
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, MainScreen)
+        screen._last_sql = "SELECT 1 AS x"
+        screen.query_one("#results-content", ResultsTable).load(
+            pl.DataFrame({"a": ["x"], "b": [2]})
+        )
+        screen._last_chart = (
+            ChartSpec(chart_type=ChartType.bar, x="a", y="b"),
+            pl.DataFrame({"a": ["x"], "b": [2]}),
+        )
+        finding = screen._capture_finding(question="q", sql="SELECT 1 AS x")
+        assert finding is not None
+        assert (tmp_path / "data" / f"{finding.id}.parquet").exists()
+        assert not (tmp_path / "data" / f"{finding.id}.chart.png").exists()
+
+
+async def test_capture_finding_carries_turn_provenance(tmp_path: Path, monkeypatch) -> None:
+    """A populated TurnProvenance snapshot is captured onto the pinned Finding."""
+    from labrat.widgets.turn_provenance import TurnProvenance
+
+    _redirect_cheese_roots(tmp_path, monkeypatch)
+    async with _MainHost().run_test() as pilot:
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, MainScreen)
+        screen._last_sql = "SELECT 1 AS x"
+        screen.query_one("#results-content", ResultsTable).load(pl.DataFrame({"x": [1]}))
+        chat = screen.query_one("#chat-content", ChatPanel)
+        tp = TurnProvenance()
+        tp.record_tool("run_sql", True, "")
+        chat.last_turn_provenance = tp
+        finding = screen._capture_finding(question="q", sql="SELECT 1 AS x")
+        assert finding is not None
+        assert finding.provenance is not None
+        assert finding.provenance.run_sql_count == 1

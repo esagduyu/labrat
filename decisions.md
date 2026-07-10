@@ -721,3 +721,25 @@ and semantic-ingested sections (None-safe; relaxes T1b byte-determinism to repo-
 conditioned, apply-dedup keeps original stamps), and docs/team-scent.md (commit labrat_maze/,
 PR-review learnings — audit + harvest gate + git review = three trust layers). Scoping of all
 six moat-extra candidates: docs/superpowers/overnight-2026-07-10-decisions.md D-09.
+
+## 2026-07-10 — Cheese v1: versioned, provenance-stamped share artifacts (Pillar 2 first surface)
+
+Pinned findings now export as self-contained, standalone-viewable HTML ("Cheese") — the #24
+Option B constraint (free, opens with zero LabRat/network) satisfied by construction. New
+`src/labrat/cheese/` package: `model.py` (`FindingProvenance`/`ScentSourceRef` trust-block
+snapshot, `CheeseManifest`/`CheeseVersion`), `store.py` (`FindingDataStore` pin-time bounded
+capture — parquet head(50) + chart PNG, keyed `cheese://<finding_id>`; `CheeseStore` immutable
+`v<N>.html` history + a `current` rollback pointer, content-addressed by kind+finding-id-set),
+`render.py` (one Jinja template, single + report), `export.py` (orchestrator). Capture happens
+at PIN time, not export time — `Finding.results_ref`/chart only resolve against a live session
+in the old M17 `ResultStore`, so session-scoped `result://` refs are deliberately never resolved
+by Cheese; old pre-Cheese findings degrade honestly to "Results unavailable" / "unattested
+(pinned before provenance capture)", never fabricated. TUI surfaces: **f8** shares the current
+answer (single, preview rows); the Findings viewer (Ctrl+K) gained `e`/`x`/`E`/`X` (report vs.
+single, with/without rows) and `v` (new `CheeseVersionsScreen` modal — browse every Cheese's
+version history, re-share an old version's path, or roll back). M20's one-shot unversioned
+`audit/export.py::export_findings` is retired (deleted, not deprecated) — its escaping,
+self-contained-output, and unique-filename guarantees now live in `test_cheese_render.py`
+(`test_escaping`, `test_self_contained_and_footer`) and `test_cheese_export.py`
+(`test_reexport_same_set_bumps_version`, which upgrades "unique filenames" to "linear versioned
+filenames"). Spec: `docs/superpowers/plans/2026-07-10-cheese-v1.md`.
