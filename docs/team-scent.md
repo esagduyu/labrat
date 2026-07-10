@@ -74,8 +74,9 @@ where it belongs. Until then, leave it local.
      (`maze/gitmeta.py::current_git_sha` — `git -C <root> rev-parse --short HEAD`; no repo / no
      git / any subprocess failure → `None`, and the write is byte-identical to the no-git-root
      path since the Meta renderer omits `None` fields),
-   - runs the contamination audit **before** writing (fail-loud: a tripped audit blocks the
-     write and reopens the modal with the verdict shown, nothing partial lands on disk),
+   - runs the contamination audit **before** writing (fail-loud: a tripped audit blocks that
+     domain's write and reopens the modal with the verdict shown — atomicity is per domain doc,
+     so in a multi-domain apply, domains already written before the tripped one stay on disk),
    - writes the doc via `MazeStore.write_doc(..., scope="project")`.
 
    The same `git_sha` stamp applies to dbt semantic-layer ingestion
@@ -108,15 +109,21 @@ where it belongs. Until then, leave it local.
 ## Merge guidance
 
 - **Section-per-block.** Each `## heading` + its `**Source:**`/`**Meta:**` line + body is one
-  contiguous diff hunk. Two branches adding *different* sections to the same domain doc merge
-  cleanly with git's ordinary line-based merge — they're non-overlapping hunks.
-- **Concurrent applies of the same learning dedup at read, not at merge.** If two teammates
-  independently harvest and apply the *same* correction on separate branches, you might land two
-  near-identical `## Gotchas` blocks with the same body text after merging. This isn't a merge
-  conflict to resolve by hand: `MazeStore.docs()`'s merge-at-read view
-  (`store.py::_merge_domain`) dedups sections by body (stripped) across whatever's on disk, so a
-  literal duplicate self-heals the moment it's read — nothing needs manual cleanup, though you're
-  welcome to trim the duplicate block in a follow-up commit for a cleaner file.
+  contiguous diff hunk. But note: applies *append* sections at the end of the domain file, so two
+  branches that each add a section to the *same* domain doc will usually both touch the same
+  end-of-file region — expect git to flag a **trivial add/add conflict** on that hunk rather than
+  auto-merging. Resolution is mechanical: keep both blocks (order doesn't matter — sections are
+  independent), delete the conflict markers, commit. Branches touching *different* domain docs
+  merge cleanly with no interaction.
+- **Concurrent applies of the same learning: trim the duplicate at merge time.** If two teammates
+  independently harvest and apply the *same* correction on separate branches, the merge
+  resolution above would land two near-identical `## Gotchas` blocks with the same body text —
+  keep one and drop the other while you're already resolving the hunk. If a literal duplicate
+  does slip through into a domain that exists in **both** the user and project layers,
+  `MazeStore.docs()`'s merge-at-read view (`store.py::_merge_domain`) dedups sections by body
+  (stripped) across the two layers, so readers self-heal; but for a **project-only** domain (the
+  usual case for harvested gotchas) the merged view has nothing to dedup against and both copies
+  surface — the on-disk trim is the real fix, not optional cleanup.
 - **True conflicts resolve like any doc.** If two branches edit the *same* section's body
   differently, that's a real git conflict — git will flag it as an ordinary merge conflict on
   that hunk, and you resolve it the way you'd resolve any prose conflict: read both versions,
