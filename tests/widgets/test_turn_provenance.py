@@ -209,6 +209,24 @@ def test_tierless_payload_keeps_count_fallback() -> None:
     assert "scent ×1 (stale)" in (prov.footer() or "")  # noqa: RUF001
 
 
+def test_adversarial_body_stale_token_degrades_to_count() -> None:
+    output = (
+        "question='q' results=[DocResult(domain='orders', quick_reference=None, "
+        "sections=[SectionMatch(heading='h', body='- note: stale=False in prod', "
+        "score=1.0, matched_terms=['a'], source='verified', fresh=None)], "
+        "best_source='verified', stale=None)]"
+    )
+    prov = TurnProvenance()
+    prov.record_tool("search_reference_docs", True, output)
+    footer = prov.footer() or ""
+    # Degraded to the safe count fallback: no per-doc domain/source label is
+    # rendered from the misaligned (adversarial) stale token — the only
+    # freshness word present is the global scent_stale flag's, not a value
+    # invented from the doc's own (correctly None) stale field.
+    assert "orders" not in footer and "verified" not in footer
+    assert footer == "⚑ grounded: scent ×1 (fresh)"  # noqa: RUF001
+
+
 def test_verifier_outcome() -> None:
     prov = TurnProvenance()
     prov.set_verifier(rounds_used=0)

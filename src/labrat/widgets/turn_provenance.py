@@ -76,7 +76,7 @@ class TurnProvenance:
                     domains = _DOMAIN_RE.findall(output)
                     bests = _BEST_RE.findall(output)
                     stales = _STALE_RE.findall(output)
-                    if len(domains) == n_docs and len(bests) == n_docs:
+                    if len(domains) == n_docs and len(bests) == n_docs and len(stales) == n_docs:
                         for i in range(n_docs):
                             stale_i: bool | None = None
                             if i < len(stales) and stales[i] != "None":
