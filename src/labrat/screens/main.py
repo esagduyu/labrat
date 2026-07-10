@@ -773,40 +773,44 @@ class MainScreen(Screen[None]):
         finding_id = str(uuid.uuid4())
         results_ref: str | None = None
         chart_spec_dump: dict[str, Any] | None = None
-        if df.height > 0 or self._last_chart is not None:
-            chart_png: bytes | None = None
-            if self._last_chart is not None:
-                spec, chart_df = self._last_chart
-                chart_spec_dump = spec.model_dump(mode="json")
-                try:
-                    chart_png = render_image(spec, chart_df)
-                except Exception:  # chart failure degrades to omission, never raises
-                    chart_png = None
-            data_store = FindingDataStore(cheese_store_mod.DEFAULT_DATA_ROOT)
-            results_ref = data_store.capture(finding_id, df, chart_png=chart_png)
+        try:
+            if df.height > 0 or self._last_chart is not None:
+                chart_png: bytes | None = None
+                if self._last_chart is not None:
+                    spec, chart_df = self._last_chart
+                    chart_spec_dump = spec.model_dump(mode="json")
+                    try:
+                        chart_png = render_image(spec, chart_df)
+                    except Exception:  # chart failure degrades to omission, never raises
+                        chart_png = None
+                data_store = FindingDataStore(cheese_store_mod.DEFAULT_DATA_ROOT)
+                results_ref = data_store.capture(finding_id, df, chart_png=chart_png)
 
-        prov = None
-        if chat.last_turn_provenance is not None:
-            schema_fingerprint = (
-                fingerprint_from_catalog(self._catalog) if self._catalog is not None else None
-            )
-            prov = chat.last_turn_provenance.snapshot(
-                schema_fingerprint=schema_fingerprint,
-                git_sha=current_git_sha(Path.cwd()),
-                model_id=getattr(self._profile_obj, "agent_model", None),
-            )
+            prov = None
+            if chat.last_turn_provenance is not None:
+                schema_fingerprint = (
+                    fingerprint_from_catalog(self._catalog) if self._catalog is not None else None
+                )
+                prov = chat.last_turn_provenance.snapshot(
+                    schema_fingerprint=schema_fingerprint,
+                    git_sha=current_git_sha(Path.cwd()),
+                    model_id=getattr(self._profile_obj, "agent_model", None),
+                )
 
-        mgr = FindingsManager()
-        return mgr.pin(
-            finding_id=finding_id,
-            version_id=self._current_thread_id or "unknown",
-            question=question,
-            sql=sql,
-            results_ref=results_ref,
-            chart_spec=chart_spec_dump,
-            note=note,
-            provenance=prov,
-        )
+            mgr = FindingsManager()
+            return mgr.pin(
+                finding_id=finding_id,
+                version_id=self._current_thread_id or "unknown",
+                question=question,
+                sql=sql,
+                results_ref=results_ref,
+                chart_spec=chart_spec_dump,
+                note=note,
+                provenance=prov,
+            )
+        except Exception as exc:  # disk/permission errors must not raise into Textual
+            self.notify(f"Couldn't save finding: {exc}", severity="error")
+            return None
 
     # ── pin finding handler (M18) ─────────────────────────────────────────────
 

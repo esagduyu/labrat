@@ -215,6 +215,7 @@ class FindingsViewerScreen(ModalScreen[None]):
         try:
             all_rules = ValidationRuleStore().read_profile(self._profile_obj.name)
         except Exception:
+            self.notify("Couldn't load validation rules; Trail will list none.", severity="warning")
             all_rules = []
 
         schema_hash = fingerprint_from_catalog(self._catalog) if self._catalog is not None else None
@@ -232,7 +233,10 @@ class FindingsViewerScreen(ModalScreen[None]):
             return
 
         store = MazeStore.from_env(profile=self._profile_obj.name)
-        self.app.push_screen(TrailReviewScreen(doc, store, git_root=git_root))
+        overwrites = store.load_domain(doc.domain, kind="trail", scope="project") is not None
+        self.app.push_screen(
+            TrailReviewScreen(doc, store, git_root=git_root, overwrites=overwrites)
+        )
 
     @on(Button.Pressed, "#close-btn")
     def action_cancel(self) -> None:

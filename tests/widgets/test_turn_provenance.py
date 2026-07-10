@@ -393,6 +393,21 @@ def test_snapshot_empty_turn_is_none():
     assert TurnProvenance().snapshot() is None
 
 
+def test_multiple_join_verifications_counted():
+    tp = TurnProvenance()
+    tp.record_tool("verify_join", True, "")
+    tp.record_tool("verify_join", True, "")
+    tp.record_tool("verify_join", True, "")
+    snap = tp.snapshot()
+    assert snap is not None and snap.joins_verified == 3  # was capped at 1
+
+
+def test_join_failure_not_counted():
+    tp = TurnProvenance()
+    tp.record_tool("verify_join", False, "")  # ok=False → not a verification
+    assert tp.snapshot() is None  # nothing recorded
+
+
 def test_snapshot_constraint_branches():
     from labrat.cheese.model import ScentSourceRef
     from labrat.widgets.turn_provenance import TurnProvenance
