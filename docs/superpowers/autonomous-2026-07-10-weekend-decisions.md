@@ -25,3 +25,6 @@
 ## Progress log
 
 (appended as milestones complete)
+- **Q1 dbt-CI pairing COMPLETE — merged 5b99444** (spec 772f7db → plan → 3 tasks + fix waves, all Fable-reviewed; whole-branch APPROVED after closing a broken generated workflow + 2 silent false-pass seams, re-verified live; CLI round-trip gate passed). Deferred: F3 semantic-removal deadlock, auto-detect-subdir store rooting.
+- **D-02 (Q1 build not spec-only):** user explicitly upgraded dbt-CI from spec-only to full build ("build the full design artifact and plan then have Sonnet build it out"). Done.
+- **Next: Q2 ticket-backlog sweep (Cheese + Trail minors).**
