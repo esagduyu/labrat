@@ -35,3 +35,24 @@
 - **Q4 decision-trail harvesting COMPLETE — merged 1dc13bd** (moat extra 2.5). Extends the validated harvest loop to decisions (explicit_user_rule kind, now has its first producer via ctrl+shift+d). No LLM, no retrieval-scorer change (benchmark-safe), opt-in/default-off. 2 tasks Fable-reviewed; whole-branch APPROVED-WITH-MINORS (fix wave closed a real multi-line duplication bug); compounding loop verified live end-to-end. D1 "what is a decision" = explicit-capture, surfaced for user review.
 - **Q5 (embedding clustering) — BLOCKED/deferred** on the same D-A/D-B embedding-dependency decision as Q3 (folded into the Q3 spec deferral). Not buildable autonomously without the user's dependency call.
 - **Queue status: Q1✅ Q2✅ Q3=spec-only(deferred) Q4✅ Q5=blocked-on-Q3-decision.** Remaining unattended-safe work: carried follow-up tickets (dbt-CI F3 semantic-removal deadlock + auto-detect-subdir store rooting; misc minors). Assessing whether any warrant a build vs. hold for the user.
+- **Q6 dbt-CI follow-ups COMPLETE — merged 3a637d7** (F3 semantic-removal deadlock: ingest clears stale semantic sections past the fingerprint gate, human/harvested preserved; subdir store-rooting for check AND ingest, LABRAT_MAZE_DIR>project_path). Fable-reviewed, live-gated (remove-semantics→check 1→ingest clears→check 0).
+- **Doc-refresh COMPLETE — merged 44e2f69** (Fable-verified against git, no wrong claims): CLAUDE.md (scent CLI + decision-trail + memory-caller correction), competitive-build-milestones (2.5 shipped, dbt-CI shipped closing §8a-a), FEATURE_ROADMAP + north-star (gitignored, on-disk) refreshed for the weekend run.
+
+## MORNING SUMMARY (autonomous weekend run — for user review)
+**Shipped to master this run (all CI-green, each whole-branch Fable-reviewed + live/artifact-gated):**
+| Item | Merge | What |
+|---|---|---|
+| Q1 dbt-CI pairing | 5b99444 | `labrat scent check/ingest/init-ci` read-only staleness gate; closes north-star §8a-a colocation+CI (was unbuilt) |
+| Q2 ticket sweep | 9c6b263 | Cheese pin try-guard + join-count; Trail slug/widget-id/rules-hint/overwrite-warning |
+| Q4 decision-trail harvesting | 1dc13bd | moat 2.5: ctrl+shift+d decisions → ## Decisions Scent sections; dormant explicit_user_rule wired |
+| Q6 dbt-CI follow-ups | 3a637d7 | F3 semantic-removal deadlock + subdir rooting |
+| doc-refresh | 44e2f69 | roadmap docs synced to reality |
+
+**Deferred/blocked (need YOUR input):**
+- **Q3 hybrid-RRF retrieval + Q5 embedding clustering** — spec-only (locked design). Blocked on: (D-A) add an embedding dependency at all? (D-B) which source (I recommend local static embeddings)? AND the benchmark track reopening for A/B validation (any retrieval-scoring change moves the DAB path). Won't build unattended — it's your product/dependency call.
+- **Trail v2 executable** — needs your execution-gate decision (you ratified read-as-guidance for v1; executable is deferred).
+- **D1 "what is a decision"** (Q4) — I chose explicit-capture (not LLM-guessed); flagged for your ratification.
+
+**Remaining bigger items (not unattended-safe):** Warren (Trail+Scent bundles), 2.4 customer-facing evals, core extraction/packaging — all product-shaped, want specs + your judgment. DAB-driver→host_configs migration stays excluded (leaderboard path).
+
+**Ticketed minors (non-blocking):** dbt-CI empty-after-strip frontmatter-only docs + contamination partial-write window; Q4 filter kind-neutrality; post-Fable regression validation + DAB track (parked, user-explicit).
