@@ -60,7 +60,7 @@
 1. **Standalone-viewable:** the artifact opens in a browser with zero network access and zero LabRat installed. No external assets, ever.
 2. **Nothing leaves the machine:** export writes a local file; no upload, no telemetry, no remote calls.
 3. **Provenance is never fabricated:** no snapshot → "unattested", verbatim tier/freshness from capture, no inference at render time.
-4. **Bounded by construction:** ≤50 rows per finding regardless of result size; `rows_mode="none"` available at every export site.
+4. **Bounded by construction:** ≤50 rows per finding regardless of result size; `rows_mode="none"` supported by the export API and surfaced in the findings viewer (single + report); the chat quick-share action uses the preview default (its row-free variant lives in the viewer).
 5. **Version immutability:** an existing `v<N>.html` is never rewritten; rollback only moves the `current` pointer.
 6. **Benchmark isolation:** nothing under `eval/` or `mcp/` imports `cheese/`.
 7. **Export never raises into the TUI**; per-finding failures degrade to honest omissions in the artifact.
