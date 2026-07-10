@@ -69,6 +69,13 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                     id="model-input",
                 )
             with Horizontal(classes="row"):
+                yield Label("dbt project")
+                yield Input(
+                    value=self._profile.dbt_project_path or "",
+                    placeholder="path to dbt project root (optional)",
+                    id="dbt-path-input",
+                )
+            with Horizontal(classes="row"):
                 yield Label("Harvest corrections (M5)")
                 yield Switch(value=self._profile.harvest_opt_in, id="harvest-switch")
             with Horizontal(classes="row"):
@@ -91,6 +98,9 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                 "agent_model": model_text or None,
                 "harvest_opt_in": self.query_one("#harvest-switch", Switch).value,
                 "verify_enabled": self.query_one("#verify-switch", Switch).value,
+                "dbt_project_path": (
+                    self.query_one("#dbt-path-input", Input).value.strip() or None
+                ),
             }
         )
         manager = self._manager if self._manager is not None else ProfileManager()

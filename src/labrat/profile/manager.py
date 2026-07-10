@@ -184,6 +184,7 @@ def make_profile(
     is_read_only: bool = True,
     default_schema: str | None = None,
     description: str = "",
+    dbt_project_path: str | None = None,
 ) -> Profile:
     """Convenience constructor for Profile."""
     return Profile(
@@ -198,4 +199,5 @@ def make_profile(
         is_read_only=is_read_only,
         default_schema=default_schema,
         description=description,
+        dbt_project_path=dbt_project_path,
     )

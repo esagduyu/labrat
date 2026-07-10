@@ -38,6 +38,8 @@ class Profile(BaseModel):
     agent_model: str | None = None
     harvest_opt_in: bool = False
     verify_enabled: bool = False
+    # dbt project root (T1b semantic ingestion); None = no dbt project
+    dbt_project_path: str | None = None
 
     @field_validator("name")
     @classmethod
