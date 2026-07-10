@@ -98,9 +98,16 @@ class HarvestReviewScreen(ModalScreen[int]):
 
     @on(Button.Pressed, "#apply-btn")
     def action_apply(self) -> None:
+        import os
+        from pathlib import Path
+
         from labrat.maze.harvest import apply_approved_sections
         from labrat.maze.scent_audit import ScentContaminationError
         from labrat.screens.harvest_controller import domain_for_cluster
+
+        # Mirrors MazeStore.from_env's project-root rule (LABRAT_MAZE_DIR or cwd)
+        # so the sha we stamp matches the repo the store is actually writing into.
+        git_root = Path(os.environ.get("LABRAT_MAZE_DIR") or os.getcwd())
 
         by_domain: dict[str, list[Section]] = {}
         for i, (key, section) in enumerate(self._rows):
@@ -109,7 +116,7 @@ class HarvestReviewScreen(ModalScreen[int]):
         applied = 0
         try:
             for domain, sections in sorted(by_domain.items()):
-                apply_approved_sections(self._store, domain, sections)
+                apply_approved_sections(self._store, domain, sections, git_root=git_root)
                 applied += len(sections)
         except ScentContaminationError as exc:
             # Fail-loud: show the audit verdict, write nothing further, stay open.

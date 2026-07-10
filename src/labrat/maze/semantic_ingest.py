@@ -22,6 +22,7 @@ from labrat.catalog.dbt.semantic import (
 )
 from labrat.db.catalog import Catalog
 from labrat.maze.document import ScentDoc, Section
+from labrat.maze.gitmeta import current_git_sha
 from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc
 from labrat.maze.staleness import fingerprint_from_catalog
 from labrat.maze.store import MazeStore
@@ -141,12 +142,18 @@ def ingest_dbt_semantics(
     store: MazeStore,
     project_scent_dir: Path,
     force: bool = False,
+    git_root: Path | None = None,
 ) -> IngestOutcome:
     """Ingest semantic models/metrics into project-layer Scent (replace + audit).
 
     Fail-open at the controller level for missing/invalid manifests (skipped +
     warning); fail-LOUD (ScentContaminationError) once content reaches the
     write path — never catch the audit.
+
+    When ``git_root`` is given and resolves to a git sha, every built section
+    is stamped ``git_sha=<sha>`` before the per-domain audit (stamp-then-audit
+    order: audited bytes == written bytes). Default ``git_root=None`` is
+    byte-identical to before this stamping existed.
     """
     try:
         manifest: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -169,6 +176,13 @@ def ingest_dbt_semantics(
 
     schema_hash = fingerprint_from_catalog(catalog) if catalog is not None else None
     drafts = build_semantic_sections(artifacts, schema_hash)
+
+    sha = current_git_sha(git_root) if git_root is not None else None
+    if sha:
+        drafts = {
+            domain: [s.model_copy(update={"git_sha": sha}) for s in sections]
+            for domain, sections in drafts.items()
+        }
 
     written = 0
     for domain in sorted(drafts):
