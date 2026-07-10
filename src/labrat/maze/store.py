@@ -5,8 +5,8 @@ On-disk namespace (forward-compatible with trail/warren kinds + a future team la
     <project_root>/labrat_maze/<kind>/*.md             (project scope)
     <home>/.labrat/maze/<profile>/<kind>/*.md          (user scope)
 
-Layers no longer conflict-resolve by precedence: project + user sections union
-per domain (dedup by body) — see ``docs()``.
+Layers do not conflict-resolve by precedence: for each domain, ``docs()``
+unions the layers' sections (user first, then project; dedup by body).
 """
 
 from __future__ import annotations
