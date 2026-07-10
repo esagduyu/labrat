@@ -11,8 +11,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from labrat.catalog.dbt.semantic import MetricDef, SemanticArtifacts, SemanticModelDef
-from labrat.maze.document import Section
+from pydantic import BaseModel
+
+from labrat.catalog.dbt.semantic import (
+    MetricDef,
+    SemanticArtifacts,
+    SemanticModelDef,
+    parse_semantic_manifest,
+)
+from labrat.db.catalog import Catalog
+from labrat.maze.document import ScentDoc, Section
+from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc
+from labrat.maze.staleness import fingerprint_from_catalog
+from labrat.maze.store import MazeStore
 
 _MANIFEST_FINGERPRINT_FILE = ".manifest_fingerprint"
 _METRICS_DOMAIN = "metrics"
@@ -93,3 +104,65 @@ def read_manifest_fingerprint(scent_dir: Path) -> str | None:
 def write_manifest_fingerprint(scent_dir: Path, fingerprint: str) -> None:
     scent_dir.mkdir(parents=True, exist_ok=True)
     (scent_dir / _MANIFEST_FINGERPRINT_FILE).write_text(fingerprint + "\n", encoding="utf-8")
+
+
+class IngestOutcome(BaseModel):
+    domains: tuple[str, ...] = ()
+    sections_written: int = 0
+    warnings: tuple[str, ...] = ()
+    skipped: bool = False
+    drifted: bool = False
+
+
+def ingest_dbt_semantics(
+    *,
+    manifest_path: Path,
+    catalog: Catalog | None,
+    store: MazeStore,
+    project_scent_dir: Path,
+    force: bool = False,
+) -> IngestOutcome:
+    """Ingest semantic models/metrics into project-layer Scent (replace + audit).
+
+    Fail-open at the controller level for missing/invalid manifests (skipped +
+    warning); fail-LOUD (ScentContaminationError) once content reaches the
+    write path — never catch the audit.
+    """
+    try:
+        manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return IngestOutcome(skipped=True, warnings=(f"manifest unreadable: {exc}",))
+
+    fingerprint = semantic_fingerprint(manifest)
+    stored = read_manifest_fingerprint(project_scent_dir)
+    if stored is not None and not force:
+        if stored == fingerprint:
+            return IngestOutcome(skipped=True)
+        return IngestOutcome(skipped=True, drifted=True)
+
+    artifacts = parse_semantic_manifest(manifest)
+    if not artifacts.models and not artifacts.metrics:
+        return IngestOutcome(skipped=True, warnings=tuple(artifacts.warnings))
+
+    schema_hash = fingerprint_from_catalog(catalog) if catalog is not None else None
+    drafts = build_semantic_sections(artifacts, schema_hash)
+
+    written = 0
+    for domain in sorted(drafts):
+        doc = store.load_domain(domain, scope="project") or ScentDoc(domain=domain)
+        doc.sections = [s for s in doc.sections if s.source != "semantic_layer"]
+        doc.sections.extend(drafts[domain])
+        tag = audit_scent_doc(doc)
+        if tag:
+            raise ScentContaminationError(
+                f"semantic ingestion for {domain!r} tripped contamination guard: {tag}"
+            )
+        store.write_doc(doc)
+        written += len(drafts[domain])
+
+    write_manifest_fingerprint(project_scent_dir, fingerprint)
+    return IngestOutcome(
+        domains=tuple(sorted(drafts)),
+        sections_written=written,
+        warnings=tuple(artifacts.warnings),
+    )
