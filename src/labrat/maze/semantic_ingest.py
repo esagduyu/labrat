@@ -133,6 +133,46 @@ class IngestOutcome(BaseModel):
     warnings: tuple[str, ...] = ()
     skipped: bool = False
     drifted: bool = False
+    cleared: int = 0
+
+
+def _clear_stale_semantic_sections(
+    store: MazeStore, project_scent_dir: Path
+) -> tuple[int, tuple[str, ...]]:
+    """Strip every ``semantic_layer`` section from committed PROJECT-layer docs.
+
+    Runs when a re-ingest finds no semantic models/metrics left in the dbt
+    manifest (F3). Without this, the empty-artifacts branch would no-op and
+    leave stale ``semantic_layer`` sections (and a stale
+    ``.manifest_fingerprint`` sidecar) behind forever — `scent check` would
+    keep reporting drift with no way to clear it. Enumerates
+    ``project_scent_dir/*.md`` directly (the same on-disk convention
+    ``MazeStore.write_doc`` uses for the project layer: domain == file stem)
+    rather than adding a new store API. A doc with no ``semantic_layer``
+    sections is left untouched (no read/audit/write) — nothing to clear.
+    """
+    if not project_scent_dir.is_dir():
+        return 0, ()
+    cleared = 0
+    cleared_domains: list[str] = []
+    for path in sorted(project_scent_dir.glob("*.md")):
+        domain = path.stem
+        doc = store.load_domain(domain, scope="project")
+        if doc is None:
+            continue
+        stale = [s for s in doc.sections if s.source == "semantic_layer"]
+        if not stale:
+            continue
+        doc.sections = [s for s in doc.sections if s.source != "semantic_layer"]
+        tag = audit_scent_doc(doc)
+        if tag:
+            raise ScentContaminationError(
+                f"semantic clear-pass for {domain!r} tripped contamination guard: {tag}"
+            )
+        store.write_doc(doc)
+        cleared += len(stale)
+        cleared_domains.append(domain)
+    return cleared, tuple(cleared_domains)
 
 
 def ingest_dbt_semantics(
@@ -172,7 +212,22 @@ def ingest_dbt_semantics(
 
     artifacts = parse_semantic_manifest(manifest)
     if not artifacts.models and not artifacts.metrics:
-        return IngestOutcome(skipped=True, warnings=tuple(artifacts.warnings))
+        # Past the fingerprint gate above (stored is None -> genuinely first
+        # contact, or force=True -> caller asked to reconcile) with nothing
+        # to ingest. A prior ingest may have left semantic_layer sections
+        # behind (the project's semantic models were deleted) — clear them
+        # so `scent check` doesn't stay stale forever (F3). On a project
+        # that has never been ingested (or was always semantics-free), the
+        # glob finds nothing with a semantic_layer section, so this is a
+        # no-op past the directory-existence check: cleared stays 0.
+        cleared, cleared_domains = _clear_stale_semantic_sections(store, project_scent_dir)
+        write_manifest_fingerprint(project_scent_dir, fingerprint)
+        return IngestOutcome(
+            domains=cleared_domains,
+            cleared=cleared,
+            skipped=True,
+            warnings=tuple(artifacts.warnings),
+        )
 
     schema_hash = fingerprint_from_catalog(catalog) if catalog is not None else None
     drafts = build_semantic_sections(artifacts, schema_hash)

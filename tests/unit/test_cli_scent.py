@@ -162,6 +162,43 @@ def test_scent_check_scent_dir_from_different_cwd_still_detects_drift(
     assert "schema_drift" in result.output
 
 
+def test_scent_check_from_subdir_uses_resolved_project(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare `scent check` (no --scent-dir, no LABRAT_MAZE_DIR) run from a
+    SUBDIRECTORY of the dbt project must root the store at the *resolved*
+    project path (found by walking up to dbt_project.yml), not at the raw
+    subdir cwd — otherwise it silently reports 0 domains / false OK instead
+    of the real (stale) verdict."""
+    from labrat.profile.manager import ProfileError, ProfileManager
+
+    def _raise_missing(self: ProfileManager, name: str) -> None:
+        raise ProfileError(f"Profile {name!r} not found.")
+
+    monkeypatch.setattr(ProfileManager, "get", _raise_missing)
+    monkeypatch.delenv("LABRAT_MAZE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    project = tmp_path / "proj"
+    _write_manifest(project, _manifest())
+
+    monkeypatch.chdir(project)
+    ingest_result = runner.invoke(app, ["scent", "ingest"])
+    assert ingest_result.exit_code == 0, ingest_result.output
+
+    # change the measure expr WITHOUT re-ingesting -> sidecar now stale
+    _write_manifest(project, _manifest(measure_expr="net_revenue"))
+
+    nested = project / "models" / "staging"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+
+    result = runner.invoke(app, ["scent", "check"])
+
+    assert result.exit_code == 1, result.output
+    assert "semantic_drift" in result.output
+
+
 def test_scent_check_missing_manifest_exit_1(
     runner: CliRunner, tmp_path: Path, maze_env: Path
 ) -> None:

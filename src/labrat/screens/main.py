@@ -508,6 +508,12 @@ class MainScreen(Screen[None]):
                     f"across {len(outcome.domains)} domains",
                     timeout=4,
                 )
+            elif outcome.cleared:
+                self.notify(
+                    f"cleared {outcome.cleared} stale semantic section(s) "
+                    f"across {len(outcome.domains)} domains",
+                    timeout=4,
+                )
             for w in outcome.warnings[:3]:
                 self.notify(f"dbt ingest: {w}", severity="warning", timeout=6)
         except Exception as exc:  # fail-open: chat unaffected; audit error surfaces here too
