@@ -10,6 +10,12 @@
 
 ## Global Constraints
 
+> **RIDER (2026-07-09, T1b build):** the Cartographer now stamps `schema_hash` on every
+> section (`**Meta:** schema_hash=<hex>` lines in rendered docs) — this plan's byte-identity
+> baselines predate that. "Byte-identical" claims below hold modulo the deterministic Meta
+> lines; refresh any strict byte-golden comparisons against post-T1b output when executing.
+
+
 Copied verbatim from the spec's non-negotiables — every task's requirements implicitly include these:
 
 - The benchmarked **agent runtime is unchanged** — the re-ablation baseline must stay comparable to the old 0.773; C1 touches only the Cartographer's profiling path, **never** the agent's `ctx.connections`.
