@@ -712,3 +712,12 @@ positionally aligned (full-tuple forgeries degrade to count) and `+N` counts all
 Excluded on purpose: DAB-driver host_configs migration (leaderboard path — not unattended work).
 Spec: docs/superpowers/specs/2026-07-10-session-followups-design.md; decision log:
 docs/superpowers/overnight-2026-07-10-decisions.md.
+
+## 2026-07-10 — team Scent v1 (moat extra 2.3, overnight run)
+
+Project-layer Scent is now a first-class team artifact: maze/status.py + print_status CLI
+(read-only inventory/tier/freshness/drift report), git_sha provenance stamped on harvested
+and semantic-ingested sections (None-safe; relaxes T1b byte-determinism to repo-state-
+conditioned, apply-dedup keeps original stamps), and docs/team-scent.md (commit labrat_maze/,
+PR-review learnings — audit + harvest gate + git review = three trust layers). Scoping of all
+six moat-extra candidates: docs/superpowers/overnight-2026-07-10-decisions.md D-09.
