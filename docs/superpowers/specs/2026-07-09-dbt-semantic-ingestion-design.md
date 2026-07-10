@@ -35,7 +35,7 @@ Typed models + one function:
 `build_semantic_sections(artifacts: SemanticArtifacts, schema_hash: str | None) -> dict[str, list[Section]]`:
 
 - Per semantic model: one section `heading="Semantic Model: <name>"` on domain `<table>`; body = description line + entity/dimension/measure bullets (name, type/agg, description; measure `expr` included when present).
-- Per metric: section `heading="Metric: <label-or-name>"`; **simple** metrics route to the domain of the semantic model owning their referenced measure; **ratio/derived/other** (or unresolvable measure) route to domain `"metrics"`; body = description + type + referenced measures (with owning model names when resolvable).
+- Per metric: section `heading="Metric: <label-or-name>"`; **simple** metrics route to the domain of the semantic model owning their referenced measure; **ratio/derived/other** (or unresolvable measure) route to domain `"metrics"`; body = description + type + referenced measures (annotated with the owning model's TABLE when resolvable — the table is the grounding token domains key on; amended 2026-07-09 during build, T2 review).
 - Every section: `source="semantic_layer"`, `schema_hash=schema_hash` (may be `None` when no catalog — honest unknown).
 - Deterministic ordering: models and metrics sorted by name; bullet order follows manifest order within a def.
 
