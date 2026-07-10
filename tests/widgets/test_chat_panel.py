@@ -206,15 +206,29 @@ class _GroundedFakeLoop:
 
     async def run(self, message, *, on_text=None, on_status=None, on_tool_call=None):
         if on_tool_call:
+            # Production shape: str(dispatch.value) on the tool's Pydantic _Output,
+            # which has no __str__ override — a repr, not JSON (loop.py:168). Built from
+            # the real model (post-Task-3 DocResult carries best_source/stale, both left
+            # at their defaults here: best_source="human", stale=None).
+            from labrat.agent.tools.search_reference_docs import DocResult, SectionMatch, _Output
+
+            out = _Output(
+                question="q",
+                results=[
+                    DocResult(
+                        domain="orders",
+                        quick_reference=None,
+                        sections=[
+                            SectionMatch(heading="h1", body="b1", score=1.0, matched_terms=["a"])
+                        ],
+                    )
+                ],
+            )
             on_tool_call(
                 "search_reference_docs",
                 {"question": "q"},
                 True,
-                # Production shape: str(dispatch.value) on the tool's Pydantic _Output,
-                # which has no __str__ override — a repr, not JSON (loop.py:168).
-                "question='q' results=[DocResult(domain='orders', quick_reference=None, "
-                "sections=[SectionMatch(heading='h1', body='b1', score=1.0, "
-                "matched_terms=['a'])])]",
+                str(out),
                 8.0,
             )
             on_tool_call("run_sql", {"query": "SELECT 1"}, True, '{"ok": true}', 5.0)
@@ -230,7 +244,7 @@ async def test_footer_appended_after_turn() -> None:
         await pilot.click("#user-input")
         await pilot.press(*"hi", "enter")
         await pilot.pause()
-        assert "⚑ grounded: scent ×1 (fresh) · 1 query" in panel.transcript  # noqa: RUF001
+        assert "⚑ grounded: scent: orders (human) · 1 query" in panel.transcript
 
 
 async def test_no_footer_on_plain_turn() -> None:

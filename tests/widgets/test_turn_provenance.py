@@ -86,6 +86,129 @@ def test_failed_calls_not_counted() -> None:
     assert prov.footer() is None
 
 
+def test_structured_json_renders_domain_tier_freshness() -> None:
+    prov = TurnProvenance()
+    prov.record_tool(
+        "search_reference_docs",
+        True,
+        json.dumps(
+            {
+                "question": "q",
+                "results": [
+                    {
+                        "domain": "orders",
+                        "quick_reference": None,
+                        "sections": [],
+                        "best_source": "verified",
+                        "stale": False,
+                    }
+                ],
+            }
+        ),
+    )
+    assert (prov.footer() or "").startswith("⚑ grounded: scent: orders (verified·fresh)")
+
+
+def test_structured_json_stale_and_plus_n() -> None:
+    prov = TurnProvenance()
+    payload = {
+        "question": "q",
+        "results": [
+            {
+                "domain": "orders",
+                "quick_reference": None,
+                "sections": [],
+                "best_source": "harvested",
+                "stale": True,
+            },
+            {
+                "domain": "general",
+                "quick_reference": None,
+                "sections": [],
+                "best_source": "human",
+                "stale": None,
+            },
+        ],
+    }
+    prov.record_tool("search_reference_docs", True, json.dumps(payload))
+    footer = prov.footer() or ""
+    assert "scent: orders (harvested·stale) +1" in footer
+
+
+def test_repr_shape_with_tier_fields() -> None:
+    # Production in-process shape after Task 3 (build the string from the REAL model —
+    # see the construction pattern in test_chat_panel.py's _GroundedFakeLoop fixture).
+    from labrat.agent.tools.search_reference_docs import DocResult, SectionMatch, _Output
+
+    out = _Output(
+        question="q",
+        results=[
+            DocResult(
+                domain="orders",
+                quick_reference=None,
+                # Non-empty sections matter: the nested SectionMatch(...) parens are
+                # exactly what breaks naive per-DocResult regex segmentation.
+                sections=[
+                    SectionMatch(
+                        heading="Key Tables",
+                        body="- orders",
+                        score=1.0,
+                        matched_terms=["orders"],
+                        source="verified",
+                        fresh=True,
+                    )
+                ],
+                best_source="verified",
+                stale=False,
+            )
+        ],
+    )
+    prov = TurnProvenance()
+    prov.record_tool("search_reference_docs", True, str(out))
+    assert "scent: orders (verified·fresh)" in (prov.footer() or "")
+
+
+def test_unknown_freshness_never_rendered_fresh() -> None:
+    prov = TurnProvenance()
+    prov.record_tool(
+        "search_reference_docs",
+        True,
+        json.dumps(
+            {
+                "question": "q",
+                "results": [
+                    {
+                        "domain": "orders",
+                        "quick_reference": None,
+                        "sections": [],
+                        "best_source": "verified",
+                        "stale": None,
+                    }
+                ],
+            }
+        ),
+    )
+    footer = prov.footer() or ""
+    assert "scent: orders (verified)" in footer
+    assert "fresh" not in footer and "stale" not in footer
+
+
+def test_tierless_payload_keeps_count_fallback() -> None:
+    # Old-shape JSON (no best_source key) → today's count format, global flag.
+    prov = TurnProvenance(scent_stale=True)
+    prov.record_tool(
+        "search_reference_docs",
+        True,
+        json.dumps(
+            {
+                "question": "q",
+                "results": [{"domain": "orders", "quick_reference": None, "sections": []}],
+            }
+        ),
+    )
+    assert "scent ×1 (stale)" in (prov.footer() or "")  # noqa: RUF001
+
+
 def test_verifier_outcome() -> None:
     prov = TurnProvenance()
     prov.set_verifier(rounds_used=0)
