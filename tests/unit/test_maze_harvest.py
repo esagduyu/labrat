@@ -158,3 +158,43 @@ def test_apply_idempotent_against_project_layer(tmp_path) -> None:
     apply_approved_sections(store, "general", approved)  # re-approve
     doc = store.load_domain("general", scope="project")
     assert doc is not None and len(doc.sections) == 1
+
+
+def _decision(text: str, table_scope: str | None = None) -> Memory:
+    return Memory(
+        profile="p",
+        scope=MemoryScope.global_,
+        kind=MemoryKind.explicit_user_rule,
+        text=text,
+        table_scope=table_scope,
+    )
+
+
+def test_cluster_decisions_only_explicit_rules() -> None:
+    from labrat.maze.harvest import cluster_decisions
+
+    corr = _mem("c", None, kind=MemoryKind.chat_correction)
+    clusters = cluster_decisions([_decision("attribute revenue at order time", "orders"), corr])
+    assert set(clusters) == {"orders"}  # the correction is excluded
+
+
+def test_draft_decision_sections_heading_and_source() -> None:
+    from labrat.maze.harvest import cluster_decisions, draft_decision_sections
+
+    drafts = draft_decision_sections(
+        cluster_decisions([_decision("exclude is_test from metrics", "events")]),
+        generated_at="2026-07-10T00:00:00Z",
+    )
+    sec = drafts["events"][0]
+    assert sec.heading == "Decisions" and sec.source == "harvested"
+    assert "exclude is_test from metrics" in sec.body
+
+
+def test_draft_decision_contamination_fails_loud() -> None:
+    from labrat.maze.harvest import cluster_decisions, draft_decision_sections
+
+    with pytest.raises(ScentContaminationError):
+        draft_decision_sections(
+            cluster_decisions([_decision("see ground_truth.csv", "t")]),
+            generated_at="2026-07-10T00:00:00Z",
+        )

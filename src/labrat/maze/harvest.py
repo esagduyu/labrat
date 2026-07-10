@@ -22,28 +22,37 @@ _CORRECTION_KINDS = {MemoryKind.edit_derived, MemoryKind.chat_correction}
 _GLOBAL_KEY = "__global__"
 
 
-def cluster_corrections(memories: list[Memory]) -> dict[str, list[Memory]]:
+def _cluster_by_scope(memories: list[Memory]) -> dict[str, list[Memory]]:
+    """Group memories by ``table_scope`` (``"__global__"`` for ungrouped). No kind filter."""
     clusters: dict[str, list[Memory]] = {}
     for m in memories:
-        if m.kind not in _CORRECTION_KINDS:
-            continue
         key = m.table_scope or _GLOBAL_KEY
         clusters.setdefault(key, []).append(m)
     return clusters
 
 
-def draft_harvested_sections(
+def cluster_corrections(memories: list[Memory]) -> dict[str, list[Memory]]:
+    return _cluster_by_scope([m for m in memories if m.kind in _CORRECTION_KINDS])
+
+
+def cluster_decisions(memories: list[Memory]) -> dict[str, list[Memory]]:
+    """Cluster analyst-stated durable rules (``MemoryKind.explicit_user_rule``) by scope."""
+    return _cluster_by_scope([m for m in memories if m.kind == MemoryKind.explicit_user_rule])
+
+
+def _draft_sections(
     clusters: dict[str, list[Memory]],
     *,
+    heading: str,
     generated_at: str,
     model_id: str | None = None,
 ) -> dict[str, list[Section]]:
-    """Draft harvested Gotchas sections per cluster.
+    """Shared drafting body for ``draft_harvested_sections``/``draft_decision_sections``.
 
-    Returns a dict keyed by cluster key (a ``table_scope`` value, or
-    ``"__global__"`` for the ungrouped cluster) mapping to the drafted
-    sections for that cluster (one per cluster today; list-valued for
-    future headroom). Callers map ``"__global__"`` to a Scent domain via
+    Deduped, verbatim bullets; contamination-audited fail-loud; provenance
+    ``source="harvested"``. Returns a dict keyed by cluster key (a
+    ``table_scope`` value, or ``"__global__"`` for the ungrouped cluster).
+    Callers map ``"__global__"`` to a Scent domain via
     ``harvest_controller.domain_for_cluster``.
     """
     out: dict[str, list[Section]] = {}
@@ -64,7 +73,7 @@ def draft_harvested_sections(
                 f"harvested draft for {key!r} tripped contamination guard: {hit}"
             )
         section = Section(
-            heading="Gotchas",
+            heading=heading,
             body=body,
             source="harvested",
             generated_at=generated_at,
@@ -72,6 +81,41 @@ def draft_harvested_sections(
         )
         out.setdefault(key, []).append(section)
     return out
+
+
+def draft_harvested_sections(
+    clusters: dict[str, list[Memory]],
+    *,
+    generated_at: str,
+    model_id: str | None = None,
+) -> dict[str, list[Section]]:
+    """Draft harvested Gotchas sections per cluster.
+
+    Returns a dict keyed by cluster key (a ``table_scope`` value, or
+    ``"__global__"`` for the ungrouped cluster) mapping to the drafted
+    sections for that cluster (one per cluster today; list-valued for
+    future headroom). Callers map ``"__global__"`` to a Scent domain via
+    ``harvest_controller.domain_for_cluster``.
+    """
+    return _draft_sections(
+        clusters, heading="Gotchas", generated_at=generated_at, model_id=model_id
+    )
+
+
+def draft_decision_sections(
+    clusters: dict[str, list[Memory]],
+    *,
+    generated_at: str,
+    model_id: str | None = None,
+) -> dict[str, list[Section]]:
+    """Draft harvested Decisions sections per cluster.
+
+    Structurally identical to ``draft_harvested_sections`` except heading
+    ``"Decisions"`` — analyst-stated durable rules, drafted verbatim.
+    """
+    return _draft_sections(
+        clusters, heading="Decisions", generated_at=generated_at, model_id=model_id
+    )
 
 
 def apply_approved_sections(

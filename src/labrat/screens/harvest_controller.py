@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from labrat.maze.document import Section
+    from labrat.maze.store import MazeStore
     from labrat.memory.model import Memory
 
 
@@ -45,6 +46,66 @@ def review_corrections(
 def domain_for_cluster(key: str) -> str:
     """Map a cluster key to a Scent domain doc name (``__global__`` → ``general``)."""
     return "general" if key == "__global__" else key
+
+
+def filter_unpromoted_decisions(memories: list[Memory], store: MazeStore) -> list[Memory]:
+    """Drop decision memories already promoted into their target domain's Decisions section.
+
+    For each decision memory, the target domain is
+    ``domain_for_cluster(m.table_scope or "__global__")``. Loads that domain's
+    PROJECT-layer doc (never the merged view — mirrors ``apply_approved_sections``'s
+    layer discipline), collects the bullets of any section headed "Decisions"
+    (body split on newlines, leading ``"- "`` stripped), and drops a decision
+    whose ``text.strip()`` matches an existing bullet. Order is preserved.
+    """
+    domain_bullets: dict[str, set[str]] = {}
+    survivors: list[Memory] = []
+    for m in memories:
+        domain = domain_for_cluster(m.table_scope or "__global__")
+        if domain not in domain_bullets:
+            bullets: set[str] = set()
+            doc = store.load_domain(domain, scope="project")
+            if doc is not None:
+                for s in doc.sections:
+                    if s.heading.strip() != "Decisions":
+                        continue
+                    for line in s.body.split("\n"):
+                        line = line.strip()
+                        if line.startswith("- "):
+                            line = line[2:]
+                        if line:
+                            bullets.add(line.strip())
+            domain_bullets[domain] = bullets
+        if m.text.strip() not in domain_bullets[domain]:
+            survivors.append(m)
+    return survivors
+
+
+def review_decisions(
+    memories: list[Memory],
+    store: MazeStore,
+    *,
+    generated_at: str,
+    model_id: str | None = None,
+) -> dict[str, list[Section]]:
+    """Filter already-promoted decisions, cluster the rest, and draft Decisions sections."""
+    from labrat.maze.harvest import cluster_decisions, draft_decision_sections
+
+    return draft_decision_sections(
+        cluster_decisions(filter_unpromoted_decisions(memories, store)),
+        generated_at=generated_at,
+        model_id=model_id,
+    )
+
+
+def merge_drafts(
+    a: dict[str, list[Section]], b: dict[str, list[Section]]
+) -> dict[str, list[Section]]:
+    """Concat drafted sections per domain: all domains from both, ``a``'s sections then ``b``'s."""
+    merged: dict[str, list[Section]] = {}
+    for domain in dict.fromkeys([*a, *b]):
+        merged[domain] = [*a.get(domain, []), *b.get(domain, [])]
+    return merged
 
 
 def harvesting_enabled(is_interactive: bool, profile_opt_in: bool) -> bool:
