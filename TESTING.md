@@ -1240,3 +1240,38 @@ Setup: `Ctrl+,` → toggle "Trails (save-as-Trail)" ON → Save.
 - [ ] Saved Trail file has `kind: trail` frontmatter and all 5 sections
 - [ ] A fresh session's matching-intent question triggers `search_trails` and surfaces the
       saved Trail's content
+
+## Decision-trail (v1) — explicit decision capture (manual gate)
+
+**Goal:** let an analyst deliberately record a durable decision ("we exclude test orders from
+revenue") without waiting for the correction-harvesting loop to infer one — captured verbatim,
+no LLM, gated behind the same `harvest_opt_in` toggle as the rest of the harvest surface.
+
+Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle "Harvesting" → Save).
+
+1. Press **Ctrl+Shift+D** → the "Record a Decision" modal opens. Type a decision (e.g. "Always
+   exclude test orders from revenue metrics"), press **Ctrl+S** (or click Save) → toast
+   `🧭 Decision recorded`; the modal closes back to the main screen. Nothing else happens yet —
+   the decision is persisted immediately (durable) but not yet promoted to Scent.
+2. Press **Ctrl+Shift+H** ("Harvest") → the review modal lists a `Decisions` row (domain
+   `general`, or the table name if a query was active) alongside any drafted `Gotchas` rows.
+   Apply → success toast; verify `./labrat_maze/scent/<domain>.md` gained a
+   `## Decisions` / `**Source:** harvested` section with your decision's text as a bullet.
+3. Re-run Ctrl+Shift+H → the same decision does NOT redraft (already-promoted decisions are
+   filtered out — `filter_unpromoted_decisions` checks the Decisions section's existing bullets).
+4. Ask in chat about the decision's topic → `search_reference_docs` should retrieve the new
+   `Decisions` section (same retrieval path as harvested Gotchas — no scorer changes for this
+   feature).
+5. Gate check: `Ctrl+,` → toggle "Harvesting" OFF → Save. Press **Ctrl+Shift+D** → expect the
+   toast "Enable harvesting in Settings (Ctrl+,) to record decisions." and confirm no modal
+   opens and nothing is written to the memory store.
+
+**Check:**
+- [ ] Harvesting OFF (default) → `Ctrl+Shift+D` writes nothing, only notifies
+- [ ] Harvesting ON → `Ctrl+Shift+D` → typed text lands verbatim as an `explicit_user_rule`
+      Memory, persisted immediately (survives even if harvest-review is never run)
+- [ ] `Ctrl+Shift+H` review modal shows a `Decisions` draft next to harvested `Gotchas`
+- [ ] Approving writes a `## Decisions` section (`**Source:** harvested`) to the domain's Scent
+      doc; re-harvesting the same decision is a no-op (already-promoted filter)
+- [ ] A fresh session's matching-topic question retrieves the recorded decision via
+      `search_reference_docs`

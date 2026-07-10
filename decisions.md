@@ -803,3 +803,35 @@ paid, team-scale complement that makes it *operate* automatically at team scale 
 relying on every contributor to remember to re-ingest by hand. Design:
 `docs/superpowers/specs/2026-07-10-dbt-ci-pairing-design.md`; plan (3 tasks, this entry covers
 all three): `docs/superpowers/plans/2026-07-10-dbt-ci-pairing.md`.
+
+## 2026-07-10 — Decision-trail harvesting (moat extra 2.5): explicit decision capture
+
+Adds a second, explicit source into the existing correction-harvesting pipeline: an analyst can
+now *state* a durable decision directly (`Ctrl+Shift+D`, "Record a Decision" modal in the TUI)
+instead of only relying on the harvester inferring one from a chat correction or an edited SQL
+diff. Deliberately **no LLM anywhere in this path** — the typed text is captured verbatim as a
+`Memory(kind=explicit_user_rule, scope=global_, table_scope=resolve_table_scope(last_sql,
+known_tables))` and appended to the `MemoryStore` **immediately** on save (not buffered like
+chat/edit corrections), because a decision is a deliberate analyst action that must survive even
+if the session ends before the next harvest-review pass. Gated on the same `Profile.
+harvest_opt_in` toggle as the rest of the harvest surface (default **off**) — no new opt-in flag.
+
+Task 1 (`maze/harvest.py::cluster_decisions`/`draft_decision_sections`,
+`screens/harvest_controller.py::review_decisions`/`filter_unpromoted_decisions`/`merge_drafts`)
+mirrors the correction-drafting pipeline exactly but keyed on `MemoryKind.explicit_user_rule`
+and headed `## Decisions` instead of `## Gotchas`; `filter_unpromoted_decisions` makes
+re-harvesting idempotent by diffing against the target domain's *project-layer* Decisions
+bullets before drafting, so an already-promoted decision never redrafts. Task 2 (this entry)
+is pure TUI wiring: new `screens/record_decision.py::RecordDecisionScreen` (mirrors
+`TrailReviewScreen`'s/`HarvestReviewScreen`'s modal shape — Static title, a TextArea, Save/
+Cancel) plus `MainScreen.action_record_decision` (`Ctrl+Shift+D`, free chord — no fallback key
+needed) and a small addition inside `_run_harvest_review`: it now also reads the profile's
+memories through `review_decisions`, and `merge_drafts` concatenates the decision drafts with
+the existing correction (Gotchas) drafts before they reach `HarvestReviewScreen` — so a single
+Ctrl+Shift+H pass reviews both kinds of learning side by side, with the same audited
+`apply_approved_sections` write path and the same fail-loud contamination guard. Approved
+Decisions sections retrieve through the existing `search_reference_docs` Scent lookup — no
+retrieval-scorer change, since a Decisions section is structurally identical to a Gotchas
+section (same `Section` model, same store, same trust-tier provenance). Design:
+`docs/superpowers/specs/2026-07-10-decision-trail-harvesting-design.md`; plan (2 tasks, this
+entry covers Task 2): `docs/superpowers/plans/2026-07-10-decision-trail-harvesting.md`.
