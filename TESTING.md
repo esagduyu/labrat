@@ -1211,3 +1211,32 @@ LabRat, no network, needed to view it.
       leak row values
 - [ ] Rollback moves the `current` pointer without deleting or rewriting any version file
 - [ ] Re-export continues the version sequence (never overwrites an existing `v<N>.html`)
+
+## Trail (v1) — save-as-Trail (manual gate)
+
+**Goal:** promote a completed, pinned analysis into a named, intent-retrieved Trail —
+read-as-guidance, never auto-executed — that a later `search_trails` call can surface.
+
+Setup: `Ctrl+,` → toggle "Trails (save-as-Trail)" ON → Save.
+
+1. Run a query in chat that produces a real answer (ideally a note added via the results
+   pane), then pin it (existing M18 pin flow) and open the Findings viewer (**Ctrl+K**).
+2. Highlight the pinned finding, press **t** (or click "Save as Trail") → the review screen
+   opens showing the 5 drafted sections: When to use / Steps / Reference SQL / Validations /
+   Gotchas. Edit the **Steps** body to spell out the ordered steps a rat should follow.
+3. Press **a** (Approve & save) → toast `🥾 Trail saved: <slug>`; the review screen closes back
+   to the Findings viewer. Verify `./labrat_maze/trail/<slug>.md` exists on disk with
+   `kind: trail` frontmatter and your edited Steps body.
+4. Start a fresh session (or restart `uv run labrat`) and ask a matching-intent question in
+   chat → expect a `search_trails` trace in the tool log and the retrieved Trail's guidance
+   reflected in the answer (not silently ignored).
+5. Gate check: `Ctrl+,` → toggle Trails OFF → Save. Back in the Findings viewer, press **t** on
+   a pinned finding → expect the toast "Enable Trails in Settings (ctrl+,) to save." and
+   confirm no new file appears under `labrat_maze/trail/`.
+
+**Check:**
+- [ ] Trails OFF (default) → `t` writes nothing, only notifies
+- [ ] Trails ON → `t` → review screen → edited Steps land verbatim in the saved `.md`
+- [ ] Saved Trail file has `kind: trail` frontmatter and all 5 sections
+- [ ] A fresh session's matching-intent question triggers `search_trails` and surfaces the
+      saved Trail's content

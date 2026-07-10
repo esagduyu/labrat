@@ -38,7 +38,11 @@ def referenced_tables(sql: str) -> list[str]:
     seen: dict[str, None] = {}
     for t in parsed.find_all(exp.Table):
         name = t.name
-        if name and name not in cte_names:
+        # A schema/catalog-qualified reference (e.g. raw.events) is never a bare
+        # CTE alias reference, even when its unqualified name collides with one
+        # (WITH events AS (...) ... FROM raw.events must still surface raw.events).
+        qualified = bool(t.db) or bool(t.catalog)
+        if name and (qualified or name not in cte_names):
             seen.setdefault(name, None)
     return list(seen)
 

@@ -37,6 +37,7 @@ class Profile(BaseModel):
     agent_provider: Literal["auto", "anthropic", "claude-code", "openai", "codex"] = "auto"
     agent_model: str | None = None
     harvest_opt_in: bool = False
+    trail_opt_in: bool = False
     verify_enabled: bool = False
     # dbt project root (T1b semantic ingestion); None = no dbt project
     dbt_project_path: str | None = None

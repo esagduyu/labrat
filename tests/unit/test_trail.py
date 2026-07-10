@@ -63,6 +63,15 @@ def test_referenced_tables_excludes_cte_alias():
     assert tables == ["events"]
 
 
+def test_referenced_tables_keeps_qualified_ref_sharing_a_cte_name():
+    # A schema-qualified real table (raw.events) must not be dropped just because
+    # its bare name collides with a CTE alias (events) — only the CTE's own bare
+    # self-reference in the final SELECT is a CTE ref and gets excluded.
+    tables = referenced_tables("WITH events AS (SELECT * FROM raw.events) SELECT * FROM events")
+    assert tables == ["events"]
+    assert tables != []
+
+
 def test_applicable_validations_table_and_global():
     rules = [
         ValidationRule(
