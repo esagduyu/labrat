@@ -1179,3 +1179,18 @@ Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle → Save). Chat needs
    the same domain's footer tier stays the doc's best tier (verified, from the
    Cartographer sections) and the merged answer includes the harvested gotcha even
    immediately after a Ctrl+Shift+M scent refresh (the I2 shadow is gone).
+
+## T1b — dbt semantic ingestion (manual gate)
+
+Setup: profile with `dbt_project_path` set (Ctrl+, → "dbt project"), pointing at a dbt project
+whose `target/manifest.json` contains `semantic_models` (run `dbt parse` first).
+
+1. Connect → "semantic layer ingested · N sections across M domains" toast; verify
+   `./labrat_maze/scent/<table>.md` files carry `**Source:** semantic_layer` sections with
+   `**Meta:** schema_hash=…`.
+2. Reconnect → silent (fingerprint unchanged).
+3. Edit a metric description in the dbt project, `dbt parse`, reconnect → drift warning toast;
+   press F9 → confirm → sections replaced (old description gone), harvested/human sections in
+   the same docs untouched.
+4. Ask about a semantic-model table in chat → footer shows `scent: <table> (semantic_layer·fresh)`.
+5. No dbt path configured → no toasts, no `metrics.md`, nothing ingested.
