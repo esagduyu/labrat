@@ -12,8 +12,11 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from labrat.agent.tools.base import Tool, ToolContext
+from labrat.db.catalog import Catalog
 from labrat.maze._lexical import question_tokens, stem
 from labrat.maze.document import Section
+from labrat.maze.provenance import best_source
+from labrat.maze.staleness import fingerprint_from_catalog
 from labrat.maze.store import MazeStore
 
 
@@ -33,12 +36,16 @@ class SectionMatch(BaseModel):
     body: str
     score: float
     matched_terms: list[str]
+    source: str = "human"
+    fresh: bool | None = None  # None = no schema_hash meta / no catalog → unknown
 
 
 class DocResult(BaseModel):
     domain: str
     quick_reference: str | None
     sections: list[SectionMatch]
+    best_source: str = "human"
+    stale: bool | None = None  # any section fresh=False → True; all None → None
 
 
 class _Output(BaseModel):
@@ -80,6 +87,9 @@ class SearchReferenceDocsTool(Tool[_Input]):
         q_stems = _stems(args.question)
         stem_to_term = {stem(t): t for t in question_tokens(args.question)}
 
+        catalog = ctx.catalogs.get(ctx.primary) if ctx.catalogs else None
+        current_fp = fingerprint_from_catalog(catalog) if isinstance(catalog, Catalog) else None
+
         hits: list[_Hit] = []
         for doc in docs:
             for idx, section in enumerate(doc.sections):
@@ -120,6 +130,12 @@ class SearchReferenceDocsTool(Tool[_Input]):
                     body=h.section.body,
                     score=h.score,
                     matched_terms=h.matched,
+                    source=h.section.source,
+                    fresh=(
+                        None
+                        if current_fp is None or h.section.schema_hash is None
+                        else h.section.schema_hash == current_fp
+                    ),
                 )
             )
 
@@ -129,5 +145,14 @@ class SearchReferenceDocsTool(Tool[_Input]):
             qr = qr_by_domain.get(dr.domain)
             if qr is not None and all(s.heading != qr.heading for s in dr.sections):
                 dr.quick_reference = qr.body
+
+        for dr in results:
+            dr.best_source = best_source([s.source for s in dr.sections])
+            freshes = [s.fresh for s in dr.sections]
+            if any(f is False for f in freshes):
+                dr.stale = True
+            elif any(f is True for f in freshes):
+                dr.stale = False
+            # else: all None → stale stays None
 
         return _Output(question=args.question, results=results)

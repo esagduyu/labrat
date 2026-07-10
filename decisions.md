@@ -653,3 +653,15 @@ explain_lineage, run_sql count) plus AgentLoop.verify_rounds_used. Verification 
 the loop sufficiency LLMVerifier only (Profile.verify_enabled, wired in M1); K-of-N consensus
 remains benchmark-only per spec D7 (ablated within-noise, wrong shape for interactive chat).
 No agent/maze core changes in this phase.
+
+## 2026-07-09 — Scent read-model v2 + provenance-rich footer
+
+MazeStore.docs() now unions sections per domain across layers (user→project, body-dedup)
+instead of whole-doc project-wins, and apply_approved_sections loads/writes the project
+layer only — the I2 shadow class (harvest-apply freezing Cartographer content) is
+impossible by construction, clearing the path for T1b semantic-layer sections to share
+domains. search_reference_docs gains additive per-section source/fresh and per-doc
+best_source/stale (computed in-tool from ctx catalogs vs Section schema_hash meta); the
+M4 footer renders `scent: <domain> (<tier>·<freshness>) +N` when that data is present and
+degrades to the old count format otherwise. Spec:
+docs/superpowers/specs/2026-07-09-scent-read-model-v2-design.md.

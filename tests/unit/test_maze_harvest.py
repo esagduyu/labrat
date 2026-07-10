@@ -116,3 +116,45 @@ def test_draft_fails_loud_on_mixed_clean_and_contaminated() -> None:
     )
     with pytest.raises(ScentContaminationError):
         draft_harvested_sections(clusters, generated_at="2026-07-06T00:00:00Z")
+
+
+def test_apply_never_copies_user_layer_content(tmp_path) -> None:
+    # Non-negotiable #2: user-layer (Cartographer) sections must not be written project-side.
+    from labrat.maze.document import ScentDoc, Section, render_document
+    from labrat.maze.harvest import apply_approved_sections
+    from labrat.maze.store import MazeStore
+
+    store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="p1")
+    user_dir = tmp_path / "home" / ".labrat" / "maze" / "p1" / "scent"
+    user_dir.mkdir(parents=True)
+    cart = ScentDoc(
+        domain="orders",
+        sections=[Section(heading="Key Tables", body="- orders: 8 rows", source="verified")],
+    )
+    (user_dir / "orders.md").write_text(render_document(cart), encoding="utf-8")
+
+    apply_approved_sections(
+        store,
+        "orders",
+        [Section(heading="Gotchas", body="- exclude test orders", source="harvested")],
+    )
+
+    project_doc = store.load_domain("orders", scope="project")
+    assert project_doc is not None
+    assert [s.heading for s in project_doc.sections] == ["Gotchas"]  # NO Key Tables copy
+    merged = store.load_domain("orders")
+    assert merged is not None
+    assert {s.heading for s in merged.sections} == {"Key Tables", "Gotchas"}
+
+
+def test_apply_idempotent_against_project_layer(tmp_path) -> None:
+    from labrat.maze.document import Section
+    from labrat.maze.harvest import apply_approved_sections
+    from labrat.maze.store import MazeStore
+
+    store = MazeStore(project_root=tmp_path / "proj", home=tmp_path / "home", profile="p1")
+    approved = [Section(heading="Gotchas", body="- dates are UTC", source="harvested")]
+    apply_approved_sections(store, "general", approved)
+    apply_approved_sections(store, "general", approved)  # re-approve
+    doc = store.load_domain("general", scope="project")
+    assert doc is not None and len(doc.sections) == 1

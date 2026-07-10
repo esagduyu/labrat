@@ -1168,7 +1168,14 @@ Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle → Save). Chat needs
    status line appears and the agent continues; final answer then carries `verifier ✓ (1 round)`
    in its footer. With a good first answer the footer shows `verifier ✓`.
 2. Ask "any reference notes on orders? then count the orders" → footer like
-   `⚑ grounded: scent ×1 (fresh) · 1 query`.
-3. Corrupt `.schema_fingerprint` (see M2 gate) and relaunch → the same flow shows `scent ×1 (stale)`.
+   `⚑ grounded: scent: orders (verified) · 1 query`.
+3. Corrupt `.schema_fingerprint` (see M2 gate) and relaunch → the boot toast warns about the
+   schema change (M2), but the footer still shows `scent: orders (verified)` with no freshness
+   word — per-section freshness needs `schema_hash` meta, which no writer stamps yet (the
+   global stale flag is fallback-only and unreachable on the normal enriched path).
 4. A pure-prose turn (e.g. "thanks") → no footer line at all.
 5. Verify OFF (default): no verifier segment ever appears in footers.
+6. Harvest a correction into `orders` (M3 gate steps 1–2), then re-ask about orders →
+   the same domain's footer tier stays the doc's best tier (verified, from the
+   Cartographer sections) and the merged answer includes the harvested gotcha even
+   immediately after a Ctrl+Shift+M scent refresh (the I2 shadow is gone).

@@ -28,7 +28,9 @@ def test_reads_both_layers_and_tags_scope(tmp_path: Path) -> None:
     assert by_domain["events"].scope == "user"
 
 
-def test_project_wins_on_domain_conflict(tmp_path: Path) -> None:
+def test_domain_conflict_unions_sections_user_first(tmp_path: Path) -> None:
+    # v2: whole-doc "project wins" precedence replaced by per-section UNION
+    # (user layer first, project second; scope becomes "merged" when both contribute).
     project = tmp_path / "proj"
     home = tmp_path / "home"
     _write(
@@ -42,8 +44,8 @@ def test_project_wins_on_domain_conflict(tmp_path: Path) -> None:
 
     docs = MazeStore(project_root=project, home=home, profile="acme").docs()
     assert len(docs) == 1
-    assert docs[0].scope == "project"
-    assert docs[0].sections[0].heading == "P"
+    assert docs[0].scope == "merged"
+    assert [s.heading for s in docs[0].sections] == ["U", "P"]
 
 
 def test_missing_dirs_yield_empty(tmp_path: Path) -> None:
