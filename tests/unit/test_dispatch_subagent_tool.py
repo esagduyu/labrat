@@ -69,7 +69,8 @@ class _CapturingRunner:
 
 
 async def test_seed_sections_and_passthrough(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))  # empty store → no Scent section
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))  # empty store → no Scent section
     runner = _CapturingRunner()
     ctx = ToolContext(subagent_runner=runner)
     tool = DispatchSubagentTool()
@@ -97,6 +98,7 @@ async def test_seed_includes_scent_when_docs_exist(tmp_path, monkeypatch) -> Non
     from labrat.maze.document import ScentDoc, Section, render_document
 
     monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
     scent = tmp_path / "labrat_maze" / "scent"
     scent.mkdir(parents=True)
     doc = ScentDoc(
@@ -128,6 +130,7 @@ async def test_scent_notes_nonempty_for_seeded_store(tmp_path, monkeypatch) -> N
     from labrat.maze.document import ScentDoc, Section, render_document
 
     monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
     scent = tmp_path / "labrat_maze" / "scent"
     scent.mkdir(parents=True)
     doc = ScentDoc(
@@ -141,7 +144,10 @@ async def test_scent_notes_nonempty_for_seeded_store(tmp_path, monkeypatch) -> N
     assert "exclude test orders" in notes
 
 
-async def test_runner_exception_fails_open() -> None:
+async def test_runner_exception_fails_open(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
+
     class _Boom:
         async def __call__(self, **_: object) -> tuple[str, int, int]:
             raise RuntimeError("provider melted")
