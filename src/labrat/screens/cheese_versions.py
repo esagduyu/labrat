@@ -65,6 +65,8 @@ class CheeseVersionsScreen(ModalScreen[None]):
                 )
                 list_view.append(ListItem(Label(label)))
                 self._rows.append((manifest.cheese_id, v.n))
+        if self._rows:
+            list_view.index = 0
         self.query_one("#status", Label).update("" if self._rows else "No Cheese exports yet.")
 
     def _selected_row(self) -> tuple[str, int] | None:

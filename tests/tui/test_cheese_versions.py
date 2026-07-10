@@ -49,6 +49,10 @@ async def test_viewer_report_export_and_single_export(tmp_path: Path, monkeypatc
         await pilot.pause()
         await pilot.press("x")  # single export: the row-0 (default cursor) finding
         await pilot.pause()
+        # H1: uppercase literal "E" (real Shift+E) — not "shift+e", which never fires from a
+        # real keyboard. Same finding set → new version on the existing report Cheese.
+        await pilot.press("E")
+        await pilot.pause()
 
     cheese_root = tmp_path / "cheese"
     cheese_dirs = [d for d in cheese_root.iterdir() if d.is_dir()]
@@ -62,6 +66,7 @@ async def test_viewer_report_export_and_single_export(tmp_path: Path, monkeypatc
 
     report = next(m for m in manifests if m.kind == "report")
     assert len(report.finding_ids) == 2
+    assert any(v.rows_mode == "none" for v in report.versions)
 
     single = next(m for m in manifests if m.kind == "single")
     assert len(single.finding_ids) == 1
@@ -89,8 +94,9 @@ async def test_versions_screen_lists_and_rolls_back(tmp_path: Path, monkeypatch)
         from textual.widgets import ListView
 
         list_view = modal.query_one("#versions-list", ListView)
-        list_view.index = 0  # select v1
-        await pilot.press("r")  # rollback to v1
+        # L1 pin: _refresh must select row 0 on its own — r works immediately, no arrow press.
+        assert list_view.index == 0
+        await pilot.press("r")  # rollback to v1 (row 0), no prior arrow press
         await pilot.pause()
 
     got = cs.get(m.cheese_id)

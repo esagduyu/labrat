@@ -23,8 +23,8 @@ class FindingsViewerScreen(ModalScreen[None]):
         Binding("d", "delete_selected", "Delete", show=True),
         Binding("e", "export_html", "Export Report", show=True),
         Binding("x", "export_selected", "Export Finding", show=True),
-        Binding("shift+e", "export_html_no_rows", "Report (no rows)", show=False),
-        Binding("shift+x", "export_selected_no_rows", "Finding (no rows)", show=False),
+        Binding("E", "export_html_no_rows", "Report (no rows)", show=False),
+        Binding("X", "export_selected_no_rows", "Finding (no rows)", show=False),
         Binding("v", "cheese_versions", "Versions", show=True),
     ]
 
