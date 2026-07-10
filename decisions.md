@@ -689,3 +689,14 @@ hosts self-error structurally), sub-registry derived from the HOSTING registry m
 connections/ledger substrate, budgets clamped 1-8 turns / 1-15 calls, and a ledger_payload
 return so oversized sub-results bound through the parent ledger like any other output.
 Spec: docs/superpowers/specs/2026-07-09-dispatch-subagent-design.md.
+
+## 2026-07-09 — T2a: MCP Tools Mode hardening
+
+The MCP server gains profile-backed multi-warehouse connections (`LABRAT_MCP_PROFILES` →
+ProfileManager/make_connection, all 7 adapters, keyring at runtime; DuckDB+Postgres launch
+pair) additively beside the byte-compatible legacy `LABRAT_MCP_CONNECTIONS` (DAB invariant),
+threads read_only (safety-first derivation) + profile_name into the served ctx, and ships
+host config generators (`python -m labrat.mcp.print_config --host claude-code|codex|generic`)
++ docs/labrat-tools.md. Carved from the deferred full-stack plan's M5 (the TUI-provider tail
+was already shipped as TUI-M1). Follow-up: migrate the DAB driver's inline mcp-config dict
+onto host_configs.
