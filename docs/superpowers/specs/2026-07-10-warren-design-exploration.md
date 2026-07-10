@@ -1,4 +1,6 @@
-# Warren — Design Exploration (RFC, not a locked spec)
+# Warren — Design Exploration (RFC)
+
+> **SUPERSEDED 2026-07-10** by `2026-07-10-map-domain-bundles-design.md`. The domain-bundle layer is now named **Map** (not Warren); shape settled = reference-pointers + Cartographer-auto-seed-from-dbt + activation-as-retrieval-filter (additive). This RFC is kept as the reasoning trail.
 
 **Date:** 2026-07-10 · **Status:** DESIGN EXPLORATION for user review — frames the decision space + a recommended v1; the core-shape decisions (W1–W3) are product-vision calls the user should make before this becomes an implementable spec. Produced autonomously (weekend run) as a starting artifact, deliberately NOT a full spec.
 **What Warren is (north-star §8, canonical):** "a domain area of the maze — a bundle of Trails + grounding (Scent) for one domain, packaging suggested prompts" (= Meta **Cookbook**). It is the **aggregation layer** over the now-shipped Scent + Trail: `Scent → Trail → Warren`. The `warren` kind is already reserved in `maze/document.py`/`store.py` (forward-compatible; zero code today).
