@@ -48,7 +48,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    print(text)
+    if not text.endswith("\n"):
+        text += "\n"
+    sys.stdout.write(text)
     return 0
 
 

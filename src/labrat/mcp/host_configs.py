@@ -69,13 +69,16 @@ def render_host_config(host: str, server: dict[str, object]) -> str:
 
 
 def _toml_string(value: str) -> str:
-    # Guard: a bare `"` would break out of the TOML basic-string quoting we
-    # string-build below (no escaping is implemented), so reject rather than
-    # silently emit malformed TOML. Inputs here are paths/profile names/JSON
-    # blobs, none of which are expected to contain a literal `"` in practice.
-    if '"' in value:
-        raise ValueError(f"value contains a double quote, not supported in TOML output: {value!r}")
-    return f'"{value}"'
+    # TOML basic strings can't hold raw control characters (even escaped),
+    # so reject those loudly rather than emit broken TOML — this is the only
+    # class of input we can't represent. Everything else (including `"` and
+    # `\`) is escaped per the TOML basic-string rules below.
+    if any(ord(c) < 0x20 for c in value):
+        raise ValueError(
+            f"value contains a control character, not supported in TOML output: {value!r}"
+        )
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _render_codex_toml(server: dict[str, object]) -> str:

@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -40,6 +41,21 @@ def test_codex_toml_shape() -> None:
     assert 'LABRAT_MCP_PROFILES = "w"' in text
 
 
+def test_codex_toml_connections_json_round_trips() -> None:
+    connections_json = '{"main": {"db_type": "duckdb", "db_path": "/x.duckdb"}}'
+    server = build_mcp_server_config(connections_json=connections_json)
+    text = render_host_config("codex", server)
+    parsed = tomllib.loads(text)
+    assert parsed["mcp_servers"]["labrat"]["env"]["LABRAT_MCP_CONNECTIONS"] == connections_json
+
+
+def test_toml_string_control_char_raises() -> None:
+    from labrat.mcp.host_configs import _toml_string
+
+    with pytest.raises(ValueError):
+        _toml_string("bad\nvalue")
+
+
 def test_unknown_host_raises() -> None:
     with pytest.raises(ValueError):
         render_host_config("cursor", build_mcp_server_config(profiles=["w"]))
@@ -61,6 +77,29 @@ def test_cli_smoke() -> None:
     )
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["mcpServers"]["labrat"]["env"]["LABRAT_MCP_PROFILES"] == "w1"
+
+
+def test_cli_smoke_codex_connections_json() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "labrat.mcp.print_config",
+            "--host",
+            "codex",
+            "--connections-json",
+            '{"m": {"db_type": "duckdb", "db_path": "/x"}}',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    parsed = tomllib.loads(proc.stdout)
+    assert (
+        parsed["mcp_servers"]["labrat"]["env"]["LABRAT_MCP_CONNECTIONS"]
+        == '{"m": {"db_type": "duckdb", "db_path": "/x"}}'
+    )
+    assert proc.stdout.endswith("\n") and not proc.stdout.endswith("\n\n")
 
 
 def test_cli_bad_host_exit_2() -> None:
