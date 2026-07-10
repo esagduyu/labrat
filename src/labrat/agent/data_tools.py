@@ -32,7 +32,10 @@ from labrat.agent.tools.workflow import WorkflowTool
 
 
 def build_data_tools_registry(
-    include_program: bool = True, *, run_sql_tool: RunSqlTool | None = None
+    include_program: bool = True,
+    *,
+    include_dispatch: bool = True,
+    run_sql_tool: RunSqlTool | None = None,
 ) -> ToolRegistry:
     """Return a registry with the standard read-only data-access tools.
 
@@ -49,9 +52,17 @@ def build_data_tools_registry(
 
     ``include_program`` (default True) registers the run_program pipeline tool.
     RunProgramTool builds its own step-dispatch registry with
-    ``include_program=False`` at execute time, so a program can never dispatch
-    run_program (no nested programs / recursion by construction). Constructing
-    the tool here builds NO registry — no construction recursion.
+    ``include_program=False`` AND ``include_dispatch=False`` at execute time, so
+    a program can never dispatch run_program (no nested programs / recursion by
+    construction) nor dispatch_subagent (closes the confused-deputy path where a
+    parent's ``run_program`` step would otherwise launder the dispatch tool back
+    in via the interpreter's use of the parent ctx — one parent step could
+    launch up to 20 sub-agent dispatches per program call). Constructing the
+    tool here builds NO registry — no construction recursion.
+
+    ``include_dispatch`` (default True) registers the dispatch_subagent tool.
+    Set False for a step-dispatch sub-registry (see above) or any other host
+    that must not expose sub-agent dispatch regardless of ``ctx.subagent_runner``.
 
     ``run_sql_tool`` lets a caller supply its own callback-wired ``RunSqlTool``
     instance (``on_result``/``on_draft``) — e.g. the TUI, which needs to react to
@@ -82,7 +93,8 @@ def build_data_tools_registry(
     registry.register(LoadMongoCollectionTool())
     registry.register(LlmExtractTool())
     registry.register(LlmClassifyTool())
-    registry.register(DispatchSubagentTool())
+    if include_dispatch:
+        registry.register(DispatchSubagentTool())
     if include_program:
         registry.register(RunProgramTool())
     return registry

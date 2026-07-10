@@ -5,7 +5,9 @@ steps with handle binding; the interpreter runs them sequentially and
 materializes intermediate tables as DuckDB temp tables (``program_<bind>``) —
 only the bounded ProgramResult summary returns to model context. Safe by
 construction: steps dispatch through the standard registry MINUS run_program
-itself (no nested programs), so every existing gate applies per step.
+itself (no nested programs) AND MINUS dispatch_subagent (no laundering a
+parent ctx's subagent_runner into up to 20 sub-agent dispatches per program
+call), so every existing gate applies per step.
 """
 
 from __future__ import annotations
@@ -37,7 +39,8 @@ class RunProgramTool(Tool[Program]):
             "$handle.field is a scalar field of that step's output. Steps run "
             "sequentially and stop on the first error. Intermediate results stay in "
             "temp tables — only a bounded per-step summary returns; query final_table "
-            "with run_sql to read the data. Programs cannot call run_program."
+            "with run_sql to read the data. Programs cannot call run_program or "
+            "dispatch_subagent."
         )
 
     @property
@@ -82,8 +85,13 @@ class RunProgramTool(Tool[Program]):
         # register the tool, so a top-level reverse import would be circular.
         # The sub-registry is built at EXECUTE time and EXCLUDES run_program —
         # a step {"tool": "run_program"} is an unknown-tool error (no nested
-        # programs / recursion by construction).
+        # programs / recursion by construction) — AND dispatch_subagent: the
+        # interpreter runs steps against the PARENT ctx (which may carry a
+        # subagent_runner), so leaving dispatch_subagent in this sub-registry
+        # would let one run_program call launder up to 20 sub-agent dispatches
+        # back in. A step {"tool": "dispatch_subagent"} is likewise an
+        # unknown-tool error, regardless of ctx.subagent_runner.
         from labrat.agent.data_tools import build_data_tools_registry
 
-        registry = build_data_tools_registry(include_program=False)
+        registry = build_data_tools_registry(include_program=False, include_dispatch=False)
         return await run_program(args, ctx, registry, max_steps=DEFAULT_MAX_STEPS)
