@@ -58,6 +58,11 @@ def test_referenced_tables():
     assert set(tables) == {"events", "users"}
 
 
+def test_referenced_tables_excludes_cte_alias():
+    tables = referenced_tables("WITH cte AS (SELECT * FROM events) SELECT * FROM cte")
+    assert tables == ["events"]
+
+
 def test_applicable_validations_table_and_global():
     rules = [
         ValidationRule(

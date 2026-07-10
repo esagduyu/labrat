@@ -34,10 +34,11 @@ def referenced_tables(sql: str) -> list[str]:
         parsed = sqlglot.parse_one(sql)
     except Exception:
         return []
+    cte_names = {cte.alias for cte in parsed.find_all(exp.CTE)}
     seen: dict[str, None] = {}
     for t in parsed.find_all(exp.Table):
         name = t.name
-        if name:
+        if name and name not in cte_names:
             seen.setdefault(name, None)
     return list(seen)
 
