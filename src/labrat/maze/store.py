@@ -2,8 +2,11 @@
 
 On-disk namespace (forward-compatible with trail/warren kinds + a future team layer):
 
-    <project_root>/labrat_maze/<kind>/*.md             (project scope — wins on conflict)
+    <project_root>/labrat_maze/<kind>/*.md             (project scope)
     <home>/.labrat/maze/<profile>/<kind>/*.md          (user scope)
+
+Layers no longer conflict-resolve by precedence: project + user sections union
+per domain (dedup by body) — see ``docs()``.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ class _Layer:
 
 class MazeStore:
     def __init__(self, project_root: Path, home: Path, profile: str) -> None:
-        # Ordered low → high precedence: later layers overwrite earlier on domain conflict.
+        # Ordered user → project; docs() unions sections per domain across layers.
         self._layers: list[_Layer] = [
             _Layer("user", home / ".labrat" / "maze" / profile),
             _Layer("project", project_root / "labrat_maze"),

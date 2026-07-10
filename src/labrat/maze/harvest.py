@@ -72,17 +72,17 @@ def draft_harvested_sections(
 
 
 def apply_approved_sections(store: MazeStore, domain: str, approved: list[Section]) -> None:
-    """Merge human-approved harvested sections into the domain's Scent doc and persist.
+    """Merge human-approved harvested sections into the domain's PROJECT-layer doc.
 
-    Dedups against existing section bodies so re-approving the same bullet is idempotent.
-
-    Note: ``load_domain`` returns the merged (user+project) view, while ``write_doc``
-    defaults to the project layer — so approving a section for a domain that currently
-    exists only in the user layer will copy that doc into the project layer.
+    Loads only the project layer (never the merged view), so user-layer
+    Cartographer content is never copied — M2's user-scope refresh can never be
+    shadowed by a frozen project copy (spec 2026-07-09 non-negotiable #2).
+    Dedups against existing project-layer section bodies so re-approving the
+    same bullet is idempotent. Audits the doc fail-loud BEFORE writing.
     """
     if not approved:
         return
-    doc = store.load_domain(domain) or ScentDoc(domain=domain)
+    doc = store.load_domain(domain, scope="project") or ScentDoc(domain=domain)
     existing_bodies = {s.body.strip() for s in doc.sections}
     for s in approved:
         if s.body.strip() not in existing_bodies:
