@@ -1,5 +1,6 @@
 """CLI entry point for LabRat."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -13,6 +14,9 @@ app = typer.Typer(
 conn_app = typer.Typer(name="conn", help="Manage database connection profiles.")
 app.add_typer(conn_app, name="conn")
 app.add_typer(conn_app, name="connection")
+
+scent_app = typer.Typer(name="scent", help="Check and refresh dbt-paired Scent.")
+app.add_typer(scent_app, name="scent")
 
 _OPT = typer.Option  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
 _ARG = typer.Argument  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
@@ -125,3 +129,129 @@ def conn_set_default(
     except ProfileError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
+
+
+def _resolve_dbt_project(dbt_project: str | None, profile: str) -> Path:
+    """Resolve the dbt project root: explicit flag, else `profile`'s `dbt_project_path`."""
+    if dbt_project:
+        return Path(dbt_project)
+
+    from labrat.profile.manager import ProfileError, ProfileManager
+
+    path: str | None = None
+    try:
+        path = ProfileManager().get(profile).dbt_project_path
+    except ProfileError:
+        path = None
+
+    if not path:
+        typer.echo(
+            "Error: no --dbt-project given and profile "
+            f"{profile!r} has no dbt_project_path configured. "
+            "Pass --dbt-project <path> or configure one on the profile.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    return Path(path)
+
+
+@scent_app.command("check")
+def scent_check(
+    dbt_project: Annotated[
+        str | None, _OPT("--dbt-project", help="Path to the dbt project root.")
+    ] = None,
+    scent_dir: Annotated[
+        str | None, _OPT("--scent-dir", help="Path to the project Scent directory.")
+    ] = None,
+    profile: Annotated[
+        str, _OPT("--profile", help="Connection profile to resolve --dbt-project from.")
+    ] = "default",
+    warn_only: Annotated[bool, _OPT("--warn-only", help="Report drift but always exit 0.")] = False,
+    skip_if_no_manifest: Annotated[
+        bool,
+        _OPT("--skip-if-no-manifest", help="Exit 0 (instead of 1) if manifest.json is missing."),
+    ] = False,
+    output_format: Annotated[
+        str, _OPT("--format", help="Output format: 'text' or 'json'.")
+    ] = "text",
+) -> None:
+    """Check whether the committed Scent still matches the committed dbt project.
+
+    Read-only gate — never writes to disk. Intended for CI: run `dbt parse`
+    first so `target/manifest.json` exists, then run this against the
+    committed `labrat_maze/scent` directory.
+    """
+    from labrat.maze.ci import check_scent_freshness
+    from labrat.maze.store import MazeStore, project_scent_dir
+
+    if output_format not in ("text", "json"):
+        typer.echo(f"Error: --format must be 'text' or 'json', got {output_format!r}", err=True)
+        raise typer.Exit(1) from None
+
+    project_path = _resolve_dbt_project(dbt_project, profile)
+    resolved_scent_dir = Path(scent_dir) if scent_dir else project_scent_dir()
+    store = MazeStore.from_env(profile)
+
+    res = check_scent_freshness(project_path, resolved_scent_dir, store=store)
+
+    if output_format == "json":
+        typer.echo(res.model_dump_json())
+    else:
+        if res.ok:
+            typer.echo(f"scent check: OK ({res.checked} domain(s) checked)")
+        else:
+            typer.echo(f"scent check: STALE ({len(res.stale)} stale domain(s))")
+            for s in res.stale:
+                typer.echo(f"  - {s.domain}: {s.reason}")
+        for w in res.warnings:
+            typer.echo(f"  warning: {w}")
+        if not res.ok:
+            typer.echo(f"fix: {res.fix_command}")
+
+    exit_ok = res.ok or warn_only or (not res.manifest_found and skip_if_no_manifest)
+    raise typer.Exit(0 if exit_ok else 1)
+
+
+@scent_app.command("ingest")
+def scent_ingest(
+    dbt_project: Annotated[
+        str | None, _OPT("--dbt-project", help="Path to the dbt project root.")
+    ] = None,
+    profile: Annotated[
+        str, _OPT("--profile", help="Connection profile to resolve --dbt-project from.")
+    ] = "default",
+) -> None:
+    """Ingest the dbt project's semantic layer into Scent — headless fix for `scent check`.
+
+    The only write path in this command group: replaces each affected
+    domain's `semantic_layer` section and refreshes the manifest-fingerprint
+    sidecar, through the same audited write path as the Cartographer.
+    """
+    from labrat.maze.ci import _catalog_from_dbt  # pyright: ignore[reportPrivateUsage]
+    from labrat.maze.semantic_ingest import ingest_dbt_semantics
+    from labrat.maze.store import MazeStore, project_scent_dir
+
+    project_path = _resolve_dbt_project(dbt_project, profile)
+    manifest_path = project_path / "target" / "manifest.json"
+    catalog = _catalog_from_dbt(project_path)
+    store = MazeStore.from_env(profile)
+
+    outcome = ingest_dbt_semantics(
+        manifest_path=manifest_path,
+        catalog=catalog,
+        store=store,
+        project_scent_dir=project_scent_dir(),
+        force=True,
+        git_root=Path.cwd(),
+    )
+
+    if outcome.skipped:
+        reason = "manifest drifted since last ingest" if outcome.drifted else "no semantic content"
+        typer.echo(f"scent ingest: skipped ({reason})")
+    else:
+        typer.echo(
+            f"scent ingest: wrote {outcome.sections_written} section(s) "
+            f"across {len(outcome.domains)} domain(s): {', '.join(outcome.domains)}"
+        )
+    for w in outcome.warnings:
+        typer.echo(f"  warning: {w}")

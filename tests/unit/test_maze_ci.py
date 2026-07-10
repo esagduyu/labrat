@@ -112,7 +112,9 @@ def test_read_only_no_writes(tmp_path):
     project, scent = tmp_path / "proj", tmp_path / "scent"
     _write_manifest(project, _manifest())
     store = _ingest(project, scent)
-    before = {p: p.read_bytes() for p in (scent / "labrat_maze").rglob("*") if p.is_file()}
+    # rglob from `scent` (not just `scent / "labrat_maze"`) so a hypothetical
+    # user-layer write (scent / "home" / ...) would also be caught.
+    before = {p: p.read_bytes() for p in scent.rglob("*") if p.is_file()}
     check_scent_freshness(project, scent / "labrat_maze" / "scent", store=store)
-    after = {p: p.read_bytes() for p in (scent / "labrat_maze").rglob("*") if p.is_file()}
+    after = {p: p.read_bytes() for p in scent.rglob("*") if p.is_file()}
     assert before == after  # the check writes nothing
