@@ -1,0 +1,12 @@
+# GitHub Pages exists to serve the HTML tour (index.html). The engineering docs
+# (superpowers plans/specs, progress reports) contain literal {{ ... }} sequences
+# (dbt Jinja, Python f-string escapes) that Jekyll's Liquid parser treats as
+# template syntax — one unterminated match is a FATAL build error (first hit:
+# 2026-07-09, the mcp-tools-mode plan's f-string test code). Exclude them from
+# the Jekyll build entirely; they are repo docs, not site pages.
+exclude:
+  - superpowers/
+  - scent/
+  - "*.md"
+include:
+  - index.html
