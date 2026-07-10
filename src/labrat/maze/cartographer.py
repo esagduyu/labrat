@@ -712,6 +712,11 @@ async def generate_scent(
         # Stamp every section in the FINAL doc (after any semantics-pass merge above) so
         # the invariant holds whether or not with_semantics added sections. Pure function
         # of the catalog; generated_at/model_id/git_sha stay None (no-clock invariant).
+        # NOTE: this runs AFTER audit_scent_doc (semantics path), so the written doc
+        # carries one rendered line (**Meta:** schema_hash=<hex>) the audit never saw.
+        # Safe only because a hex fingerprint + the fixed literal cannot match any
+        # contamination needle — if Meta ever gains free-text fields, move the stamp
+        # BEFORE the audit to restore audited-bytes == written-bytes.
         fp = fingerprint_from_catalog(cast(Catalog, catalogs[name]))
         doc = doc.model_copy(
             update={"sections": [s.model_copy(update={"schema_hash": fp}) for s in doc.sections]}
