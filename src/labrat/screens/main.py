@@ -159,6 +159,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+comma", "open_settings", "Settings", show=True),
         Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
         Binding("ctrl+shift+h", "harvest_review", "Harvest", show=False),
+        Binding("ctrl+shift+d", "record_decision", "Record Decision", show=False),
         Binding("f9", "reingest_semantics", "Re-ingest dbt", show=False),
         Binding("f8", "share_answer", "Share", show=True),
     ]
@@ -607,7 +608,12 @@ class MainScreen(Screen[None]):
         from labrat.maze.store import MazeStore
         from labrat.memory.harvest import SessionHarvester
         from labrat.memory.store import MemoryStore
-        from labrat.screens.harvest_controller import harvesting_enabled, review_corrections
+        from labrat.screens.harvest_controller import (
+            harvesting_enabled,
+            merge_drafts,
+            review_corrections,
+            review_decisions,
+        )
         from labrat.screens.harvest_review import HarvestReviewScreen
 
         if self._harvesting:
@@ -643,11 +649,18 @@ class MainScreen(Screen[None]):
             # Draft from the FULL memory store, not just this session: cancelled
             # reviews stay recoverable, and apply dedups so re-approval is idempotent.
             memories = store.read_profile(profile_name)
+            maze_store = MazeStore.from_env(profile=profile_name)
+            generated_at = datetime.now(tz=UTC).date().isoformat()
+            model_id = getattr(self._provider, "_model", None)
             try:
-                drafts = review_corrections(
-                    memories,
-                    generated_at=datetime.now(tz=UTC).date().isoformat(),
-                    model_id=getattr(self._provider, "_model", None),
+                correction_drafts = review_corrections(
+                    memories, generated_at=generated_at, model_id=model_id
+                )
+                # Analyst-recorded decisions (ctrl+shift+d) alongside harvested
+                # corrections — review_decisions filters out decisions already
+                # promoted into the domain's Decisions section.
+                decision_drafts = review_decisions(
+                    memories, maze_store, generated_at=generated_at, model_id=model_id
                 )
             except ScentContaminationError as exc:
                 self.notify(
@@ -656,19 +669,67 @@ class MainScreen(Screen[None]):
                     timeout=8,
                 )
                 return
+            drafts = merge_drafts(correction_drafts, decision_drafts)
             if not drafts:
-                self.notify("No correction learnings to review yet.", timeout=4)
+                self.notify("No new learnings to review.", timeout=4)
                 return
 
             def _done(applied: int | None) -> None:
                 if applied:
                     self.notify(f"Applied {applied} section(s) to Scent.", timeout=4)
 
-            self.app.push_screen(
-                HarvestReviewScreen(drafts, MazeStore.from_env(profile=profile_name)), _done
-            )
+            self.app.push_screen(HarvestReviewScreen(drafts, maze_store), _done)
         finally:
             self._harvesting = False
+
+    def action_record_decision(self) -> None:
+        from labrat.screens.harvest_controller import harvesting_enabled
+
+        if self._profile_obj is None or not harvesting_enabled(
+            True, self._profile_obj.harvest_opt_in
+        ):
+            self.notify(
+                "Enable harvesting in Settings (Ctrl+,) to record decisions.",
+                severity="warning",
+            )
+            return
+
+        from labrat.screens.record_decision import RecordDecisionScreen
+
+        def _on_result(raw_text: str | None) -> None:
+            if raw_text is None:
+                return
+            # Normalize to single-line: the TextArea accepts Enter, and a
+            # multi-line decision defeats filter_unpromoted_decisions (which
+            # compares per-LINE bullets), causing it to re-draft forever and
+            # eventually duplicate on disk once the promoted body diverges.
+            # This also folds the empty/whitespace-only case in: "".split()
+            # -> [] -> "" -> skip.
+            text = " ".join(raw_text.split())
+            if not text:
+                return
+            from labrat.memory.extractor import resolve_table_scope
+            from labrat.memory.model import Memory, MemoryKind, MemoryScope
+            from labrat.memory.store import MemoryStore
+
+            known_tables: list[str] = []
+            if self._catalog is not None:
+                known_tables = [t.name for s in self._catalog.schemas for t in s.tables]
+            memory = Memory(
+                profile=self._profile,
+                scope=MemoryScope.global_,
+                kind=MemoryKind.explicit_user_rule,
+                text=text,
+                table_scope=resolve_table_scope(self._last_sql, known_tables),
+            )
+            # Immediate, durable persist — unlike corrections (buffered until
+            # harvest review), a recorded decision is a deliberate analyst
+            # action and must survive even if the session ends before the
+            # next harvest-review pass.
+            MemoryStore().append(memory)
+            self.notify("\U0001f9ed Decision recorded", timeout=4)
+
+        self.app.push_screen(RecordDecisionScreen(), _on_result)
 
     # ── SQL run handler ───────────────────────────────────────────────────────
 
