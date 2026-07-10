@@ -14,11 +14,36 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from labrat.agent.loop import ContentBlock, TextBlock, ToolUseBlock
 from labrat.agent.providers.base import ModelProvider
 from labrat.agent.session import build_agent_session
-from labrat.agent.tools.base import ToolContext, ToolRegistry
+from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
 from labrat.agent.tools.dispatch_subagent import DispatchSubagentTool
+
+
+class _EchoInput(BaseModel):
+    text: str = ""
+
+
+class _EchoTool(Tool[_EchoInput]):
+    """Minimal fake tool for the sub-loop to call, so its trace is observable."""
+
+    @property
+    def name(self) -> str:
+        return "echo"
+
+    @property
+    def description(self) -> str:
+        return "Echo the input text back."
+
+    @property
+    def input_model(self) -> type[_EchoInput]:
+        return _EchoInput
+
+    async def execute(self, ctx: ToolContext, args: _EchoInput) -> str:
+        return args.text
 
 
 class _ScriptedProvider(ModelProvider):
@@ -187,3 +212,83 @@ async def test_dispatch_unknown_inside_subloop(tmp_path: Path) -> None:
     # as a tool_result, quoted exactly as ToolRegistry.dispatch produces it.
     sub_followup = provider.calls[2]  # sub-loop turn 2 = global call index 2
     assert "Unknown tool: 'dispatch_subagent'" in str(sub_followup)
+
+
+async def test_sub_loop_traces_forwarded_with_prefix(tmp_path: Path) -> None:
+    """R1: the parent's on_tool_call hook observes sub-loop dispatches, tagged."""
+    provider = _ScriptedProvider(
+        [
+            # call 0: parent turn 1 — delegates.
+            [
+                ToolUseBlock(
+                    id="t1",
+                    name="dispatch_subagent",
+                    input={"sub_task": "echo something", "max_turns": 2},
+                )
+            ],
+            # call 1: sub-loop turn 1 — calls the echo tool.
+            [ToolUseBlock(id="t2", name="echo", input={"text": "hi"})],
+            # call 2: sub-loop turn 2 — answers with text.
+            [TextBlock(text="sub done")],
+            # call 3: parent turn 2 — closes out.
+            [TextBlock(text="parent done")],
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(DispatchSubagentTool())
+    registry.register(_EchoTool())
+    ctx = ToolContext()
+    loop = build_agent_session(
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="parent system",
+        ledger_dir=tmp_path / "ledger",
+    )
+    events: list[str] = []
+
+    def on_tool_call(
+        name: str, args: dict[str, Any], ok: bool, output: str, latency_ms: float
+    ) -> None:
+        events.append(name)
+
+    await loop.run("PARENT: delegate", on_tool_call=on_tool_call)
+
+    assert "subagent:echo" in events  # sub-loop activity visible, tagged
+    assert "dispatch_subagent" in events  # parent's own event untagged
+    assert not any(e.startswith("subagent:dispatch") for e in events)
+    assert loop.active_on_tool_call is None  # cleared after run (no leak)
+
+
+async def test_no_forwarding_without_parent_hook(tmp_path: Path) -> None:
+    """R1: no parent on_tool_call → the sub-loop still runs fine, nothing forwarded."""
+    provider = _ScriptedProvider(
+        [
+            [
+                ToolUseBlock(
+                    id="t1",
+                    name="dispatch_subagent",
+                    input={"sub_task": "echo something", "max_turns": 2},
+                )
+            ],
+            [ToolUseBlock(id="t2", name="echo", input={"text": "hi"})],
+            [TextBlock(text="sub done")],
+            [TextBlock(text="parent done")],
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(DispatchSubagentTool())
+    registry.register(_EchoTool())
+    ctx = ToolContext()
+    loop = build_agent_session(
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="parent system",
+        ledger_dir=tmp_path / "ledger",
+    )
+    texts: list[str] = []
+    await loop.run("PARENT: delegate", on_text=texts.append)
+
+    assert "parent done" in "".join(texts)
+    assert loop.active_on_tool_call is None

@@ -14,6 +14,7 @@ from textual.screen import Screen
 from textual.widget import Widget
 
 if TYPE_CHECKING:
+    from labrat.agent.tools.base import SubagentRunner
     from labrat.db.base import Connection
     from labrat.db.catalog import Catalog
     from labrat.profile.model import Profile
@@ -242,6 +243,23 @@ class MainScreen(Screen[None]):
             id="status-bottom",
         )
 
+    def _wrap_subagent_runner(self, inner: SubagentRunner) -> SubagentRunner:
+        """Protect the M3 draft-capture baseline (_last_draft_sql/_last_sql)
+        around a sub-agent dispatch (session-followups R3/P2). The TUI's SQL
+        tools are shared instances, so a sub-agent's on_draft would otherwise
+        overwrite the parent's baseline mid-run; snapshot before, restore
+        after — even if the sub-run raises. Editor/pane updates during the
+        sub-run remain live; only the capture baseline is protected."""
+
+        async def wrapped(**kwargs: object) -> tuple[str, int, int]:
+            saved_draft, saved_sql = self._last_draft_sql, self._last_sql
+            try:
+                return await inner(**kwargs)  # type: ignore[arg-type]
+            finally:
+                self._last_draft_sql, self._last_sql = saved_draft, saved_sql
+
+        return wrapped  # type: ignore[return-value]
+
     def on_mount(self) -> None:
         from textual.widgets import LoadingIndicator, RichLog
 
@@ -359,6 +377,8 @@ class MainScreen(Screen[None]):
             enable_ledger=True,
             ledger_dir=ledger_dir,
         )
+        if ctx.subagent_runner is not None:
+            ctx.subagent_runner = self._wrap_subagent_runner(ctx.subagent_runner)
         self._agent_loop = loop
         chat_panel = self.query_one("#chat-content", ChatPanel)
         chat_panel.set_agent_loop(loop)

@@ -264,3 +264,33 @@ async def test_no_footer_on_plain_turn() -> None:
         await pilot.press(*"hi", "enter")
         await pilot.pause()
         assert "⚑ grounded" not in panel.transcript
+
+
+# ── subagent: prefix filter (session-followups R2) ──────────────────────────
+
+
+async def test_subagent_prefixed_events_not_rendered() -> None:
+    """Sub-loop tool-call chatter (forwarded with a 'subagent:' prefix, R1) must
+    not render a trace line or post an AgentToolCall — only the parent's own
+    dispatch_subagent call is visible in the transcript."""
+
+    class _SubChatterLoop:
+        verify_rounds_used = 0
+        _verifier = None
+
+        async def run(self, message, *, on_text=None, on_status=None, on_tool_call=None):
+            if on_tool_call:
+                on_tool_call("dispatch_subagent", {"sub_task": "x"}, True, "ok", 5.0)
+                on_tool_call("subagent:run_sql", {"query": "SELECT 1"}, True, "ok", 3.0)
+            if on_text:
+                on_text("done")
+
+    async with _PanelHost().run_test() as pilot:
+        panel = pilot.app.query_one(ChatPanel)
+        panel.set_agent_loop(_SubChatterLoop())
+        await pilot.click("#user-input")
+        await pilot.press(*"hi", "enter")
+        await pilot.pause()
+        assert "dispatch_subagent" in panel.transcript  # parent event renders
+        assert "subagent:run_sql" not in panel.transcript  # sub chatter filtered
+        assert "run_sql" not in panel.transcript.replace("dispatch_subagent", "")

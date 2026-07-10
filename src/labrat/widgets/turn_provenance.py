@@ -72,17 +72,32 @@ class TurnProvenance:
                 if "results=[]" in output:
                     pass  # zero hits: not grounding evidence
                 elif "DocResult(" in output:
-                    n_docs = output.count("DocResult(")
-                    domains = _DOMAIN_RE.findall(output)
-                    bests = _BEST_RE.findall(output)
-                    stales = _STALE_RE.findall(output)
-                    if len(domains) == n_docs and len(bests) == n_docs and len(stales) == n_docs:
+                    doc_spans = [m.start() for m in re.finditer(r"DocResult\(", output)]
+                    n_docs = len(doc_spans)
+                    bounds = [*doc_spans, len(output)]
+
+                    def _positional(pattern: re.Pattern[str]) -> list[re.Match[str]] | None:
+                        ms = list(pattern.finditer(output))
+                        if len(ms) != n_docs:
+                            return None
+                        for i, m in enumerate(ms):
+                            if not (bounds[i] <= m.start() < bounds[i + 1]):
+                                return None
+                        return ms
+
+                    d_ms = _positional(_DOMAIN_RE)
+                    b_ms = _positional(_BEST_RE)
+                    s_ms = _positional(_STALE_RE)
+                    if d_ms and b_ms and s_ms:
                         for i in range(n_docs):
-                            stale_i: bool | None = None
-                            if i < len(stales) and stales[i] != "None":
-                                stale_i = stales[i] == "True"
-                            self._record_scent_doc(domains[i], bests[i], stale_i)
-                    else:  # pre-enrichment repr or field-count mismatch → count fallback
+                            stale_tok = s_ms[i].group(1)
+                            self._record_scent_doc(
+                                d_ms[i].group(1),
+                                b_ms[i].group(1),
+                                None if stale_tok == "None" else stale_tok == "True",
+                            )
+                    else:  # pre-enrichment repr, field-count mismatch, or positional
+                        # misalignment (forged/adversarial substring) → count fallback
                         self._scent_hits += n_docs
                 else:
                     self._scent_hits += 1  # truly opaque output
@@ -107,7 +122,7 @@ class TurnProvenance:
                 elif stale is False:
                     label += "·fresh"
                 seg = f"scent: {domain} ({label})"
-                extra = len(self._scent_docs) - 1
+                extra = self._scent_hits - 1
                 if extra > 0:
                     seg += f" +{extra}"
                 parts.append(seg)

@@ -160,6 +160,11 @@ class ChatPanel(Widget):
         def on_tool_call(
             name: str, args: dict[str, Any], ok: bool, output: str, latency_ms: float
         ) -> None:
+            if name.startswith("subagent:"):
+                # Sub-loop trace chatter forwarded by the session runner (R1) —
+                # observation-only; the parent's own dispatch_subagent call is
+                # the single transcript line for this dispatch (R2).
+                return
             self.post_message(ChatPanel.AgentToolCall(name=name, args=args))
             args_str = json.dumps(args, separators=(",", ":"))
             if len(args_str) > 120:
