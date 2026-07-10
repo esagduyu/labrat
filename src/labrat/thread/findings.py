@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from labrat.cheese.model import FindingProvenance
 from labrat.thread.model import Finding
 
 _DEFAULT_DIR = Path.home() / ".local" / "share" / "labrat"
@@ -51,6 +52,7 @@ class FindingsManager:
         results_ref: str | None,
         chart_spec: dict[str, Any] | None,
         note: str = "",
+        provenance: FindingProvenance | None = None,
     ) -> Finding:
         """Pin a new finding. Appended to the end of the list."""
         finding = Finding(
@@ -62,6 +64,7 @@ class FindingsManager:
             chart_spec=chart_spec,
             note=note,
             pinned_at=datetime.now(tz=UTC),
+            provenance=provenance,
         )
         findings = self._load()
         findings.append(finding)

@@ -338,3 +338,32 @@ def test_verifier_outcome() -> None:
     prov3 = TurnProvenance()
     prov3.set_verifier(rounds_used=None)  # verification off → no verifier segment
     assert prov3.footer() is None
+
+
+def test_snapshot_structured_export():
+    from labrat.widgets.turn_provenance import TurnProvenance
+
+    tp = TurnProvenance()
+    tp.record_tool(
+        "search_reference_docs",
+        True,
+        '{"results": [{"domain": "orders", "best_source": "verified", "stale": false}]}',
+    )
+    tp.record_tool("verify_join", True, "")
+    tp.record_tool("run_sql", True, "")
+    tp.set_verifier(1)
+    snap = tp.snapshot(schema_fingerprint="fp", git_sha="sha", model_id="m")
+    assert snap is not None
+    assert snap.scent_sources[0].domain == "orders"
+    assert snap.scent_sources[0].tier == "verified"
+    assert snap.scent_sources[0].fresh is True
+    assert snap.joins_verified == 1
+    assert snap.run_sql_count == 1
+    assert snap.verifier_verdict == "sufficient (1 round)"
+    assert snap.schema_fingerprint == "fp"
+
+
+def test_snapshot_empty_turn_is_none():
+    from labrat.widgets.turn_provenance import TurnProvenance
+
+    assert TurnProvenance().snapshot() is None

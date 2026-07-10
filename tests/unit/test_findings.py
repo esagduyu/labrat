@@ -121,3 +121,26 @@ def test_finding_carries_standalone_info(mgr: FindingsManager) -> None:
     assert f.results_ref == "/tmp/result.parquet"
     assert f.chart_spec == {"type": "bar"}
     assert f.pinned_at
+
+
+def test_pin_persists_provenance(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from labrat.cheese.model import FindingProvenance
+
+    mgr = FindingsManager(store_dir=tmp_path)
+    prov = FindingProvenance(
+        scent_sources=[],
+        joins_verified=0,
+        lineage_used=False,
+        verifier_verdict=None,
+        run_sql_count=1,
+        schema_fingerprint=None,
+        git_sha=None,
+        model_id=None,
+        captured_at=datetime.now(tz=UTC),
+    )
+    mgr.pin(
+        version_id="v", question="q", sql="s", results_ref=None, chart_spec=None, provenance=prov
+    )
+    assert mgr.list_findings()[0].provenance == prov

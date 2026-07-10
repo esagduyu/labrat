@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -13,6 +13,9 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Input, RichLog
+
+if TYPE_CHECKING:
+    from labrat.widgets.turn_provenance import TurnProvenance
 
 
 class ChatPanel(Widget):
@@ -96,6 +99,7 @@ class ChatPanel(Widget):
         self._history_rich: list[tuple[str, bool]] = []
         self._show_traces: bool = True
         self._scent_stale_provider: Callable[[], bool] | None = None
+        self.last_turn_provenance: TurnProvenance | None = None
 
     def set_agent_loop(self, loop: Any) -> None:
         """Wire an AgentLoop into this panel."""
@@ -144,6 +148,7 @@ class ChatPanel(Widget):
 
         stale = self._scent_stale_provider() if self._scent_stale_provider else False
         provenance = TurnProvenance(scent_stale=stale)
+        self.last_turn_provenance = provenance
 
         streaming = self.query_one("#streaming", RichLog)
         streaming.add_class("visible")
