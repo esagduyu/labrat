@@ -155,6 +155,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+comma", "open_settings", "Settings", show=True),
         Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
         Binding("ctrl+shift+h", "harvest_review", "Harvest", show=False),
+        Binding("f9", "reingest_semantics", "Re-ingest dbt", show=False),
     ]
 
     def __init__(
@@ -167,6 +168,8 @@ class MainScreen(Screen[None]):
         connection: Connection | None = None,
         profile_obj: Profile | None = None,
         scent_dir: Path | None = None,
+        dbt_manifest_override: Path | None = None,
+        project_root_override: Path | None = None,
     ) -> None:
         super().__init__()
         self._profile = profile
@@ -183,6 +186,9 @@ class MainScreen(Screen[None]):
         self._scent_dir_override = scent_dir
         self._scent_stale = False
         self._scent_dir: Path | None = None
+        self._dbt_manifest_override = dbt_manifest_override
+        self._project_root_override = project_root_override
+        self._semantic_drifted = False
 
     def compose(self) -> ComposeResult:
         connected = self._connection is not None
@@ -370,6 +376,7 @@ class MainScreen(Screen[None]):
 
         self._scent_dir = self._scent_dir_override or user_scent_dir(profile_obj.name)
         self._run_scent_prepass()
+        self._run_semantic_ingest()
 
     def on_resize(self, event: events.Resize) -> None:
         """Enter narrow mode below 80 columns."""
@@ -411,6 +418,85 @@ class MainScreen(Screen[None]):
                 severity="warning",
                 timeout=8,
             )
+
+    # ── dbt semantic-layer ingestion (T1b) ──────────────────────────────────
+
+    @work(exclusive=True, group="semantic")
+    async def _run_semantic_ingest(self, *, force: bool = False) -> None:
+        try:
+            from pathlib import Path as _Path
+
+            from labrat.maze.semantic_ingest import ingest_dbt_semantics
+            from labrat.maze.store import MazeStore
+
+            if self._profile_obj is None or not self._profile_obj.dbt_project_path:
+                return
+            if self._catalog is None:
+                return
+            manifest = self._dbt_manifest_override or (
+                _Path(self._profile_obj.dbt_project_path) / "target" / "manifest.json"
+            )
+            if not manifest.is_file():
+                self.notify(
+                    f"dbt manifest not found — run `dbt parse` in your project ({manifest})",
+                    severity="warning",
+                    timeout=8,
+                )
+                return
+            if self._project_root_override is not None:
+                store = MazeStore(
+                    project_root=self._project_root_override,
+                    home=self._project_root_override / "home",
+                    profile=self._profile_obj.name,
+                )
+                scent_dir = self._project_root_override / "labrat_maze" / "scent"
+            else:
+                store = MazeStore.from_env(profile=self._profile_obj.name)
+                scent_dir = _Path.cwd() / "labrat_maze" / "scent"
+            outcome = ingest_dbt_semantics(
+                manifest_path=manifest,
+                catalog=self._catalog,
+                store=store,
+                project_scent_dir=scent_dir,
+                force=force,
+            )
+            self._semantic_drifted = outcome.drifted
+            if outcome.drifted:
+                self.notify(
+                    "dbt semantic layer changed — press F9 to re-ingest",
+                    severity="warning",
+                    timeout=8,
+                )
+            elif not outcome.skipped:
+                self.notify(
+                    f"semantic layer ingested · {outcome.sections_written} sections "
+                    f"across {len(outcome.domains)} domains",
+                    timeout=4,
+                )
+            for w in outcome.warnings[:3]:
+                self.notify(f"dbt ingest: {w}", severity="warning", timeout=6)
+        except Exception as exc:  # fail-open: chat unaffected; audit error surfaces here too
+            self.notify(f"Semantic ingestion failed: {exc}", severity="error", timeout=8)
+
+    def action_reingest_semantics(self) -> None:
+        from labrat.screens.confirm import ConfirmScreen
+
+        if self._profile_obj is None or not self._profile_obj.dbt_project_path:
+            self.notify("No dbt project configured (Ctrl+, → dbt project).", severity="warning")
+            return
+
+        def _after(confirmed: bool | None) -> None:
+            if confirmed:
+                self._run_semantic_ingest(force=True)
+
+        self.app.push_screen(
+            ConfirmScreen(
+                "[bold]Re-ingest dbt semantic layer?[/bold]\n\n"
+                "Replaces semantic-layer sections in project Scent docs.\n"
+                "[dim]Harvested and human sections are preserved.[/dim]"
+            ),
+            _after,
+        )
 
     def action_refresh_scent(self) -> None:
         from labrat.screens.confirm import ConfirmScreen
