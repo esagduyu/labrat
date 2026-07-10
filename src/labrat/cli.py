@@ -227,13 +227,13 @@ def scent_ingest(
     domain's `semantic_layer` section and refreshes the manifest-fingerprint
     sidecar, through the same audited write path as the Cartographer.
     """
-    from labrat.maze.ci import _catalog_from_dbt  # pyright: ignore[reportPrivateUsage]
+    from labrat.maze.ci import catalog_from_dbt
     from labrat.maze.semantic_ingest import ingest_dbt_semantics
     from labrat.maze.store import MazeStore, project_scent_dir
 
     project_path = _resolve_dbt_project(dbt_project, profile)
     manifest_path = project_path / "target" / "manifest.json"
-    catalog = _catalog_from_dbt(project_path)
+    catalog = catalog_from_dbt(project_path)
     store = MazeStore.from_env(profile)
 
     outcome = ingest_dbt_semantics(
@@ -245,9 +245,16 @@ def scent_ingest(
         git_root=Path.cwd(),
     )
 
+    # force=True above means the fingerprint-unchanged/drifted-without-force
+    # branch of ingest_dbt_semantics never fires here — outcome.drifted is
+    # unreachable on this path. A skip *with* warnings is an error-skip
+    # (unreadable/non-dict manifest); a skip with no warnings is benign
+    # (already fresh, or no semantic content to ingest) and stays exit 0.
     if outcome.skipped:
-        reason = "manifest drifted since last ingest" if outcome.drifted else "no semantic content"
-        typer.echo(f"scent ingest: skipped ({reason})")
+        if outcome.warnings:
+            typer.echo(f"scent ingest: skipped ({'; '.join(outcome.warnings)})")
+        else:
+            typer.echo("scent ingest: skipped (no semantic content)")
     else:
         typer.echo(
             f"scent ingest: wrote {outcome.sections_written} section(s) "
@@ -255,3 +262,74 @@ def scent_ingest(
         )
     for w in outcome.warnings:
         typer.echo(f"  warning: {w}")
+
+    if outcome.skipped and outcome.warnings:
+        raise typer.Exit(1) from None
+
+
+_INIT_CI_WORKFLOWS: dict[str, str] = {
+    "github": """\
+name: labrat-scent
+
+on:
+  pull_request:
+    paths:
+      - "models/**"
+      - "labrat_maze/**"
+
+jobs:
+  scent-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Swap for `pip install dbt-core labrat` if you don't use uv.
+      - name: Install dbt + labrat
+        run: uv tool install dbt-core && uv tool install labrat
+
+      - name: dbt parse
+        run: dbt parse
+
+      - name: labrat scent check
+        run: labrat scent check
+""",
+}
+
+
+@scent_app.command("init-ci")
+def scent_init_ci(
+    platform: Annotated[
+        str, _OPT("--platform", help="CI platform to scaffold a workflow for.")
+    ] = "github",
+    path: Annotated[
+        str, _OPT("--path", help="Where to write the workflow file.")
+    ] = ".github/workflows/labrat-scent.yml",
+) -> None:
+    """Scaffold a starter CI workflow that runs `dbt parse` then `labrat scent check`.
+
+    No-clobber: refuses to overwrite an existing file at --path. See
+    docs/dbt-ci-pairing.md for the full setup + fix-a-failure walkthrough.
+    """
+    if platform not in _INIT_CI_WORKFLOWS:
+        typer.echo(
+            f"Error: --platform must be one of {tuple(_INIT_CI_WORKFLOWS)}, got {platform!r}",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    target = Path(path)
+    if target.exists():
+        typer.echo(
+            f"Error: {target} already exists — not overwriting. "
+            "Remove it first, or pass a different --path.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_INIT_CI_WORKFLOWS[platform], encoding="utf-8")
+    typer.echo(f"wrote {target}")

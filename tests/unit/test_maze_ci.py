@@ -45,13 +45,13 @@ def _write_manifest(project: Path, manifest: dict) -> None:
 
 def _ingest(project: Path, scent_root: Path) -> MazeStore:
     """Run the real ingest so the committed Scent + sidecar are 'fresh'."""
-    from labrat.maze.ci import _catalog_from_dbt  # the shared bridge helper
+    from labrat.maze.ci import catalog_from_dbt  # the shared bridge helper
     from labrat.maze.semantic_ingest import ingest_dbt_semantics
 
     store = MazeStore(project_root=scent_root, home=scent_root / "home", profile="default")
     ingest_dbt_semantics(
         manifest_path=project / "target" / "manifest.json",
-        catalog=_catalog_from_dbt(project),
+        catalog=catalog_from_dbt(project),
         store=store,
         project_scent_dir=scent_root / "labrat_maze" / "scent",
         force=True,

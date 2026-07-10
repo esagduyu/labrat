@@ -46,7 +46,7 @@ class CiCheckResult(BaseModel):
     manifest_found: bool
 
 
-def _catalog_from_dbt(dbt_project_path: Path) -> Catalog | None:
+def catalog_from_dbt(dbt_project_path: Path) -> Catalog | None:
     """Offline DbtLoader -> db.catalog.Catalog bridge (no existing bridge to reuse).
 
     ``DbtLoader`` reads ``manifest.json`` directly out of the path it's given
@@ -191,7 +191,7 @@ def check_scent_freshness(
                 )
             )
 
-    catalog = _catalog_from_dbt(dbt_project_path)
+    catalog = catalog_from_dbt(dbt_project_path)
     warnings: list[str] = []
     if catalog is not None:
         current_schema_fp = fingerprint_from_catalog(catalog)
