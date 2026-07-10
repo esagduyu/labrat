@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from labrat.agent.loop import AgentLoop
 from labrat.agent.providers import build_provider
@@ -123,6 +124,17 @@ def build_agent_session(
     if ctx.subagent_runner is None:
         parent_registry = registry
         parent_ledger = ledger  # may be None (enable_ledger=False)
+        parent_loop = loop  # the loop constructed above, for trace forwarding (R1)
+
+        def _forward_tool_call(
+            name: str, args: dict[str, Any], ok: bool, output: str, latency_ms: float
+        ) -> None:
+            # Read active_on_tool_call AT CALL TIME (never captured) — reflects
+            # whichever parent-loop run() invocation is currently in flight, and
+            # is None (no forwarding) outside any run() call.
+            hook = parent_loop.active_on_tool_call
+            if hook is not None:
+                hook(f"subagent:{name}", args, ok, output, latency_ms)
 
         async def _run_subagent(
             *,
@@ -157,7 +169,7 @@ def build_agent_session(
                 ledger=parent_ledger,
             )
             chunks: list[str] = []
-            await sub_loop.run(seed, on_text=chunks.append)
+            await sub_loop.run(seed, on_text=chunks.append, on_tool_call=_forward_tool_call)
             return ("".join(chunks), sub_loop.turns_used, sub_loop.tool_calls_used)
 
         ctx.subagent_runner = _run_subagent

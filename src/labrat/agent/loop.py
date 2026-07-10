@@ -90,6 +90,12 @@ class AgentLoop:
         self.turns_used = 0
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
+        # Set from run()'s on_tool_call argument for the duration of the call,
+        # cleared in a finally. Lets a session runner closure (build_agent_session)
+        # forward a sub-loop's dispatches to the parent's hook, read at call time.
+        self.active_on_tool_call: Callable[[str, dict[str, Any], bool, str, float], None] | None = (
+            None
+        )
 
     async def run(
         self,
@@ -112,84 +118,88 @@ class AgentLoop:
         self.turns_used = 0
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
+        self.active_on_tool_call = on_tool_call
 
-        while True:
-            if self._max_turns is not None and self.turns_used >= self._max_turns:
-                break
-
-            text_parts: list[str] = []
-            tool_uses: list[ToolUseBlock] = []
-
-            stream = await self._provider.stream(
-                messages=self.history,
-                tools=self._registry.to_anthropic_schemas(),
-                system=self._system,
-            )
-            async for block in stream:
-                if isinstance(block, TextBlock):
-                    if on_text is not None:
-                        on_text(block.text)
-                    text_parts.append(block.text)
-                elif isinstance(block, ToolUseBlock):
-                    tool_uses.append(block)
-
-            self.turns_used += 1
-
-            content: list[dict[str, Any]] = []
-            if text_parts:
-                content.append({"type": "text", "text": "".join(text_parts)})
-            for tu in tool_uses:
-                content.append(
-                    {"type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input}
-                )
-            self.history.append({"role": "assistant", "content": content})
-
-            if not tool_uses:
-                if await self._verify_and_maybe_continue(
-                    user_message, "".join(text_parts), on_status
-                ):
-                    continue  # verifier asked for another pass
-                break  # no more tool calls — done
-
-            # Dispatch up to the remaining tool-call budget. If the model emitted
-            # more than the budget allows, drop the overflow and exit the loop.
-            tool_result_content: list[dict[str, Any]] = []
-            dispatched_all = True
-            for tu in tool_uses:
-                if (
-                    self._max_tool_calls is not None
-                    and self.tool_calls_used >= self._max_tool_calls
-                ):
-                    dispatched_all = False
+        try:
+            while True:
+                if self._max_turns is not None and self.turns_used >= self._max_turns:
                     break
-                _t0 = time.monotonic()
-                dispatch = await self._registry.dispatch(tu.name, tu.input, self._ctx)
-                latency_ms = (time.monotonic() - _t0) * 1000.0
-                output_str = str(dispatch.value) if dispatch.ok else f"Error: {dispatch.error}"
-                # Ledger bounds the MODEL-VISIBLE string only; the trace/audit hook
-                # (on_tool_call) always receives the full output_str. No ledger →
-                # byte-identical to the pre-ledger loop.
-                model_visible = output_str
-                if self._ledger is not None and dispatch.ok:
-                    model_visible = render(
-                        self._ledger.record(tu.name, dispatch, full_str=output_str)
-                    )
-                tool_result_content.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tu.id,
-                        "content": model_visible,
-                    }
+
+                text_parts: list[str] = []
+                tool_uses: list[ToolUseBlock] = []
+
+                stream = await self._provider.stream(
+                    messages=self.history,
+                    tools=self._registry.to_anthropic_schemas(),
+                    system=self._system,
                 )
-                if on_tool_call is not None:
-                    on_tool_call(tu.name, tu.input, dispatch.ok, output_str, latency_ms)
-                self.tool_calls_used += 1
+                async for block in stream:
+                    if isinstance(block, TextBlock):
+                        if on_text is not None:
+                            on_text(block.text)
+                        text_parts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        tool_uses.append(block)
 
-            if tool_result_content:
-                self.history.append({"role": "user", "content": tool_result_content})
+                self.turns_used += 1
 
-            if not dispatched_all:
-                break  # budget exhausted; stop instead of continuing partial state
+                content: list[dict[str, Any]] = []
+                if text_parts:
+                    content.append({"type": "text", "text": "".join(text_parts)})
+                for tu in tool_uses:
+                    content.append(
+                        {"type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input}
+                    )
+                self.history.append({"role": "assistant", "content": content})
+
+                if not tool_uses:
+                    if await self._verify_and_maybe_continue(
+                        user_message, "".join(text_parts), on_status
+                    ):
+                        continue  # verifier asked for another pass
+                    break  # no more tool calls — done
+
+                # Dispatch up to the remaining tool-call budget. If the model emitted
+                # more than the budget allows, drop the overflow and exit the loop.
+                tool_result_content: list[dict[str, Any]] = []
+                dispatched_all = True
+                for tu in tool_uses:
+                    if (
+                        self._max_tool_calls is not None
+                        and self.tool_calls_used >= self._max_tool_calls
+                    ):
+                        dispatched_all = False
+                        break
+                    _t0 = time.monotonic()
+                    dispatch = await self._registry.dispatch(tu.name, tu.input, self._ctx)
+                    latency_ms = (time.monotonic() - _t0) * 1000.0
+                    output_str = str(dispatch.value) if dispatch.ok else f"Error: {dispatch.error}"
+                    # Ledger bounds the MODEL-VISIBLE string only; the trace/audit hook
+                    # (on_tool_call) always receives the full output_str. No ledger →
+                    # byte-identical to the pre-ledger loop.
+                    model_visible = output_str
+                    if self._ledger is not None and dispatch.ok:
+                        model_visible = render(
+                            self._ledger.record(tu.name, dispatch, full_str=output_str)
+                        )
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tu.id,
+                            "content": model_visible,
+                        }
+                    )
+                    if on_tool_call is not None:
+                        on_tool_call(tu.name, tu.input, dispatch.ok, output_str, latency_ms)
+                    self.tool_calls_used += 1
+
+                if tool_result_content:
+                    self.history.append({"role": "user", "content": tool_result_content})
+
+                if not dispatched_all:
+                    break  # budget exhausted; stop instead of continuing partial state
+        finally:
+            self.active_on_tool_call = None
 
     async def _verify_and_maybe_continue(
         self,
