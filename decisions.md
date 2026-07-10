@@ -700,3 +700,15 @@ host config generators (`python -m labrat.mcp.print_config --host claude-code|co
 + docs/labrat-tools.md. Carved from the deferred full-stack plan's M5 (the TUI-provider tail
 was already shipped as TUI-M1). Follow-up: migrate the DAB driver's inline mcp-config dict
 onto host_configs.
+
+## 2026-07-10 — session follow-ups bundle (overnight run)
+
+Sub-loop tool calls now forward to the parent's active on_tool_call tagged `subagent:<name>`
+(AgentLoop.active_on_tool_call lifetime = one run) — labrat-agent traces are dispatch-complete;
+ChatPanel filters the prefix so the TUI transcript contract (one dispatch line) holds. MainScreen
+wraps ctx.subagent_runner (caller-wins seam) to snapshot/restore _last_draft_sql/_last_sql —
+sub-agent drafts can no longer poison the M3 correction baseline. TurnProvenance repr parsing is
+positionally aligned (full-tuple forgeries degrade to count) and `+N` counts all matched docs.
+Excluded on purpose: DAB-driver host_configs migration (leaderboard path — not unattended work).
+Spec: docs/superpowers/specs/2026-07-10-session-followups-design.md; decision log:
+docs/superpowers/overnight-2026-07-10-decisions.md.

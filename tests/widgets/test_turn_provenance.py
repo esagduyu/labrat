@@ -168,6 +168,59 @@ def test_repr_shape_with_tier_fields() -> None:
     assert "scent: orders (verified·fresh)" in (prov.footer() or "")
 
 
+def test_repr_shape_multi_doc_accept() -> None:
+    # Positive pin for the positional-alignment path (companion to the forged-tuple
+    # rejection tests below): TWO real DocResults, each with its own nested
+    # SectionMatch(...) parens, must still align field-for-field and render both
+    # the leading doc's tier label AND the "+1" count for the second.
+    from labrat.agent.tools.search_reference_docs import DocResult, SectionMatch, _Output
+
+    out = _Output(
+        question="q",
+        results=[
+            DocResult(
+                domain="orders",
+                quick_reference=None,
+                sections=[
+                    SectionMatch(
+                        heading="Key Tables",
+                        body="- orders",
+                        score=1.0,
+                        matched_terms=["orders"],
+                        source="verified",
+                        fresh=True,
+                    )
+                ],
+                best_source="verified",
+                stale=False,
+            ),
+            DocResult(
+                domain="users",
+                quick_reference=None,
+                sections=[
+                    SectionMatch(
+                        heading="Key Tables",
+                        body="- users",
+                        score=1.0,
+                        matched_terms=["users"],
+                        source="human",
+                        fresh=None,
+                    )
+                ],
+                best_source="human",
+                stale=None,
+            ),
+        ],
+    )
+    prov = TurnProvenance()
+    prov.record_tool("search_reference_docs", True, str(out))
+    footer = prov.footer() or ""
+    assert "scent: orders (verified·fresh) +1" in footer
+    # Exercise the positional path (not count-fallback): the tier label
+    # ("verified·fresh") must be present, which only the per-doc rendering emits.
+    assert "verified·fresh" in footer
+
+
 def test_unknown_freshness_never_rendered_fresh() -> None:
     prov = TurnProvenance()
     prov.record_tool(
