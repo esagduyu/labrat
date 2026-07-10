@@ -53,6 +53,16 @@ def test_intent_slug():
     )
 
 
+def test_intent_slug_transliterates_accents():
+    # NFKD + ascii-ignore transliterates accented Latin before slugifying, so
+    # meaning survives instead of the raw regex silently dropping the letters.
+    assert intent_slug("Résumé çöğ analizi") == "resume-cog-analizi"
+
+
+def test_intent_slug_empty_after_strip_falls_back():
+    assert intent_slug("???") == "untitled-trail"
+
+
 def test_referenced_tables():
     tables = referenced_tables("SELECT * FROM events e JOIN users u ON e.uid = u.id")
     assert set(tables) == {"events", "users"}

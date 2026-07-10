@@ -9,6 +9,7 @@ store/parser/provenance/audit machinery parameterized by kind="trail".
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 import sqlglot
@@ -25,7 +26,13 @@ _TRAIL_HEADINGS = ("When to use", "Steps", "Reference SQL", "Validations", "Gotc
 
 
 def intent_slug(question: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", question.lower()).strip("-")
+    # Transliterate accented Latin to ASCII first so meaning survives (e.g.
+    # "Résumé" -> "resume") instead of the regex below silently dropping
+    # non-ASCII letters and mangling the slug (e.g. "r-sum").
+    ascii_question = (
+        unicodedata.normalize("NFKD", question).encode("ascii", "ignore").decode("ascii")
+    )
+    s = re.sub(r"[^a-z0-9]+", "-", ascii_question.lower()).strip("-")
     return s or "untitled-trail"
 
 

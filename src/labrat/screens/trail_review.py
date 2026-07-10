@@ -10,6 +10,7 @@ edit and retry.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, ClassVar
 
 from textual import on
@@ -38,6 +39,18 @@ _FIELD_IDS = {
 }
 
 
+def _field_id(heading: str) -> str:
+    """Canonical field id for a section heading, sanitized for non-canonical ones.
+
+    A raw `heading.lower()` fallback can contain spaces/punctuation, which is
+    an invalid Textual widget id and crashes compose(). Both compose() and
+    _edited_doc() call this so they agree on the id for a given heading.
+    """
+    if heading in _FIELD_IDS:
+        return _FIELD_IDS[heading]
+    return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-") or "field"
+
+
 class TrailReviewScreen(ModalScreen[str | None]):
     """Review a drafted Trail; dismisses with the applied domain slug (None on skip)."""
 
@@ -59,23 +72,37 @@ class TrailReviewScreen(ModalScreen[str | None]):
     TrailReviewScreen #actions { height: auto; margin-top: 1; }
     TrailReviewScreen Button { margin: 0 1; min-width: 20; }
     TrailReviewScreen #status { color: $text-muted; }
+    TrailReviewScreen #overwrite-warning { color: $warning; margin-top: 1; }
     """
 
-    def __init__(self, doc: ScentDoc, store: MazeStore, *, git_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        doc: ScentDoc,
+        store: MazeStore,
+        *,
+        git_root: Path | None = None,
+        overwrites: bool = False,
+    ) -> None:
         super().__init__()
         self._doc = doc
         self._store = store
         self._git_root = git_root
+        self._overwrites = overwrites
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(
                 f"[bold]─ Save as Trail · {self._doc.domain} ─[/bold]", id="title", markup=True
             )
+            if self._overwrites:
+                yield Label(
+                    f"⚠ overwrites existing Trail '{self._doc.domain}'",
+                    id="overwrite-warning",
+                )
             with VerticalScroll(id="body"):
                 for section in self._doc.sections:
                     yield Label(section.heading, classes="heading")
-                    field_id = _FIELD_IDS.get(section.heading, section.heading.lower())
+                    field_id = _field_id(section.heading)
                     if section.heading in _EDITABLE:
                         yield TextArea(section.body, id=f"field-{field_id}")
                     else:
@@ -88,7 +115,7 @@ class TrailReviewScreen(ModalScreen[str | None]):
     def _edited_doc(self) -> ScentDoc:
         sections = []
         for section in self._doc.sections:
-            field_id = _FIELD_IDS.get(section.heading, section.heading.lower())
+            field_id = _field_id(section.heading)
             if section.heading in _EDITABLE:
                 body = self.query_one(f"#field-{field_id}", TextArea).text
             else:
