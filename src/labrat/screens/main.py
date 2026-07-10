@@ -671,7 +671,7 @@ class MainScreen(Screen[None]):
                 return
             drafts = merge_drafts(correction_drafts, decision_drafts)
             if not drafts:
-                self.notify("No correction learnings to review yet.", timeout=4)
+                self.notify("No new learnings to review.", timeout=4)
                 return
 
             def _done(applied: int | None) -> None:
@@ -696,8 +696,17 @@ class MainScreen(Screen[None]):
 
         from labrat.screens.record_decision import RecordDecisionScreen
 
-        def _on_result(text: str | None) -> None:
-            if text is None or not text.strip():
+        def _on_result(raw_text: str | None) -> None:
+            if raw_text is None:
+                return
+            # Normalize to single-line: the TextArea accepts Enter, and a
+            # multi-line decision defeats filter_unpromoted_decisions (which
+            # compares per-LINE bullets), causing it to re-draft forever and
+            # eventually duplicate on disk once the promoted body diverges.
+            # This also folds the empty/whitespace-only case in: "".split()
+            # -> [] -> "" -> skip.
+            text = " ".join(raw_text.split())
+            if not text:
                 return
             from labrat.memory.extractor import resolve_table_scope
             from labrat.memory.model import Memory, MemoryKind, MemoryScope
@@ -710,7 +719,7 @@ class MainScreen(Screen[None]):
                 profile=self._profile,
                 scope=MemoryScope.global_,
                 kind=MemoryKind.explicit_user_rule,
-                text=text.strip(),
+                text=text,
                 table_scope=resolve_table_scope(self._last_sql, known_tables),
             )
             # Immediate, durable persist — unlike corrections (buffered until

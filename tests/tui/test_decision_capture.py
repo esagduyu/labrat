@@ -122,3 +122,73 @@ async def test_record_decision_persists_and_harvests(
     assert "## Decisions" in text
     assert "Always exclude test orders from revenue metrics." in text
     assert "**Source:** harvested" in text
+
+
+async def test_multiline_decision_normalized_and_promotes_once(
+    ecommerce_db: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """M1 regression: a decision typed with an embedded newline (TextArea accepts
+    Enter) must be captured as single-line text and must promote exactly once —
+    filter_unpromoted_decisions compares per-LINE bullets, so a multi-line
+    Memory.text never matches its own promoted bullet and re-drafts forever,
+    duplicating the section body on disk once apply's dedup diverges.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    memory_dir = _isolate_memory_dir(monkeypatch, tmp_path)
+
+    screen = _screen(ecommerce_db, opt_in=True)
+    async with _Host(screen).run_test() as pilot:
+        await pilot.pause()
+
+        await pilot.press("ctrl+shift+d")
+        await pilot.pause()
+        modal = pilot.app.screen
+        assert isinstance(modal, RecordDecisionScreen)
+
+        modal.query_one(
+            "#decision-text", TextArea
+        ).text = "Always exclude test orders\nfrom revenue metrics."
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert pilot.app.screen is screen
+
+        # Captured as a single-line Memory — no embedded newline survives.
+        memories = MemoryStore(memory_dir).read_profile("dprof")
+        assert len(memories) == 1
+        recorded = memories[0]
+        assert "\n" not in recorded.text
+        assert recorded.text == "Always exclude test orders from revenue metrics."
+
+        # First harvest: drafts a Decisions section and applying promotes it.
+        worker = screen._run_harvest_review()
+        await worker.wait()
+        await pilot.pause()
+        review = pilot.app.screen
+        assert isinstance(review, HarvestReviewScreen)
+        assert any(
+            section.heading == "Decisions" and "exclude test orders" in section.body
+            for _key, section in review._rows
+        )
+
+        await pilot.click("#apply-btn")
+        await pilot.pause()
+        assert pilot.app.screen is screen
+
+        doc_path = tmp_path / "labrat_maze" / "scent" / "general.md"
+        text_after_first_apply = doc_path.read_text()
+        assert text_after_first_apply.count("Always exclude test orders from revenue metrics.") == 1
+
+        # Second harvest: filter_unpromoted_decisions must now catch the
+        # already-promoted decision (single-line bullet == single-line memory
+        # text) and NOT re-draft it — no HarvestReviewScreen pushed.
+        worker2 = screen._run_harvest_review()
+        await worker2.wait()
+        await pilot.pause()
+        assert pilot.app.screen is screen
+
+        # No duplicate landed on disk from a phantom re-draft/re-apply.
+        text_after_second_harvest = doc_path.read_text()
+        assert (
+            text_after_second_harvest.count("Always exclude test orders from revenue metrics.") == 1
+        )
