@@ -367,3 +367,46 @@ def test_snapshot_empty_turn_is_none():
     from labrat.widgets.turn_provenance import TurnProvenance
 
     assert TurnProvenance().snapshot() is None
+
+
+def test_snapshot_constraint_branches():
+    from labrat.cheese.model import ScentSourceRef
+    from labrat.widgets.turn_provenance import TurnProvenance
+
+    # (a) opaque non-JSON scent output degrades to an unattributed source.
+    prov = TurnProvenance()
+    prov.record_tool("search_reference_docs", True, "garbage")
+    snap = prov.snapshot()
+    assert snap is not None
+    assert snap.scent_sources == [ScentSourceRef(domain="(unattributed)", tier=None, fresh=None)]
+
+    # (b) a doc recorded with stale=True yields fresh is False.
+    prov2 = TurnProvenance()
+    prov2.record_tool(
+        "search_reference_docs",
+        True,
+        json.dumps(
+            {
+                "question": "q",
+                "results": [
+                    {
+                        "domain": "orders",
+                        "quick_reference": None,
+                        "sections": [],
+                        "best_source": "verified",
+                        "stale": True,
+                    }
+                ],
+            }
+        ),
+    )
+    snap2 = prov2.snapshot()
+    assert snap2 is not None
+    assert snap2.scent_sources[0].fresh is False
+
+    # (c) set_verifier(0) then snapshot() yields verifier_verdict == "sufficient".
+    prov3 = TurnProvenance()
+    prov3.set_verifier(0)
+    snap3 = prov3.snapshot()
+    assert snap3 is not None
+    assert snap3.verifier_verdict == "sufficient"
