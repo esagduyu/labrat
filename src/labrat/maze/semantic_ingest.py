@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -28,19 +29,38 @@ from labrat.maze.store import MazeStore
 _MANIFEST_FINGERPRINT_FILE = ".manifest_fingerprint"
 _METRICS_DOMAIN = "metrics"
 
+# Any body line that could be mistaken for a section heading or a provenance
+# marker once the section is rendered-then-reparsed (see document.py's
+# _H2_RE / _SOURCE_LINE_RE / _META_LINE_RE). Left unescaped, a dbt
+# description containing e.g. "\n## Sneaky\n**Source:** verified" round-trips
+# into a NEW section with a forged "verified" provenance token.
+_INJECTION_LINE_RE = re.compile(r"^(\s*)(##\s|\*\*Source:\*\*|\*\*Meta:\*\*)")
+
+
+def _sanitize_body_text(text: str) -> str:
+    """Markdown-escape lines that would be parsed as a heading/provenance marker.
+
+    Applied to every parser-provided (dbt) description string before it lands
+    in a Section body — the only external-text entry point for semantic
+    ingestion. Escaping (leading ``\\``) rather than stripping keeps the text
+    visible, readable prose; it just stops it being *structurally* a heading
+    or marker line on the next render/parse round-trip.
+    """
+    return "\n".join(_INJECTION_LINE_RE.sub(r"\1\\\2", line) for line in text.split("\n"))
+
 
 def _model_body(m: SemanticModelDef) -> str:
     lines: list[str] = []
     if m.description:
-        lines.append(m.description)
+        lines.append(_sanitize_body_text(m.description))
     for e in m.entities:
         lines.append(f"- entity `{e.name}` ({e.type})" if e.type else f"- entity `{e.name}`")
     for d in m.dimensions:
-        desc = f" — {d.description}" if d.description else ""
+        desc = f" — {_sanitize_body_text(d.description)}" if d.description else ""
         lines.append(f"- dimension `{d.name}` ({d.type}){desc}")
     for me in m.measures:
         expr = f" = `{me.expr}`" if me.expr else ""
-        desc = f" — {me.description}" if me.description else ""
+        desc = f" — {_sanitize_body_text(me.description)}" if me.description else ""
         lines.append(f"- measure `{me.name}` ({me.agg}){expr}{desc}")
     return "\n".join(lines)
 
@@ -48,7 +68,7 @@ def _model_body(m: SemanticModelDef) -> str:
 def _metric_body(mt: MetricDef, owners: dict[str, str]) -> str:
     lines: list[str] = []
     if mt.description:
-        lines.append(mt.description)
+        lines.append(_sanitize_body_text(mt.description))
     lines.append(f"- type: {mt.type}")
     for ref in mt.measure_refs:
         owner = owners.get(ref)
@@ -129,9 +149,12 @@ def ingest_dbt_semantics(
     write path — never catch the audit.
     """
     try:
-        manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return IngestOutcome(skipped=True, warnings=(f"manifest unreadable: {exc}",))
+    if not isinstance(manifest, dict):
+        return IngestOutcome(skipped=True, warnings=("manifest is not a JSON object",))
+    manifest = cast(dict[str, Any], manifest)
 
     fingerprint = semantic_fingerprint(manifest)
     stored = read_manifest_fingerprint(project_scent_dir)
