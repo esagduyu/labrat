@@ -1,5 +1,7 @@
 # Cartographer Attached-DB Grounding + Code/Name Detection + Beefed-Up Semantics — Implementation Plan
 
+> **STATUS (2026-07-10, overnight verification): ALREADY FULLY EXECUTED AND MERGED** — all tasks incl. C1 (env/suite profiling connections), C2 (`build_code_name_notes`, commits 6c0739d/5c8d796), and C3/C4 (semantics grounding + prune, 04a970e-era) are in master; anchors re-verified against post-T1b source (no conflicts; per-catalog schema_hash stamping composes cleanly). Only this plan DOCUMENT was late to be committed. The C3/C4 semantics re-ablation RUN remains tabled with the benchmark track.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fix the Cartographer's DB-coverage blind spot (attached Postgres/SQLite are never profiled), add a deterministic code/name-pair detector, and ground + prune the LLM semantics author so a re-ablation of semantic Scent is finally a valid test.
