@@ -105,3 +105,26 @@ def test_self_contained_and_footer():
     html = _render([_fr()])
     assert "http" not in html.replace("https://github.com/esagduyu/labrat", "")
     assert "Made with LabRat" in html and "https://github.com/esagduyu/labrat" in html
+
+
+def test_chart_forged_b64_is_omitted():
+    html = _render([_fr(chart_png_b64='" onerror="alert(1)" x="')])
+    assert "onerror" not in html
+    assert "data:image/png" not in html
+
+
+def test_chart_suppressed_under_rows_mode_none():
+    html = _render([_fr(chart_png_b64="QUJD")], rows_mode="none")
+    assert "data:image/png" not in html
+
+
+def test_total_rows_none_fallback():
+    html = _render([_fr(total_rows=None)])
+    assert "Showing 1 of 1 rows" in html
+    assert "None rows" not in html
+
+
+def test_none_cell_renders_empty():
+    html = _render([_fr(table_rows=[["EMEA", None]])])
+    assert "<td></td>" in html
+    assert ">None<" not in html

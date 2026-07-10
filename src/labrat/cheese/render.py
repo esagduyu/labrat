@@ -10,6 +10,8 @@ fabricated one.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -46,6 +48,25 @@ def _freshness_label(fresh: bool | None) -> str:
     if fresh is False:
         return "stale"
     return "freshness unknown"
+
+
+def _chart_data_uri(chart_png_b64: str | None, rows_mode: Literal["preview", "none"]) -> str | None:
+    """Build a validated chart data URI, or ``None`` to omit the chart.
+
+    A chart visually encodes withheld values, so it is suppressed outright
+    under ``rows_mode="none"`` (M1) — that withholding semantic belongs to
+    the renderer, not the caller. Otherwise, ``chart_png_b64`` is decoded
+    with strict validation before it is ever interpolated into the ``src``
+    attribute (H1): invalid base64 (e.g. an attribute-breakout payload) is
+    treated as "no chart" — an honest omission, not a best-effort escape.
+    """
+    if not chart_png_b64 or rows_mode == "none":
+        return None
+    try:
+        base64.b64decode(chart_png_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return f"data:image/png;base64,{chart_png_b64}"
 
 
 def _trust_context(provenance: FindingProvenance | None) -> dict[str, Any] | None:
@@ -247,7 +268,7 @@ _TEMPLATE_SRC = """\
     {% endif %}
     {% if f.chart_data_uri %}
     <div class="chart">
-      <img src="{{ f.chart_data_uri | safe }}" alt="Chart for: {{ f.question }}">
+      <img src="{{ f.chart_data_uri }}" alt="Chart for: {{ f.question }}">
     </div>
     {% endif %}
     <div class="results">
@@ -335,12 +356,21 @@ def render_cheese(
             "question": f.question,
             "note": f.note,
             "sql": f.sql,
-            "chart_data_uri": (
-                f"data:image/png;base64,{f.chart_png_b64}" if f.chart_png_b64 else None
-            ),
+            "chart_data_uri": _chart_data_uri(f.chart_png_b64, rows_mode),
             "table_columns": f.table_columns,
-            "table_rows": f.table_rows,
-            "total_rows": f.total_rows,
+            "table_rows": (
+                [
+                    ["" if cell is None else cell for cell in row]  # pyright: ignore[reportUnnecessaryComparison]
+                    for row in f.table_rows
+                ]
+                if f.table_rows is not None
+                else None
+            ),
+            "total_rows": (
+                f.total_rows
+                if f.total_rows is not None
+                else (len(f.table_rows) if f.table_rows is not None else None)
+            ),
             "pinned_at": f.pinned_at,
             "trust": _trust_context(f.provenance),
         }
