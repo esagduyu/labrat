@@ -148,11 +148,11 @@ def resolve_task_tool_contract(
 
 `dab-core-v1` is exactly the 13 tools in spec section 7.1. `cartographer=True` appends only `search_reference_docs`; `mongo=True` appends only `load_mongo_collection`. `legacy-full-20260710` is exactly the frozen 22-tool list in section 11 and rejects conditional additions. The run manifest stores one `TaskToolContract` per selected task; a single run-level tool tuple is insufficient because Mongo and Cartographer are task-scoped.
 
-- [ ] **Step 1 RED:** Test exact names/order, missing-global-tool failure, no hidden/self-erroring tools, deterministic canonical JSON hash, conditional additions, the exact legacy list, and identical filtered in-process/MCP schemas.
-- [ ] **Step 2:** Run `uv run pytest -q tests/unit/test_dab_tool_profiles.py`; expected collection failure because the module does not exist.
-- [ ] **Step 3 GREEN:** Implement the constants and functions. Canonical JSON uses `json.dumps(value, sort_keys=True, separators=(",", ":"))`; fail if a requested tool is absent or duplicated.
-- [ ] **Step 4 REFACTOR:** Keep this module independent of `DabSuite`, policy, and CLI; rerun `uv run pytest -q tests/unit/test_dab_tool_profiles.py`.
-- [ ] **Step 5:** Run the focused task gate and commit:
+- [x] **Step 1 RED:** Test exact names/order, missing-global-tool failure, no hidden/self-erroring tools, deterministic canonical JSON hash, conditional additions, the exact legacy list, and identical filtered in-process/MCP schemas.
+- [x] **Step 2:** Run `uv run pytest -q tests/unit/test_dab_tool_profiles.py`; expected collection failure because the module does not exist.
+- [x] **Step 3 GREEN:** Implement the constants and functions. Canonical JSON uses `json.dumps(value, sort_keys=True, separators=(",", ":"))`; fail if a requested tool is absent or duplicated.
+- [x] **Step 4 REFACTOR:** Keep this module independent of `DabSuite`, policy, and CLI; rerun `uv run pytest -q tests/unit/test_dab_tool_profiles.py`.
+- [x] **Step 5:** Run the focused task gate and commit:
 
 ```bash
 git add src/labrat/eval/benchmarks/dab/tool_profiles.py tests/unit/test_dab_tool_profiles.py
