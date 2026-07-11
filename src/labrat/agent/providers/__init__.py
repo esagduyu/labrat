@@ -7,7 +7,12 @@ from typing import Literal
 from labrat.agent.providers.anthropic_direct import AnthropicProvider
 from labrat.agent.providers.base import ModelProvider
 from labrat.agent.providers.claude_code import ClaudeCodeProvider
-from labrat.agent.providers.codex_subscription import CodexSubscriptionProvider
+from labrat.agent.providers.codex_subscription import (
+    CODEX_MODEL_IDS,
+    CODEX_REASONING_EFFORTS,
+    CodexSubscriptionProvider,
+    resolve_codex_model_config,
+)
 from labrat.agent.providers.openai_compatible import OpenAICompatibleProvider
 
 ProviderName = Literal["anthropic", "claude-code", "openai", "codex"]
@@ -29,8 +34,8 @@ def build_provider(
                     hits the documented conflict for tool round-trips)
       openai      → metered OpenAI-compatible (needs OPENAI_API_KEY or
                     an OPENAI_BASE_URL/api_key pair)
-      codex       → GPT-5.5 via the user's ChatGPT subscription (Codex Responses
-                    API + ~/.codex/auth.json; no metered key). Personal/dev path.
+      codex       → GPT-5.5/5.6 via the user's ChatGPT subscription (Codex
+                    Responses API + ~/.codex/auth.json). Personal/dev path.
 
     ``timeout`` (seconds) overrides the per-call subprocess timeout for the
     ``claude-code`` provider; the others manage their own HTTP timeouts and ignore
@@ -49,13 +54,18 @@ def build_provider(
     if name == "openai":
         return OpenAICompatibleProvider(model=model)
     if name == "codex":
+        resolved_model, resolved_reasoning = resolve_codex_model_config(model, reasoning)
         return CodexSubscriptionProvider(
-            model=model, reasoning_effort=reasoning or "medium", cache_key=cache_key
+            model=resolved_model,
+            reasoning_effort=resolved_reasoning,
+            cache_key=cache_key,
         )
     raise ValueError(f"Unknown provider {name!r}. Use one of {PROVIDER_NAMES}.")
 
 
 __all__ = [
+    "CODEX_MODEL_IDS",
+    "CODEX_REASONING_EFFORTS",
     "PROVIDER_NAMES",
     "AnthropicProvider",
     "ClaudeCodeProvider",
@@ -64,4 +74,5 @@ __all__ = [
     "OpenAICompatibleProvider",
     "ProviderName",
     "build_provider",
+    "resolve_codex_model_config",
 ]

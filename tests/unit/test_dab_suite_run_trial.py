@@ -184,6 +184,7 @@ async def test_labrat_agent_driver_records_provider_token_usage(
     }
     provider = MagicMock()
     provider.usage = usage
+    provider.request_usage = [{"request": 1, "input_tokens": 5000}]
     mock_build.return_value = provider
 
     suite = DabSuite(
@@ -198,6 +199,143 @@ async def test_labrat_agent_driver_records_provider_token_usage(
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_usage")
 
     assert result.meta.get("usage") == usage
+    assert result.meta.get("request_usage") == provider.request_usage
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_driver_preserves_completed_usage_on_later_failure(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {
+        "input_tokens": 2000,
+        "output_tokens": 50,
+        "cached_tokens": 1500,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 20,
+        "requests": 1,
+    }
+    provider.request_usage = [{"request": 1, "response_id": "resp_1"}]
+    mock_build.return_value = provider
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.5",
+    )
+    task = next(iter(suite.tasks()))
+
+    async def failing_run_agent_task(**_kwargs: Any) -> Any:
+        raise TimeoutError("later turn timed out")
+
+    with patch("labrat.agent.runner.run_agent_task", new=failing_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_fail")
+
+    assert result.reason == "infra:timeout"
+    assert result.meta["usage"]["input_tokens"] == 2000
+    assert result.meta["request_usage"] == provider.request_usage
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_driver_threads_ablation_config_and_touches_trace(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    """Model settings stay intact while lever/ledger controls reach the agent.
+
+    The per-trial trace is also present when the model makes zero tool calls.
+    """
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    mock_build.return_value = provider
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=0, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.5",
+        agent_reasoning="high",
+        agent_levers=False,
+        agent_ledger=False,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "scratch_ablation"
+
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    assert result.tool_calls == 0
+    mock_build.assert_called_once_with(
+        "codex",
+        "gpt-5.5",
+        timeout=None,
+        reasoning="high",
+        cache_key=task.id,
+    )
+    assert captured["enable_ledger"] is False
+    assert captured["ledger_dir"] == scratch
+    assert "never answer from prior" not in captured["system_prompt"]
+    trace = scratch / "agent_tool_calls.jsonl"
+    assert trace.exists()
+    assert trace.read_text() == ""
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_sol_ultra_enables_proactive_labrat_delegation_prompt(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    mock_build.return_value = MagicMock()
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=0, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.6-sol",
+        agent_reasoning="ultra",
+    )
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_ultra")
+
+    assert "Proactive multi-agent delegation is active" in captured["system_prompt"]
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_sol_max_does_not_enable_proactive_labrat_delegation_prompt(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    mock_build.return_value = MagicMock()
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=0, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.6-sol",
+        agent_reasoning="max",
+    )
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_max")
+
+    assert "Proactive multi-agent delegation is active" not in captured["system_prompt"]
+    assert "dispatch_subagent" not in captured["system_prompt"]
 
 
 @patch("labrat.agent.providers.build_provider", return_value=MagicMock())
@@ -249,6 +387,47 @@ async def test_run_trial_isolates_agent_timeout_as_infra(tmp_path: Path) -> None
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
     assert result.passed is False
     assert result.reason == "infra:timeout"
+
+
+async def test_run_trial_classifies_http_429_and_sanitizes_reset_metadata(
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    request = httpx.Request("POST", "https://chatgpt.com/backend-api/codex/responses")
+    response = httpx.Response(
+        429,
+        request=request,
+        json={
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "raw provider message must not be persisted",
+                "plan_type": "prolite",
+                "resets_at": 1783767751,
+                "resets_in_seconds": 321,
+            }
+        },
+    )
+    error = httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
+
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_429")
+
+    assert result.passed is False
+    assert result.reason == "infra:rate_limit"
+    assert result.meta["rate_limit"] == {
+        "resets_at": 1783767751,
+        "resets_in_seconds": 321,
+    }
+    assert "raw provider message" not in result.model_dump_json()
+    assert "plan_type" not in result.model_dump_json()
 
 
 async def test_run_trial_isolates_generic_agent_error_as_infra(tmp_path: Path) -> None:

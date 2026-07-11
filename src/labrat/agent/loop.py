@@ -76,7 +76,10 @@ class AgentLoop:
         if not isinstance(provider, ModelProvider):
             raise TypeError(f"Expected ModelProvider, got {type(provider)}")
 
-        self._provider = provider
+        # A session can reuse one provider for the main loop, verifier, row-level
+        # LLM helpers, and subagents. Bind here so provider-local continuation or
+        # exact-replay state cannot leak across those independent conversations.
+        self._provider = provider.bind_conversation()
         self._registry = registry
         self._ctx = ctx
         self._system = system or build_system_prompt(dialect)

@@ -1,9 +1,8 @@
-"""GPT-5.5 via the user's ChatGPT subscription (Codex Responses API).
+"""GPT-5.5/5.6 via the user's ChatGPT subscription (Codex Responses API).
 
-GPT-5.5 is subscription-only today (no metered API), so the only way to run
-LabRat's own ``AgentLoop`` on it is to speak the same protocol the Codex CLI
-uses: the OpenAI **Responses API** at ``chatgpt.com/backend-api/codex/responses``,
-authenticated with the Codex CLI's ``~/.codex/auth.json`` tokens.
+This personal/dev provider speaks the same Responses protocol as Codex at
+``chatgpt.com/backend-api/codex/responses``, authenticated with the Codex CLI's
+``~/.codex/auth.json`` tokens.
 
 This provider is a native ``ModelProvider`` (not a proxy) so the Rat Core stays
 embeddable. It translates LabRat's Anthropic-format history + tool schemas into
@@ -18,10 +17,14 @@ is the distributable one. See
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import copy
+import hashlib
 import json
 import time
 import uuid
+import weakref
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
@@ -37,6 +40,65 @@ _DEFAULT_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 # Refresh this many seconds before the JWT `exp` rather than waiting for a 401.
 _REFRESH_SKEW_SECONDS = 300
 _HTTP_TIMEOUT_SECONDS = 600
+_GPT56_CACHE_KEY_MIN_INTERVAL_SECONDS = 4.0
+
+# Exact model identifiers exposed by the current Codex subscription metadata.
+CODEX_MODEL_IDS: tuple[str, ...] = (
+    "gpt-5.5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+)
+GPT56_MODEL_IDS: tuple[str, ...] = CODEX_MODEL_IDS[1:]
+GPT55_REASONING_EFFORTS: tuple[str, ...] = (
+    "none",
+    "minimal",  # retained for the existing subscription-provider CLI contract
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
+GPT56_REASONING_EFFORTS: tuple[str, ...] = (
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
+CODEX_REASONING_EFFORTS: tuple[str, ...] = tuple(
+    dict.fromkeys((*GPT55_REASONING_EFFORTS, *GPT56_REASONING_EFFORTS))
+)
+# Process-local capability memory prevents every trial from repeating a failed
+# private-endpoint feature probe.
+_CACHE_BREAKPOINT_SUPPORT: dict[str, bool] = {}
+# GPT-5.6's documented reliable-cache path is approximately 15 RPM per
+# prompt_cache_key. DAB runs trials sequentially, so a process-local monotonic
+# gate is sufficient to share pacing across per-trial provider instances.
+_CACHE_KEY_LAST_START: dict[tuple[str, str], float] = {}
+_CACHE_KEY_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[tuple[str, str], asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def resolve_codex_model_config(model: str, reasoning_effort: str | None) -> tuple[str, str]:
+    """Validate and return a concrete Codex model/effort pair."""
+    if model not in CODEX_MODEL_IDS:
+        valid = ", ".join(CODEX_MODEL_IDS)
+        raise ValueError(f"Unsupported Codex model {model!r}. Valid models: {valid}.")
+    effort = reasoning_effort or "medium"
+    if model in {"gpt-5.6-sol", "gpt-5.6-terra"}:
+        valid_efforts = GPT56_REASONING_EFFORTS
+    elif model == "gpt-5.6-luna":
+        valid_efforts = tuple(e for e in GPT56_REASONING_EFFORTS if e != "ultra")
+    else:
+        valid_efforts = GPT55_REASONING_EFFORTS
+    if effort not in valid_efforts:
+        valid = ", ".join(valid_efforts)
+        raise ValueError(
+            f"Unsupported reasoning effort {effort!r} for {model!r}. Valid efforts: {valid}."
+        )
+    return model, effort
 
 
 def _b64url_decode(segment: str) -> bytes:
@@ -76,7 +138,7 @@ def _jwt_exp(token: str) -> int | None:
 
 
 class CodexSubscriptionProvider(ModelProvider):
-    """Run LabRat's loop on GPT-5.5 via the ChatGPT subscription (Codex API)."""
+    """Run LabRat's loop on GPT-5.5/5.6 via the ChatGPT subscription."""
 
     def __init__(
         self,
@@ -84,9 +146,18 @@ class CodexSubscriptionProvider(ModelProvider):
         reasoning_effort: str = "medium",
         auth_path: Path | None = None,
         cache_key: str | None = None,
+        *,
+        _shared_usage: dict[str, int] | None = None,
+        _shared_request_usage: list[dict[str, Any]] | None = None,
+        _shared_features: dict[str, bool] | None = None,
+        _conversation_id: str | None = None,
     ) -> None:
-        self._model = model
-        self._reasoning_effort = reasoning_effort
+        self._model, self._reasoning_effort = resolve_codex_model_config(model, reasoning_effort)
+        # On the Codex subscription surface, Ultra is Max wire reasoning plus
+        # proactive task delegation (implemented by LabRat's subagent policy).
+        self._wire_reasoning_effort = (
+            "max" if self._reasoning_effort == "ultra" else self._reasoning_effort
+        )
         self._auth_path = auth_path or _DEFAULT_AUTH_PATH
         # prompt-cache routing key. The caller should pass a key that is STABLE
         # across requests sharing a prompt prefix — e.g. per-task in a benchmark, so
@@ -104,15 +175,52 @@ class CodexSubscriptionProvider(ModelProvider):
         # (HTTP 400, as it does for some params), stream() flips this and retries
         # without them, degrading to the pre-passback behavior instead of stalling.
         self._reasoning_passback_disabled = False
+        # Exact stateless transcript replay, scoped to one bound AgentLoop. Codex's
+        # ChatGPT HTTP transport uses store=false and replays ordered model-visible
+        # fields, with Responses Lite transport IDs normalized away.
+        self._replay_items: list[dict[str, Any]] = []
+        self._expected_assistant_cursor: tuple[str, tuple[str, ...]] | None = None
+        self._last_request_mode = "initial_full"
+        self._last_cache_pacing_wait_seconds = 0.0
+        self._conversation_id = _conversation_id or uuid.uuid4().hex
+        self._shared_features = (
+            _shared_features
+            if _shared_features is not None
+            else {"explicit_cache_breakpoints": _CACHE_BREAKPOINT_SUPPORT.get(self._model, True)}
+        )
         # Token usage accumulated across every stream() call on this instance
         # (≈ per-trial totals). Populated from each response's `usage` block.
-        self.usage: dict[str, int] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cached_tokens": 0,
-            "reasoning_tokens": 0,
-            "requests": 0,
-        }
+        self.usage = (
+            _shared_usage
+            if _shared_usage is not None
+            else {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "reasoning_tokens": 0,
+                "requests": 0,
+                "http_attempts": 0,
+                "cache_breakpoint_fallbacks": 0,
+                "reasoning_passback_fallbacks": 0,
+                "cache_pacing_wait_ms": 0,
+            }
+        )
+        # Safe-to-persist per-request telemetry. Never contains auth headers,
+        # prompts, tool outputs, or encrypted reasoning payloads.
+        self.request_usage = _shared_request_usage if _shared_request_usage is not None else []
+
+    def bind_conversation(self) -> ModelProvider:
+        """Return isolated replay state while sharing aggregate usage/config."""
+        return CodexSubscriptionProvider(
+            model=self._model,
+            reasoning_effort=self._reasoning_effort,
+            auth_path=self._auth_path,
+            cache_key=self._cache_key,
+            _shared_usage=self.usage,
+            _shared_request_usage=self.request_usage,
+            _shared_features=self._shared_features,
+        )
 
     # ---- auth -----------------------------------------------------------------
 
@@ -188,7 +296,6 @@ class CodexSubscriptionProvider(ModelProvider):
             account_id = tokens.get("account_id") or auth.get("account_id")
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "OpenAI-Beta": "responses=experimental",
             "originator": "codex_cli_rs",
             "User-Agent": "codex_cli_rs",
             "accept": "text/event-stream",
@@ -196,6 +303,10 @@ class CodexSubscriptionProvider(ModelProvider):
         }
         if isinstance(account_id, str) and account_id:
             headers["chatgpt-account-id"] = account_id
+        if self._model in GPT56_MODEL_IDS:
+            headers["x-openai-internal-codex-responses-lite"] = "true"
+        else:
+            headers["OpenAI-Beta"] = "responses=experimental"
         return headers
 
     # ---- translation ----------------------------------------------------------
@@ -207,44 +318,44 @@ class CodexSubscriptionProvider(ModelProvider):
         system: str,
     ) -> dict[str, Any]:
         """Translate Anthropic-format history + tools into a Responses request body."""
-        input_items: list[dict[str, Any]] = []
-        emitted_reasoning: set[str] = set()
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                input_items.append(_text_message_item(role, content))
-                continue
-            for block in content:
-                btype = block.get("type")
-                if btype == "text":
-                    input_items.append(_text_message_item(role, block.get("text", "")))
-                elif btype == "tool_use":
-                    # Re-emit the captured reasoning item immediately before its
-                    # function_call (deduped — one reasoning item can precede several
-                    # parallel calls). Keeps the prefix byte-identical to what the
-                    # model produced, so the cache hits and reasoning continues.
-                    if not self._reasoning_passback_disabled:
-                        reasoning = self._reasoning_by_call_id.get(block["id"])
-                        if reasoning is not None and reasoning["id"] not in emitted_reasoning:
-                            input_items.append(reasoning)
-                            emitted_reasoning.add(reasoning["id"])
-                    input_items.append(
-                        {
-                            "type": "function_call",
-                            "call_id": block["id"],
-                            "name": block["name"],
-                            "arguments": json.dumps(block.get("input", {})),
-                        }
+        if self._replay_items:
+            # The server already produced the latest assistant turn. Replay its exact
+            # output items and translate only messages appended after that assistant
+            # turn (normally function_call_output items or verifier feedback).
+            continuation = _messages_after_last_assistant(messages)
+            cursor_matches = (
+                self._expected_assistant_cursor is None
+                or _last_assistant_cursor(messages) == self._expected_assistant_cursor
+            )
+            if continuation is None or not cursor_matches:
+                # A caller reused an unbound provider for an unrelated history.
+                # Fail safe by starting a fresh stateless transcript.
+                input_items = _messages_to_responses_items(
+                    messages,
+                    self._reasoning_by_call_id,
+                    reasoning_passback_disabled=self._reasoning_passback_disabled,
+                )
+                self._last_request_mode = "reconstructed_full"
+            else:
+                input_items = copy.deepcopy(self._replay_items)
+                input_items.extend(
+                    _messages_to_responses_items(
+                        continuation,
+                        self._reasoning_by_call_id,
+                        reasoning_passback_disabled=self._reasoning_passback_disabled,
                     )
-                elif btype == "tool_result":
-                    input_items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": block["tool_use_id"],
-                            "output": _tool_result_to_str(block.get("content", "")),
-                        }
-                    )
+                )
+                self._last_request_mode = "exact_replay"
+        else:
+            input_items = _messages_to_responses_items(
+                messages,
+                self._reasoning_by_call_id,
+                reasoning_passback_disabled=self._reasoning_passback_disabled,
+            )
+            self._last_request_mode = "initial_full"
+
+        if self._reasoning_passback_disabled:
+            _strip_reasoning_items(input_items)
 
         responses_tools = [
             {
@@ -257,25 +368,52 @@ class CodexSubscriptionProvider(ModelProvider):
             for t in tools
         ]
 
+        use_responses_lite = self._model in GPT56_MODEL_IDS
+        if use_responses_lite:
+            if self._last_request_mode != "exact_replay":
+                prefix: list[dict[str, Any]] = [
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": responses_tools,
+                    }
+                ]
+                if system:
+                    prefix.append(_text_message_item("developer", system))
+                input_items[0:0] = prefix
+            if self._shared_features["explicit_cache_breakpoints"]:
+                _mark_first_input_text_cache_breakpoint(input_items)
+            else:
+                _strip_cache_breakpoints(input_items)
+        # ChatGPT uses store=false and item_ids is disabled on this transport.
+        # Preserve function call_id while removing server-local top-level IDs.
+        _strip_item_ids(input_items)
+
+        reasoning: dict[str, Any] = {"effort": self._wire_reasoning_effort}
+        if use_responses_lite:
+            reasoning["context"] = "all_turns"
+        else:
+            reasoning["summary"] = "auto"
+
         body: dict[str, Any] = {
             "model": self._model,
-            "instructions": system or "",
             "input": input_items,
-            "tools": responses_tools,
             "tool_choice": "auto",
-            "parallel_tool_calls": True,
-            "reasoning": {"effort": self._reasoning_effort, "summary": "auto"},
+            "parallel_tool_calls": not use_responses_lite,
+            "reasoning": reasoning,
             "include": ["reasoning.encrypted_content"],
             "store": False,
             "stream": True,
-            # Prompt caching is automatic on the Responses API (caches the longest
-            # stable prefix >1024 tok). We optimize it with a per-trial routing key
-            # that keeps all of a trial's turns on the same cache. NOTE: the
-            # `prompt_cache_retention` param is a valid OpenAI-API param but the
-            # codex/ChatGPT backend rejects it with HTTP 400 ("Unsupported
-            # parameter"), so we omit it — GPT-5.5 already defaults to 24h retention.
+            # Prompt caching is automatic for eligible prefixes. GPT-5.6 requires a
+            # stable key for its more reliable matching; DAB supplies one per task.
+            # We intentionally keep store=false: current Codex subscription HTTP
+            # mirrors the official client and exact-replays response items. Stored
+            # previous_response_id chaining is conversation state, not a billing fix.
             "prompt_cache_key": self._cache_key,
         }
+        if not use_responses_lite:
+            body["instructions"] = system or ""
+            body["tools"] = responses_tools
         return body
 
     # ---- streaming ------------------------------------------------------------
@@ -292,45 +430,107 @@ class CodexSubscriptionProvider(ModelProvider):
         headers = self._headers(auth)
 
         async def _emit() -> AsyncIterator[ContentBlock]:
+            self._last_cache_pacing_wait_seconds = await _pace_cache_key(
+                self._model, self._cache_key
+            )
+            self.usage["cache_pacing_wait_ms"] += round(self._last_cache_pacing_wait_seconds * 1000)
             async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
-                for _attempt in range(2):
+                # One retry may disable a rejected GPT-5.6 cache breakpoint and a
+                # second may disable explicitly rejected reasoning-item passback.
+                for _attempt in range(3):
                     body = self._to_responses_request(messages, tools, system)
+                    self.usage["http_attempts"] += 1
                     sent_reasoning = any(it.get("type") == "reasoning" for it in body["input"])
+                    sent_cache_breakpoint = _has_cache_breakpoint(body["input"])
+                    output_items: list[dict[str, Any]] = []
+                    completion_state = {"completed": False}
+                    request_mode = self._last_request_mode
                     try:
                         async with client.stream(
                             "POST", _RESPONSES_URL, headers=headers, json=body
                         ) as resp:
+                            if resp.is_error:
+                                # Read the error payload so fallback classification can
+                                # name the rejected parameter instead of treating every
+                                # HTTP 400 as a reasoning-item failure.
+                                await resp.aread()
                             resp.raise_for_status()
-                            async for block in self._consume(resp.aiter_lines()):
+                            async for block in self._consume(
+                                resp.aiter_lines(),
+                                output_items=output_items,
+                                completion_state=completion_state,
+                                request_mode=request_mode,
+                                cache_breakpoint=sent_cache_breakpoint,
+                            ):
                                 yield block
+                        if not completion_state["completed"]:
+                            raise RuntimeError(
+                                "Codex Responses stream ended without response.completed"
+                            )
+                        # Commit replay state only after a complete successful stream.
+                        self._replay_items = copy.deepcopy(body["input"])
+                        self._replay_items.extend(copy.deepcopy(output_items))
+                        self._expected_assistant_cursor = _response_output_cursor(output_items)
+                        if sent_cache_breakpoint:
+                            _CACHE_BREAKPOINT_SUPPORT[self._model] = True
                         return
                     except httpx.HTTPStatusError as exc:
-                        # If reasoning items triggered a 400, disable passback and retry
-                        # once without them (the prefix-cache loss is far better than a
-                        # stalled run). Any other 4xx/5xx propagates to per-trial isolation.
+                        if (
+                            exc.response.status_code == 400
+                            and sent_cache_breakpoint
+                            and _http_error_mentions(exc, "prompt_cache")
+                            and self._shared_features["explicit_cache_breakpoints"]
+                        ):
+                            self._shared_features["explicit_cache_breakpoints"] = False
+                            _CACHE_BREAKPOINT_SUPPORT[self._model] = False
+                            self.usage["cache_breakpoint_fallbacks"] += 1
+                            continue
                         if (
                             exc.response.status_code == 400
                             and sent_reasoning
+                            and _http_error_rejects_reasoning_item(exc)
                             and not self._reasoning_passback_disabled
                         ):
                             self._reasoning_passback_disabled = True
+                            self.usage["reasoning_passback_fallbacks"] += 1
                             continue
                         raise
 
         return _emit()
 
-    async def _consume(self, lines: AsyncIterator[str]) -> AsyncIterator[ContentBlock]:
+    async def _consume(
+        self,
+        lines: AsyncIterator[str],
+        *,
+        output_items: list[dict[str, Any]] | None = None,
+        completion_state: dict[str, bool] | None = None,
+        request_mode: str = "direct",
+        cache_breakpoint: bool = False,
+    ) -> AsyncIterator[ContentBlock]:
         """Reduce an SSE line stream into content blocks while (a) accumulating
         per-call token usage onto ``self.usage`` and (b) capturing reasoning items
         and mapping each to the function_call it precedes, so we can pass them back
         next turn. Split out from ``stream`` so it's testable without real HTTP."""
         current_reasoning: dict[str, Any] | None = None
         async for event in _iter_sse_events(lines):
+            if event.get("type") == "response.completed" and completion_state is not None:
+                completion_state["completed"] = True
             usage = _extract_usage(event)
             if usage is not None:
-                self._add_usage(usage)
+                self._add_usage(
+                    usage,
+                    response_id=_response_id(event),
+                    terminal_status=str(event.get("type", "response.completed")),
+                    request_mode=request_mode,
+                    cache_breakpoint=cache_breakpoint,
+                    cache_write_tokens_reported=_input_usage_detail_reported(
+                        event, "cache_write_tokens"
+                    ),
+                )
             item = _output_item_done(event)
             if item is not None:
+                if output_items is not None:
+                    output_items.append(copy.deepcopy(item))
                 itype = item.get("type")
                 if itype == "reasoning":
                     current_reasoning = _reasoning_input_item(item)
@@ -341,10 +541,259 @@ class CodexSubscriptionProvider(ModelProvider):
             for block in _reduce_event(event):
                 yield block
 
-    def _add_usage(self, usage: dict[str, int]) -> None:
-        for key in ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens"):
+    def _add_usage(
+        self,
+        usage: dict[str, int],
+        *,
+        response_id: str | None = None,
+        terminal_status: str = "response.completed",
+        request_mode: str = "direct",
+        cache_breakpoint: bool = False,
+        cache_write_tokens_reported: bool = False,
+    ) -> None:
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cached_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+        ):
             self.usage[key] += usage.get(key, 0)
         self.usage["requests"] += 1
+        input_tokens = usage.get("input_tokens", 0)
+        self.request_usage.append(
+            {
+                "request": len(self.request_usage) + 1,
+                "model": self._model,
+                "reasoning_effort": self._reasoning_effort,
+                "wire_reasoning_effort": self._wire_reasoning_effort,
+                "conversation_id": self._conversation_id,
+                "response_id": response_id,
+                "terminal_status": terminal_status,
+                "request_mode": request_mode,
+                "cache_breakpoint": cache_breakpoint,
+                "cache_pacing_wait_seconds": self._last_cache_pacing_wait_seconds,
+                **usage,
+                # The ChatGPT subscription endpoint may omit write-token telemetry.
+                # Keep an explicit presence bit so an omitted field is not reported
+                # as a measured zero even though aggregate arithmetic remains numeric.
+                "cache_write_tokens_reported": cache_write_tokens_reported,
+                "cache_hit_ratio": (
+                    usage.get("cached_tokens", 0) / input_tokens if input_tokens else 0.0
+                ),
+                "reasoning_passback_disabled": self._reasoning_passback_disabled,
+                "cache_breakpoint_fallbacks": self.usage["cache_breakpoint_fallbacks"],
+                "reasoning_passback_fallbacks": self.usage["reasoning_passback_fallbacks"],
+            }
+        )
+
+
+async def _pace_cache_key(model: str, cache_key: str) -> float:
+    """Keep GPT-5.6 traffic at the documented ~15 RPM per cache-routing key."""
+    if model not in GPT56_MODEL_IDS:
+        return 0.0
+    route = (model, cache_key)
+    loop = asyncio.get_running_loop()
+    locks = _CACHE_KEY_LOCKS.setdefault(loop, {})
+    lock = locks.setdefault(route, asyncio.Lock())
+    invoked_at = time.monotonic()
+    async with lock:
+        now = time.monotonic()
+        last_start = _CACHE_KEY_LAST_START.get(route)
+        wait_seconds = (
+            max(0.0, last_start + _GPT56_CACHE_KEY_MIN_INTERVAL_SECONDS - now)
+            if last_start is not None
+            else 0.0
+        )
+        if wait_seconds:
+            await asyncio.sleep(wait_seconds)
+        started_at = time.monotonic()
+        _CACHE_KEY_LAST_START[route] = started_at
+    return max(0.0, started_at - invoked_at)
+
+
+def _messages_to_responses_items(
+    messages: list[dict[str, Any]],
+    reasoning_by_call_id: dict[str, dict[str, Any]],
+    *,
+    reasoning_passback_disabled: bool,
+) -> list[dict[str, Any]]:
+    """Translate generic history when exact server output items are unavailable."""
+    input_items: list[dict[str, Any]] = []
+    emitted_reasoning: set[str] = set()
+    for msg in messages:
+        role = str(msg.get("role", "user"))
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            input_items.append(_text_message_item(role, content))
+            continue
+        if not isinstance(content, list):
+            continue
+        for raw_block in cast(list[Any], content):
+            if not isinstance(raw_block, dict):
+                continue
+            block = cast(dict[str, Any], raw_block)
+            btype = block.get("type")
+            if btype == "text":
+                input_items.append(_text_message_item(role, str(block.get("text", ""))))
+            elif btype == "tool_use":
+                call_id = str(block.get("id", ""))
+                if not reasoning_passback_disabled:
+                    reasoning = reasoning_by_call_id.get(call_id)
+                    reasoning_id = str(reasoning.get("id", "")) if reasoning else ""
+                    if reasoning is not None and reasoning_id not in emitted_reasoning:
+                        input_items.append(copy.deepcopy(reasoning))
+                        emitted_reasoning.add(reasoning_id)
+                input_items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": str(block.get("name", "")),
+                        "arguments": json.dumps(block.get("input", {})),
+                    }
+                )
+            elif btype == "tool_result":
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": str(block.get("tool_use_id", "")),
+                        "output": _tool_result_to_str(block.get("content", "")),
+                    }
+                )
+    return input_items
+
+
+def _messages_after_last_assistant(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "assistant":
+            return messages[index + 1 :]
+    return None
+
+
+def _last_assistant_cursor(
+    messages: list[dict[str, Any]],
+) -> tuple[str, tuple[str, ...]] | None:
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        text_parts: list[str] = []
+        call_ids: list[str] = []
+        content = message.get("content")
+        if isinstance(content, list):
+            for raw_block in cast(list[Any], content):
+                if not isinstance(raw_block, dict):
+                    continue
+                block = cast(dict[str, Any], raw_block)
+                if block.get("type") == "text":
+                    text_parts.append(str(block.get("text", "")))
+                elif block.get("type") == "tool_use":
+                    call_ids.append(str(block.get("id", "")))
+        return (_text_digest("".join(text_parts)), tuple(call_ids))
+    return None
+
+
+def _response_output_cursor(
+    output_items: list[dict[str, Any]],
+) -> tuple[str, tuple[str, ...]]:
+    text_parts: list[str] = []
+    call_ids: list[str] = []
+    for item in output_items:
+        if item.get("type") == "message":
+            content = item.get("content")
+            if isinstance(content, list):
+                for raw_block in cast(list[Any], content):
+                    if not isinstance(raw_block, dict):
+                        continue
+                    block = cast(dict[str, Any], raw_block)
+                    if block.get("type") == "output_text":
+                        text_parts.append(str(block.get("text", "")))
+        elif item.get("type") == "function_call":
+            call_ids.append(str(item.get("call_id") or item.get("id") or ""))
+    return (_text_digest("".join(text_parts)), tuple(call_ids))
+
+
+def _text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _mark_first_input_text_cache_breakpoint(input_items: list[dict[str, Any]]) -> None:
+    """Mark the initial task prefix; implicit latest-message caching stays enabled."""
+    for item in input_items:
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for raw_block in cast(list[Any], content):
+            if not isinstance(raw_block, dict):
+                continue
+            block = cast(dict[str, Any], raw_block)
+            if block.get("type") == "input_text":
+                block.setdefault("prompt_cache_breakpoint", {"mode": "explicit"})
+                return
+
+
+def _strip_cache_breakpoints(input_items: list[dict[str, Any]]) -> None:
+    for item in input_items:
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for raw_block in cast(list[Any], content):
+            if isinstance(raw_block, dict):
+                cast(dict[str, Any], raw_block).pop("prompt_cache_breakpoint", None)
+
+
+def _has_cache_breakpoint(input_items: list[dict[str, Any]]) -> bool:
+    for item in input_items:
+        content = item.get("content")
+        if isinstance(content, list) and any(
+            isinstance(block, dict) and "prompt_cache_breakpoint" in block
+            for block in cast(list[Any], content)
+        ):
+            return True
+    return False
+
+
+def _strip_reasoning_items(input_items: list[dict[str, Any]]) -> None:
+    input_items[:] = [item for item in input_items if item.get("type") != "reasoning"]
+
+
+def _strip_item_ids(input_items: list[dict[str, Any]]) -> None:
+    for item in input_items:
+        item.pop("id", None)
+
+
+def _http_error_mentions(exc: Any, field: str) -> bool:
+    try:
+        text = str(exc.response.text)
+    except Exception:
+        return False
+    return field.casefold() in text.casefold()
+
+
+def _http_error_rejects_reasoning_item(exc: Any) -> bool:
+    try:
+        text = str(exc.response.text).casefold()
+    except Exception:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "encrypted_content",
+            "reasoning input item",
+            "item type 'reasoning'",
+            'item type "reasoning"',
+            "unsupported item: reasoning",
+        )
+    )
+
+
+def _response_id(event: dict[str, Any]) -> str | None:
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return None
+    response_id = cast(dict[str, Any], response).get("id")
+    return response_id if isinstance(response_id, str) and response_id else None
 
 
 def _text_message_item(role: str, text: str) -> dict[str, Any]:
@@ -443,24 +892,22 @@ def _output_item_done(event: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _reasoning_input_item(item: dict[str, Any]) -> dict[str, Any]:
-    """Build the input-format reasoning item to pass back next turn (carries the
-    encrypted_content the model needs to resume its chain of thought)."""
-    out: dict[str, Any] = {"type": "reasoning", "id": str(item.get("id", ""))}
-    enc = item.get("encrypted_content")
-    if enc is not None:
-        out["encrypted_content"] = enc
-    summary = item.get("summary")
-    out["summary"] = summary if isinstance(summary, list) else []
-    return out
+    """Preserve the complete server reasoning item for stateless replay."""
+    return copy.deepcopy(item)
 
 
 def _extract_usage(event: dict[str, Any]) -> dict[str, int] | None:
-    """Pull a normalized token-usage dict from a ``response.completed`` event,
-    or None if the event carries no usage. Handles both the Responses shape
+    """Pull normalized usage from a terminal Responses event when present.
+
+    Handles completed, incomplete, and failed terminals plus both the Responses shape
     (``input_tokens_details.cached_tokens``) and the Chat-Completions shape
     (``prompt_tokens_details.cached_tokens``) since the Codex endpoint is
     reverse-engineered and may report either."""
-    if event.get("type") != "response.completed":
+    if event.get("type") not in {
+        "response.completed",
+        "response.incomplete",
+        "response.failed",
+    }:
         return None
     response = event.get("response")
     if not isinstance(response, dict):
@@ -473,13 +920,13 @@ def _extract_usage(event: dict[str, Any]) -> dict[str, int] | None:
     def _int(x: Any) -> int:
         return x if isinstance(x, int) else 0
 
-    def _cached() -> int:
+    def _input_detail(field_name: str) -> int:
         for field in ("input_tokens_details", "prompt_tokens_details"):
             details = u.get(field)
             if isinstance(details, dict):
-                c = cast(dict[str, Any], details).get("cached_tokens")
-                if isinstance(c, int):
-                    return c
+                value = cast(dict[str, Any], details).get(field_name)
+                if isinstance(value, int):
+                    return value
         return 0
 
     reasoning = 0
@@ -490,9 +937,27 @@ def _extract_usage(event: dict[str, Any]) -> dict[str, int] | None:
     return {
         "input_tokens": _int(u.get("input_tokens") or u.get("prompt_tokens")),
         "output_tokens": _int(u.get("output_tokens") or u.get("completion_tokens")),
-        "cached_tokens": _cached(),
+        "cached_tokens": _input_detail("cached_tokens"),
+        "cache_write_tokens": _input_detail("cache_write_tokens"),
         "reasoning_tokens": reasoning,
     }
+
+
+def _input_usage_detail_reported(event: dict[str, Any], field_name: str) -> bool:
+    """Whether a terminal usage payload explicitly reported an input detail field."""
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return False
+    usage = cast(dict[str, Any], response).get("usage")
+    if not isinstance(usage, dict):
+        return False
+    for details_name in ("input_tokens_details", "prompt_tokens_details"):
+        details = cast(dict[str, Any], usage).get(details_name)
+        if isinstance(details, dict) and isinstance(
+            cast(dict[str, Any], details).get(field_name), int
+        ):
+            return True
+    return False
 
 
 def _function_call_block(item: dict[str, Any]) -> ToolUseBlock:

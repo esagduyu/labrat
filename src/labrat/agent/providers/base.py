@@ -17,6 +17,15 @@ class ModelProvider(ABC):
     native API call and yields content blocks as they stream in.
     """
 
+    def bind_conversation(self) -> ModelProvider:
+        """Return a provider bound to one independent conversation.
+
+        Stateless providers can return ``self``. Stateful transports should return
+        a lightweight child that isolates replay/continuation state while sharing
+        credentials and aggregate usage with the parent provider.
+        """
+        return self
+
     @abstractmethod
     async def stream(
         self,

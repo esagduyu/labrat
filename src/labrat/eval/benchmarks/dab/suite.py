@@ -99,6 +99,37 @@ def _detect_infra_failure(final_text: str) -> str | None:
     return None
 
 
+def _http_status_code(exc: Exception) -> int | None:
+    """Return an HTTP exception's response status without importing a client type."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def _rate_limit_meta(exc: Exception) -> dict[str, int]:
+    """Extract only safe reset telemetry from a 429 response body."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return {}
+    try:
+        payload_raw: Any = response.json()
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload_raw, dict):
+        return {}
+    payload = cast("dict[str, Any]", payload_raw)
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return {}
+    error = cast("dict[str, Any]", error)
+    details: dict[str, int] = {}
+    for key in ("resets_at", "resets_in_seconds"):
+        value = error.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            details[key] = value
+    return details
+
+
 # Contamination detection (answer-key / external-dataset leakage) is shared with the
 # Scent-authoring guard — see labrat.maze.scent_audit. The `as` aliases preserve the
 # module-local names so the rest of this module (and existing tests) are untouched.
@@ -106,7 +137,7 @@ def _detect_infra_failure(final_text: str) -> str | None:
 # counted as a pass.
 
 
-def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
+def _build_labrat_agent_system_prompt(env: DabTaskEnv, *, include_levers: bool = True) -> str:
     parts = [
         "You are a data analyst. Answer the question by querying the available databases "
         "using the provided tools.",
@@ -140,7 +171,7 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         for mspec in env.mongo:
             parts.append(f"  alias={mspec.alias} database={mspec.database}")
         parts.append("Materialized collections become DuckDB tables you query with run_sql.")
-    levers = _dab_lever_lines()
+    levers = _dab_lever_lines() if include_levers else []
     parts.extend(
         [
             "",
@@ -307,6 +338,7 @@ def _build_claude_mcp_prompt(
     *,
     include_cartographer_line: bool,
     max_tool_calls: int | None,
+    include_levers: bool = True,
 ) -> str:
     """Build the claude-mcp driver's opening user message.
 
@@ -326,7 +358,8 @@ def _build_claude_mcp_prompt(
     ]
     if include_cartographer_line:
         prompt_lines.insert(1, _cartographer_prompt_line())
-    prompt_lines.extend(_dab_lever_lines())
+    if include_levers:
+        prompt_lines.extend(_dab_lever_lines())
     if env_spec.attachable:
         prompt_lines.append("")
         prompt_lines.append(
@@ -443,6 +476,8 @@ class DabSuite:
         agent_verify: bool = False,
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
+        agent_levers: bool = True,
+        agent_ledger: bool = True,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
         cartograph_semantics_model: str = "claude-sonnet-4-6",
@@ -469,9 +504,15 @@ class DabSuite:
         # Per-call provider timeout override (seconds); only the claude-code provider
         # honours it. None = provider default (120s for claude-code).
         self._agent_timeout = agent_timeout
-        # Reasoning effort for the codex (GPT-5.5) provider; ignored by the others.
+        # Reasoning effort for the Codex GPT-5.5/5.6 provider; ignored by the others.
         # None = provider default (medium).
         self._agent_reasoning = agent_reasoning
+        # Benchmark-safe process levers are enabled by default for historical
+        # compatibility. The explicit toggle supports a clean ablation arm.
+        self._agent_levers = agent_levers
+        # ContextLedger is likewise historically on through run_agent_task's
+        # default; make it explicit so DAB runs can ablate and resume it safely.
+        self._agent_ledger = agent_ledger
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
         self._cartograph = cartograph
@@ -586,6 +627,7 @@ class DabSuite:
         db_config_path = Path(task.config["db_config_path"])
         validator_path = Path(task.config["validator_path"])
         self._last_usage: dict[str, int] | None = None
+        self._last_request_usage: list[dict[str, Any]] = []
 
         try:
             final_text, tool_calls, latency = await self._run_trial_verified(
@@ -595,7 +637,17 @@ class DabSuite:
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
             # fail only THIS trial, not crash the whole run. Record it as an infra failure
             # so aggregate() skips it and a --output-dir resume auto-retries it.
-            tag = "timeout" if isinstance(exc, TimeoutError) else "agent_error"
+            if _http_status_code(exc) == 429:
+                tag = "rate_limit"
+            elif isinstance(exc, TimeoutError):
+                tag = "timeout"
+            else:
+                tag = "agent_error"
+            meta = self._usage_meta()
+            if tag == "rate_limit":
+                reset = _rate_limit_meta(exc)
+                if reset:
+                    meta["rate_limit"] = reset
             return TrialResult(
                 task_id=task.id,
                 trial_num=trial_num,
@@ -604,6 +656,7 @@ class DabSuite:
                 latency_seconds=0.0,
                 tool_calls=0,
                 artifact={"type": "text", "payload": f"{type(exc).__name__}: {exc}"},
+                meta=meta,
             )
 
         # Infra failures (Max-plan session limit, API credit, wall-clock timeout)
@@ -620,6 +673,7 @@ class DabSuite:
                 latency_seconds=latency,
                 tool_calls=tool_calls,
                 artifact={"type": "text", "payload": final_text},
+                meta=self._usage_meta(),
             )
 
         # Data-leakage backstop: if the trace shows the agent reached the answer key
@@ -636,6 +690,7 @@ class DabSuite:
                 latency_seconds=latency,
                 tool_calls=tool_calls,
                 artifact={"type": "text", "payload": final_text},
+                meta=self._usage_meta(),
             )
 
         passed, reason = score_with_validator(validator_path, final_text)
@@ -648,8 +703,30 @@ class DabSuite:
             latency_seconds=latency,
             tool_calls=tool_calls,
             artifact={"type": "text", "payload": final_text},
-            meta={"usage": self._last_usage} if self._last_usage else {},
+            meta=self._usage_meta(),
         )
+
+    def _usage_meta(self) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        if self._last_usage:
+            meta["usage"] = dict(self._last_usage)
+        if self._last_request_usage:
+            meta["request_usage"] = list(self._last_request_usage)
+        return meta
+
+    def _capture_provider_usage(self, provider: Any) -> None:
+        provider_usage = getattr(provider, "usage", None)
+        if isinstance(provider_usage, dict):
+            if self._last_usage is None:
+                self._last_usage = {}
+            for key, value in cast("dict[str, Any]", provider_usage).items():
+                if isinstance(value, int):
+                    self._last_usage[key] = self._last_usage.get(key, 0) + value
+        request_usage = getattr(provider, "request_usage", None)
+        if isinstance(request_usage, list):
+            for item in cast("list[Any]", request_usage):
+                if isinstance(item, dict):
+                    self._last_request_usage.append(dict(cast("dict[str, Any]", item)))
 
     # ── verified dispatch (consensus + re-derive) ─────────────────────────────
 
@@ -659,7 +736,9 @@ class DabSuite:
         # through the claude-code provider (same OAuth) on that path; otherwise reuse
         # the provider the agent itself runs on.
         judge_provider = "claude-code" if self._driver == "claude-mcp" else self._agent_provider
-        provider = build_provider(judge_provider, self._agent_model)
+        provider = build_provider(
+            judge_provider, self._agent_model, reasoning=self._agent_reasoning
+        )
         return provider_llm_fn(provider)
 
     def _cartograph_llm_fn(self) -> LLMFn:
@@ -874,8 +953,9 @@ class DabSuite:
                     chosen_sub = scratch_dir / f"subrun{chosen_subdir_i}"
                     for src in chosen_sub.glob("*_tool_calls.jsonl"):
                         dst = scratch_dir / src.name
-                        if not dst.exists():
-                            shutil.copy2(src, dst)
+                        # The canonical trace must describe the newly selected
+                        # semantic attempt, including after an infra resume.
+                        shutil.copy2(src, dst)
                         break  # only one trace file expected per sub-run
                 except Exception:
                     pass  # fail-open
@@ -1085,6 +1165,7 @@ class DabSuite:
             task,
             include_cartographer_line=maze_root is not None,
             max_tool_calls=self._agent_max_tool_calls,
+            include_levers=self._agent_levers,
         )
         if extra_instructions:
             prompt = f"{prompt}\n\n{extra_instructions}"
@@ -1190,6 +1271,12 @@ class DabSuite:
         extra_instructions: str = "",
         diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
+        # A trace file is a per-trial submission artifact even when the model
+        # makes zero tool calls. Reset it on an infra retry so attempts cannot be
+        # merged into one misleading semantic trace.
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        (scratch_dir / "agent_tool_calls.jsonl").write_text("")
+
         # P3 (sandbox note): this path is in-process. The registry exposes no
         # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
         # native Bash, so the agent cannot read answer keys. Only carry providers
@@ -1231,6 +1318,7 @@ class DabSuite:
                 variant_seed=diversity_index or 0,
             )
 
+        provider: Any | None = None
         try:
             registry = build_data_tools_registry()
             provider = build_provider(
@@ -1244,7 +1332,16 @@ class DabSuite:
                 # machines each time. Only the codex provider uses it.
                 cache_key=task.id,
             )
-            system_prompt = _build_labrat_agent_system_prompt(env)
+            system_prompt = _build_labrat_agent_system_prompt(
+                env, include_levers=self._agent_levers
+            )
+            if self._agent_provider == "codex" and self._agent_reasoning == "ultra":
+                system_prompt = (
+                    system_prompt
+                    + "\n\nProactive multi-agent delegation is active. Use dispatch_subagent "
+                    "when a task can be divided into concrete independent investigations, "
+                    "then synthesize and verify the results."
+                )
             if cartograph_root is not None:
                 system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
             if extra_instructions:
@@ -1280,6 +1377,8 @@ class DabSuite:
                 max_tool_calls=self._agent_max_tool_calls,
                 verify=self._agent_verify,
                 on_tool_call=_trace,
+                enable_ledger=self._agent_ledger,
+                ledger_dir=scratch_dir,
             )
             if cartograph_root is not None:
                 (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)
@@ -1300,16 +1399,11 @@ class DabSuite:
                 result = await asyncio.wait_for(
                     run_agent_task(**run_kwargs), timeout=effective_timeout
                 )
-            # Capture per-trial token usage if the provider tracks it (codex does);
-            # run_trial folds it into TrialResult.meta so trials.jsonl records real
-            # tokens + cache hit rate.
-            provider_usage = getattr(provider, "usage", None)
-            self._last_usage = (
-                cast("dict[str, int]", dict(cast("dict[str, Any]", provider_usage)))
-                if isinstance(provider_usage, dict)
-                else None
-            )
         finally:
+            # Preserve all completed-turn usage even when a later request times out,
+            # rate-limits, or raises. Consensus/reverify sub-runs accumulate here.
+            if provider is not None:
+                self._capture_provider_usage(provider)
             for conn in env.ctx.connections.values():
                 disconnect = getattr(conn, "disconnect", None)
                 if callable(disconnect):

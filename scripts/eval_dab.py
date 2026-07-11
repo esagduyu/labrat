@@ -19,14 +19,47 @@ import asyncio
 import json
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from labrat.agent.providers import PROVIDER_NAMES
+from labrat.agent.providers import (
+    CODEX_REASONING_EFFORTS,
+    PROVIDER_NAMES,
+    resolve_codex_model_config,
+)
 from labrat.eval.benchmarks.dab.suite import DabSuite, Driver
 from labrat.eval.benchmarks.dab.taint import audit_run, gate
 from labrat.eval.reporting import report_to_markdown
 from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
+
+_RATE_LIMIT_EXIT_CODE = 4
+
+
+class _RateLimitStopError(RuntimeError):
+    """Internal control flow: one rate-limit trial was durably recorded."""
+
+    def __init__(self, result: TrialResult) -> None:
+        self.result = result
+        super().__init__(f"{result.task_id} trial {result.trial_num}")
+
+
+def _rate_limit_reset_summary(result: TrialResult) -> str:
+    details = result.meta.get("rate_limit")
+    if not isinstance(details, dict):
+        return ""
+    parts: list[str] = []
+    resets_at = details.get("resets_at")
+    if isinstance(resets_at, int) and not isinstance(resets_at, bool):
+        try:
+            reset_iso = datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
+        except (OSError, OverflowError, ValueError):
+            reset_iso = str(resets_at)
+        parts.append(f"reset_at={reset_iso}")
+    resets_in = details.get("resets_in_seconds")
+    if isinstance(resets_in, int) and not isinstance(resets_in, bool):
+        parts.append(f"resets_in_seconds={resets_in}")
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
@@ -116,6 +149,11 @@ async def _run_interim(
                     f"[{task.id} trial {trial_num}] {status} ({result.latency_seconds:.1f}s)",
                     flush=True,
                 )
+                if reason == "infra:rate_limit":
+                    # The row is flushed above and remains retryable on resume. Stop
+                    # immediately so a quota outage cannot fill trials.jsonl with
+                    # zero-token attempts for every remaining task.
+                    raise _RateLimitStopError(result)
 
     score = suite.aggregate(all_trials)
     return BenchmarkReport(
@@ -130,7 +168,15 @@ async def _run_interim(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run DAB benchmark")
     parser.add_argument("--dab-dir", type=Path, default=None)
-    parser.add_argument("--hints", action="store_true")
+    parser.add_argument(
+        "--hints",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Append DAB's benchmark-provided data hints to each task prompt. Off by "
+            "default for new runs; restored from config.json on resume."
+        ),
+    )
     parser.add_argument(
         "--driver",
         choices=["raw-bash", "labrat-agent", "claude-mcp"],
@@ -151,10 +197,10 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Model id passed to the agent subprocess for the labrat-agent and "
-            "claude-mcp drivers. Defaults to claude-sonnet-4-6 for new runs (Sonnet, "
-            "to avoid burning Max-plan budget on Opus); restored from config.json on "
-            "resume. Always pass --model explicitly to the underlying claude CLI so "
-            "the subprocess doesn't fall through to whatever the parent session uses."
+            "claude-mcp drivers. New codex runs default to gpt-5.6-luna; other "
+            "providers default to claude-sonnet-4-6. Restored from config.json on "
+            "resume. Always pass --model explicitly to subprocess-backed providers so "
+            "they do not fall through to whatever the parent session uses."
         ),
     )
     parser.add_argument(
@@ -166,17 +212,40 @@ def main(argv: list[str] | None = None) -> int:
             "metered API billing. 'claude-code' shells the claude CLI subprocess "
             "(Max-plan billing; subject to the documented text-protocol conflict for "
             "tool round-trips). 'openai' uses an OpenAI-compatible endpoint. 'codex' "
-            "runs GPT-5.5 via the ChatGPT subscription (Codex Responses API + "
-            "~/.codex/auth.json; no metered key)."
+            "runs GPT-5.5 or the GPT-5.6 Sol/Terra/Luna family via the ChatGPT "
+            "subscription (Codex Responses API + ~/.codex/auth.json; no metered key)."
         ),
     )
     parser.add_argument(
         "--agent-reasoning",
-        choices=["minimal", "low", "medium", "high"],
+        choices=list(CODEX_REASONING_EFFORTS),
         default=None,
         help=(
-            "Reasoning effort for the codex (GPT-5.5) provider on the labrat-agent "
-            "driver. Default: medium. Ignored by the other providers."
+            "Responses reasoning effort for the codex provider on the labrat-agent "
+            "driver. GPT-5.6 Luna supports low/medium/high/xhigh/max; Sol and Terra "
+            "also support ultra (automatic task delegation). GPT-5.5 retains the "
+            "legacy minimal value. New Codex runs default to Luna Max. Ignored by "
+            "the other providers."
+        ),
+    )
+    parser.add_argument(
+        "--agent-levers",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Enable the benchmark-safe DAB prompt levers (force-query, SQL repair, "
+            "SQL-side aggregation, tie handling). On by default for new runs; restored "
+            "from config.json on resume. Use --no-agent-levers for the ablation control."
+        ),
+    )
+    parser.add_argument(
+        "--agent-ledger",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Enable the ContextLedger for labrat-agent trials and persist its artifacts "
+            "in the trial scratch directory. On by default for new runs; restored from "
+            "config.json on resume. Use --no-agent-ledger for the ablation control."
         ),
     )
     parser.add_argument(
@@ -309,8 +378,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--n-trials",
         type=int,
-        default=5,
-        help="Trials per query for pass@k scoring (default 5)",
+        default=None,
+        help=(
+            "Trials per query for pass@k scoring. Defaults to 5 for new runs and is "
+            "restored from config.json on resume."
+        ),
     )
     parser.add_argument(
         "--datasets",
@@ -348,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     for field, cli_val in [
+        ("n_trials", args.n_trials),
+        ("hints", args.hints),
         ("driver", args.driver),
         ("agent_model", args.agent_model),
         ("agent_provider", args.agent_provider),
@@ -363,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
         ("consensus_diversity", cli_consensus_diversity),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
+        ("agent_levers", args.agent_levers),
+        ("agent_ledger", args.agent_ledger),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -374,12 +450,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     effective_driver: Driver = args.driver or existing_cfg.get("driver") or "raw-bash"
-    effective_model: str = (
-        args.agent_model or existing_cfg.get("agent_model") or "claude-sonnet-4-6"
-    )
     effective_provider: str = (
         args.agent_provider or existing_cfg.get("agent_provider") or "anthropic"
     )
+    default_model = "gpt-5.6-luna" if effective_provider == "codex" else "claude-sonnet-4-6"
+    effective_model: str = args.agent_model or existing_cfg.get("agent_model") or default_model
     effective_max_turns: int | None = (
         args.max_turns if args.max_turns is not None else existing_cfg.get("agent_max_turns")
     )
@@ -457,10 +532,39 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_reasoning is not None
         else existing_cfg.get("agent_reasoning")
     )
+    if effective_provider == "codex":
+        if effective_reasoning is None and effective_model in {
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+        }:
+            effective_reasoning = "max"
+        try:
+            effective_model, effective_reasoning = resolve_codex_model_config(
+                effective_model, effective_reasoning
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    effective_hints: bool = bool(
+        args.hints if args.hints is not None else existing_cfg.get("hints", False)
+    )
+    effective_levers: bool = bool(
+        args.agent_levers
+        if args.agent_levers is not None
+        else existing_cfg.get("agent_levers", True)
+    )
+    effective_ledger: bool = bool(
+        args.agent_ledger
+        if args.agent_ledger is not None
+        else existing_cfg.get("agent_ledger", True)
+    )
+    effective_n_trials: int = (
+        args.n_trials if args.n_trials is not None else existing_cfg.get("n_trials", 5)
+    )
 
     suite = DabSuite(
         dab_dir=args.dab_dir,
-        hints=args.hints,
+        hints=effective_hints,
         driver=effective_driver,
         agent_model=effective_model,
         agent_provider=effective_provider,
@@ -469,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
         agent_verify=effective_verify,
         agent_timeout=effective_timeout,
         agent_reasoning=effective_reasoning,
+        agent_levers=effective_levers,
+        agent_ledger=effective_ledger,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
         cartograph_semantics_model=effective_cartograph_semantics_model,
@@ -500,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     (output_dir / "config.json").write_text(
         json.dumps(
             {
-                "hints": args.hints,
+                "hints": effective_hints,
                 "driver": effective_driver,
                 "agent_model": effective_model,
                 "agent_provider": effective_provider,
@@ -521,14 +627,29 @@ def main(argv: list[str] | None = None) -> int:
                 "consensus_diversity": effective_consensus_diversity,
                 "agent_timeout": effective_timeout,
                 "agent_reasoning": effective_reasoning,
-                "n_trials": args.n_trials,
+                "agent_levers": effective_levers,
+                "agent_ledger": effective_ledger,
+                "trace_attempt_policy": "reset_on_attempt",
+                "n_trials": effective_n_trials,
                 "task_filter": task_filter,
             },
             indent=2,
         )
     )
 
-    report = asyncio.run(_run_interim(suite, args.n_trials, output_dir, task_filter))
+    try:
+        report = asyncio.run(_run_interim(suite, effective_n_trials, output_dir, task_filter))
+    except _RateLimitStopError as exc:
+        reset = _rate_limit_reset_summary(exc.result)
+        print(
+            f"\nDAB run paused after an API rate limit at {exc}{reset}. "
+            "The infra row was saved and will be retried. No taint audit or submission "
+            "was generated. Resume the same run with:\n"
+            f"  uv run python scripts/eval_dab.py --output-dir {output_dir}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return _RATE_LIMIT_EXIT_CODE
 
     # Pre-submission taint-audit gate: classify every trial (answer text + MCP
     # trace) for answer-key / external-dataset leakage before assembling
