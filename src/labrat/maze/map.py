@@ -46,6 +46,8 @@ def _bullets(body: str) -> list[str]:
         if stripped.startswith("- "):
             stripped = stripped[2:].strip()
         elif stripped.startswith("-"):
+            # Deliberately more lenient than the harvest "- " convention: tolerate
+            # a bare "-" prefix (no following space) so hand-edited Map docs parse.
             stripped = stripped[1:].strip()
         if stripped:
             items.append(stripped)
@@ -110,22 +112,25 @@ def resolve_members(map_docs: list[ScentDoc], store: MazeStore) -> ResolvedMembe
     """
     scent_seen: dict[str, None] = {}
     trail_seen: dict[str, None] = {}
-    misses_seen: dict[str, None] = {}
+    scent_misses: dict[str, None] = {}
+    trail_misses: dict[str, None] = {}
     for doc in map_docs:
         for m in scent_members(doc):
-            if m in scent_seen or m in misses_seen:
+            if m in scent_seen or m in scent_misses:
                 continue
             if store.load_domain(m, kind="scent", scope=None) is not None:
                 scent_seen[m] = None
             else:
-                misses_seen[m] = None
+                scent_misses[m] = None
         for m in trail_members(doc):
-            if m in trail_seen or m in misses_seen:
+            if m in trail_seen or m in trail_misses:
                 continue
             if store.load_domain(m, kind="trail", scope=None) is not None:
                 trail_seen[m] = None
             else:
-                misses_seen[m] = None
+                trail_misses[m] = None
     return ResolvedMembers(
-        scent=list(scent_seen), trails=list(trail_seen), misses=list(misses_seen)
+        scent=list(scent_seen),
+        trails=list(trail_seen),
+        misses=list(dict.fromkeys([*scent_misses, *trail_misses])),
     )

@@ -66,3 +66,40 @@ def test_resolve_members_union_across_maps(tmp_path):
     m2 = build_map_doc("product", scent=["events"], trails=[], prompts=[])
     resolved = resolve_members([m1, m2], store)
     assert set(resolved.scent) == {"subscriptions", "events"}
+
+
+def test_resolve_cross_namespace_same_slug_not_dropped(tmp_path):
+    store = MazeStore(project_root=tmp_path, home=tmp_path / "h", profile="default")
+    # A trail doc "shared" exists, but no scent doc "shared" exists. A shared
+    # miss-tracking dict across the scent/trail loops would record the scent miss
+    # first and then wrongly skip the trail lookup for the same slug — dropping an
+    # existing trail doc. Per-kind miss tracking must keep them independent.
+    store.write_doc(
+        ScentDoc(
+            domain="shared",
+            kind="trail",
+            sections=[Section(heading="When to use", body="shared trail")],
+        ),
+        kind="trail",
+    )
+    m = build_map_doc("bundle", scent=["shared"], trails=["shared"], prompts=[])
+    resolved = resolve_members([m], store)
+    assert resolved.trails == ["shared"]
+    assert resolved.scent == []
+    assert "shared" in resolved.misses
+
+    # Mirror case: a scent doc "foo" exists, no trail doc "foo" exists.
+    store2 = MazeStore(project_root=tmp_path / "p2", home=tmp_path / "h2", profile="default")
+    store2.write_doc(
+        ScentDoc(
+            domain="foo",
+            kind="scent",
+            sections=[Section(heading="Quick Reference", body="foo scent")],
+        ),
+        kind="scent",
+    )
+    m2 = build_map_doc("bundle2", scent=["foo"], trails=["foo"], prompts=[])
+    resolved2 = resolve_members([m2], store2)
+    assert resolved2.scent == ["foo"]
+    assert resolved2.trails == []
+    assert "foo" in resolved2.misses
