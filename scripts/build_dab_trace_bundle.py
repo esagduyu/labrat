@@ -16,8 +16,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import sys
 import uuid
 from collections import defaultdict
@@ -34,6 +36,7 @@ from labrat.eval.benchmarks.dab.taint import (
 )
 
 CORE_ARTIFACTS = ("config.json", "trials.jsonl", "submission.json", "report.md")
+PROTECTED_RUN_ARTIFACTS = (*CORE_ARTIFACTS, "taint.json")
 OFFICIAL_QUERY_COUNTS = {
     "agnews": 4,
     "bookreview": 3,
@@ -64,12 +67,39 @@ _CREDENTIAL_KEYS = {
     "dsn",
     "connection_uri",
     "database_url",
+    "token",
+    "private_key",
+    "secret_access_key",
 }
+_SAFE_NON_CREDENTIAL_KEYS = {
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "cached_tokens",
+    "reasoning_tokens",
+    "cache_write_tokens",
+    "max_tokens",
+    "refresh_token_count",
+}
+_CREDENTIAL_KEY_SUFFIXES = (
+    "_api_key",
+    "_access_token",
+    "_auth_token",
+    "_refresh_token",
+    "_secret_access_key",
+    "_client_secret",
+    "_private_key",
+    "_password",
+)
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"\b(?:sk-(?:proj-)?|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{8,}"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
     re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
     re.compile(
         r"(?i)\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|refresh[_ -]?token|"
@@ -145,13 +175,19 @@ def _credential_value_present(value: Any) -> bool:
     return True
 
 
+def _is_credential_key(normalized_key: str) -> bool:
+    if normalized_key in _SAFE_NON_CREDENTIAL_KEYS:
+        return False
+    return normalized_key in _CREDENTIAL_KEYS or normalized_key.endswith(_CREDENTIAL_KEY_SUFFIXES)
+
+
 def _secret_reason(value: Any, *, path: str = "$") -> str | None:
     if isinstance(value, dict):
         for raw_key, item in value.items():
             key = str(raw_key)
             normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
             child_path = f"{path}.{key}"
-            if normalized_key in _CREDENTIAL_KEYS and _credential_value_present(item):
+            if _is_credential_key(normalized_key) and _credential_value_present(item):
                 return f"credential-shaped field {child_path}"
             nested = _secret_reason(item, path=child_path)
             if nested is not None:
@@ -332,7 +368,17 @@ def _copy_trace_records(records: list[dict[str, Any]], destination: Path) -> int
     return len(records)
 
 
-def _replace_output(temp_dir: Path, output_dir: Path, *, force: bool) -> None:
+def _replace_output(
+    temp_dir: Path,
+    output_dir: Path,
+    *,
+    run_dir: Path,
+    force: bool,
+) -> None:
+    # Revalidate immediately before mutation so a swapped-in symlink cannot turn
+    # --force into deletion of an external target.
+    _validate_output_destination(run_dir, output_dir)
+    _reject_symlink_components(temp_dir)
     if output_dir.exists():
         if not force:
             raise BundleError(f"output already exists: {output_dir} (pass --force to replace)")
@@ -343,11 +389,54 @@ def _replace_output(temp_dir: Path, output_dir: Path, *, force: bool) -> None:
     temp_dir.replace(output_dir)
 
 
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def _reject_symlink_components(path: Path) -> Path:
+    """Return a lexical absolute path after lstat-checking every existing component."""
+    lexical = _lexical_absolute(path)
+    current = Path(lexical.anchor)
+    for part in lexical.parts[1:]:
+        current /= part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            break
+        except OSError as exc:
+            raise BundleError(f"cannot inspect path component {current}: {exc}") from exc
+        if stat.S_ISLNK(mode):
+            raise BundleError(f"symlink path component is not allowed: {current}")
+    return lexical
+
+
+def _validate_run_artifact(run_dir: Path, name: str, *, required: bool) -> Path | None:
+    path = _reject_symlink_components(run_dir / name)
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError as exc:
+        if required:
+            raise BundleError(f"required artifact missing: {name}") from exc
+        return None
+    except OSError as exc:
+        raise BundleError(f"invalid {name}: {exc}") from exc
+    if stat.S_ISLNK(mode):
+        raise BundleError(f"symlink run artifact is not allowed: {name}")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise BundleError(f"invalid {name}: {exc}") from exc
+    if resolved.parent != run_dir or not stat.S_ISREG(mode):
+        raise BundleError(f"run artifact must be a regular file directly under run_dir: {name}")
+    return resolved
+
+
 def _validate_output_destination(run_dir: Path, destination: Path) -> Path:
     """Resolve and reject destinations that could destroy bundle inputs."""
     run = run_dir.expanduser().resolve()
-    resolved = destination.expanduser().resolve()
-    core_inputs = tuple((run / name).resolve() for name in CORE_ARTIFACTS)
+    lexical = _reject_symlink_components(destination)
+    resolved = lexical.resolve()
+    core_inputs = tuple(run / name for name in PROTECTED_RUN_ARTIFACTS)
     scratch = (run / "scratch").resolve()
 
     unsafe = resolved == run or run.is_relative_to(resolved)
@@ -377,8 +466,10 @@ def build_bundle(
     )
 
     for artifact in CORE_ARTIFACTS:
-        if not (run_dir / artifact).is_file():
-            raise BundleError(f"required artifact missing: {artifact}")
+        _validate_run_artifact(run_dir, artifact, required=True)
+    # audit_run writes this path. Reject a pre-existing link before that write so
+    # the audit cannot clobber an external file.
+    _validate_run_artifact(run_dir, "taint.json", required=False)
 
     config = _load_json(run_dir / "config.json")
     if not isinstance(config, dict):
@@ -417,6 +508,7 @@ def build_bundle(
         _validate_strict_official(config, selected_keys)
 
     verdicts = audit_run(run_dir / "trials.jsonl", run_dir / "scratch")
+    _validate_run_artifact(run_dir, "taint.json", required=True)
     audit_ok, offenders = gate(verdicts)
     if not audit_ok:
         preview = ", ".join(offenders[:8])
@@ -528,7 +620,7 @@ def build_bundle(
             "trials": manifest_trials,
         }
         _write_json(temp_dir / "manifest.json", manifest)
-        _replace_output(temp_dir, output_dir, force=force)
+        _replace_output(temp_dir, output_dir, run_dir=run_dir, force=force)
     except Exception:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)

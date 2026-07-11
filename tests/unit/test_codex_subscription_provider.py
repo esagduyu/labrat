@@ -222,6 +222,44 @@ def test_reduce_event_raises_on_failed() -> None:
         )
 
 
+def test_top_level_sse_rate_limit_is_sanitized_and_allowlisted() -> None:
+    from labrat.agent.providers.base import RATE_LIMIT_MESSAGE, RateLimitError
+
+    event = {
+        "type": "error",
+        "code": "rate_limit_exceeded",
+        "message": "raw provider quota text must never persist",
+        "resets_at": 1783767751,
+        "resets_in_seconds": 321,
+        "plan_type": "secret-plan",
+    }
+
+    with pytest.raises(RateLimitError) as captured:
+        _reduce_event(event)
+
+    assert str(captured.value) == RATE_LIMIT_MESSAGE
+    assert captured.value.rate_limit == {
+        "resets_at": 1783767751,
+        "resets_in_seconds": 321,
+    }
+    assert "raw provider" not in str(captured.value)
+    assert "plan_type" not in json.dumps(captured.value.rate_limit)
+
+
+def test_incomplete_usage_containing_1429_is_not_a_rate_limit() -> None:
+    event = {
+        "type": "response.incomplete",
+        "response": {
+            "status": "incomplete",
+            "usage": {"input_tokens": 1429, "output_tokens": 5},
+            "incomplete_details": {"reason": "max_output_tokens"},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match=r"response\.incomplete"):
+        _reduce_event(event)
+
+
 def test_reduce_event_ignores_unknown_events() -> None:
     assert _reduce_event({"type": "response.created"}) == []
     assert _reduce_event({"type": "response.completed"}) == []
@@ -428,7 +466,7 @@ async def test_consume_accumulates_usage_and_yields_blocks() -> None:
 
 
 async def test_http_200_sse_rate_limit_raises_stable_error() -> None:
-    from labrat.agent.providers.base import RateLimitError
+    from labrat.agent.providers.base import RATE_LIMIT_MESSAGE, RateLimitError
 
     provider = CodexSubscriptionProvider(model="gpt-5.6-luna", reasoning_effort="low")
     stream = (
@@ -437,14 +475,17 @@ async def test_http_200_sse_rate_limit_raises_stable_error() -> None:
         '"message":"API Error: 429 Too Many Requests"}}}\n\n'
     )
 
-    with pytest.raises(RateLimitError, match="429"):
+    with pytest.raises(RateLimitError) as captured:
         _ = [block async for block in provider._consume(_alines(stream))]
+
+    assert str(captured.value) == RATE_LIMIT_MESSAGE
+    assert "Too Many Requests" not in str(captured.value)
 
 
 async def test_http_429_stream_raises_stable_rate_limit_error(monkeypatch: Any) -> None:
     import httpx
 
-    from labrat.agent.providers.base import RateLimitError
+    from labrat.agent.providers.base import RATE_LIMIT_MESSAGE, RateLimitError
 
     provider = CodexSubscriptionProvider(model="gpt-5.6-luna", reasoning_effort="low")
     _stub_provider_auth(provider, monkeypatch)
@@ -452,9 +493,11 @@ async def test_http_429_stream_raises_stable_rate_limit_error(monkeypatch: Any) 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
 
     stream = await provider.stream([{"role": "user", "content": "question"}], [], "sys")
-    with pytest.raises(RateLimitError, match="HTTP 429") as captured:
+    with pytest.raises(RateLimitError) as captured:
         _ = [block async for block in stream]
 
+    assert str(captured.value) == RATE_LIMIT_MESSAGE
+    assert captured.value.response is not None
     assert captured.value.response.status_code == 429
 
 
@@ -802,7 +845,7 @@ def test_replay_cursor_mismatch_reconstructs_fresh_lite_history() -> None:
             "content": [{"type": "output_text", "text": "old answer"}],
         },
     ]
-    provider._expected_assistant_cursor = ("not-the-current-digest", ())
+    provider._expected_assistant_cursor = "not-the-current-digest"
 
     body = provider._to_responses_request(
         [

@@ -608,6 +608,16 @@ def main(argv: list[str] | None = None) -> int:
         run_id = f"dab-{int(time.time())}"
         output_dir = Path("runs") / "dab" / run_id
 
+    stale_submission = output_dir / "submission.json"
+    if effective_driver == "raw-bash" and (
+        stale_submission.exists() or stale_submission.is_symlink()
+    ):
+        parser.error(
+            f"stale submission.json exists at {stale_submission}; raw-bash is "
+            "legacy report-only, so refusing to execute until this output is "
+            "explicitly migrated to a fresh directory"
+        )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(
         json.dumps(

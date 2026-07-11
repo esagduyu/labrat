@@ -12,6 +12,7 @@ from labrat.eval.benchmarks.dab.taint import (
     audit_run,
     classify_trial,
     gate,
+    task_trial_dir_name,
 )
 
 
@@ -28,6 +29,30 @@ def _trace_record(*, tool_input: dict[str, object] | None = None) -> dict[str, o
 def test_classify_flags_answer_key_read() -> None:
     assert classify_trial("cat query1/ground_truth.csv -> 42") == "external-oracle-cheating"
     assert classify_trial("SELECT COUNT(*) FROM orders") == "clean"
+
+
+@pytest.mark.parametrize(
+    ("task_id", "expected"),
+    [
+        ("dataset.v2:3", "dataset.v2_3__trial0"),
+        ("dataset-v2:3", "dataset-v2_3__trial0"),
+        ("dataset_v2:3", "dataset_v2_3__trial0"),
+    ],
+)
+def test_task_trial_dir_name_accepts_existing_dataset_name_grammar(
+    task_id: str,
+    expected: str,
+) -> None:
+    assert task_trial_dir_name(task_id, 0) == expected
+
+
+@pytest.mark.parametrize(
+    "task_id",
+    ["../escape:1", "nested/escape:1", "dataset..escape:1", "dataset:0"],
+)
+def test_task_trial_dir_name_rejects_traversal_and_invalid_query(task_id: str) -> None:
+    with pytest.raises(ValueError, match="invalid DAB task_id"):
+        task_trial_dir_name(task_id, 0)
 
 
 def test_gate_blocks_on_contamination() -> None:

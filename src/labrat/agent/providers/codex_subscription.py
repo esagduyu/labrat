@@ -22,6 +22,7 @@ import base64
 import copy
 import hashlib
 import json
+import re
 import time
 import uuid
 import weakref
@@ -476,10 +477,7 @@ class CodexSubscriptionProvider(ModelProvider):
                         return
                     except httpx.HTTPStatusError as exc:
                         if exc.response.status_code == 429:
-                            raise RateLimitError(
-                                "Codex Responses API rate limit (HTTP 429)",
-                                response=exc.response,
-                            ) from exc
+                            raise RateLimitError(response=exc.response) from exc
                         if (
                             exc.response.status_code == 400
                             and sent_cache_breakpoint
@@ -912,13 +910,14 @@ def _reduce_event(event: dict[str, Any]) -> list[ContentBlock]:
             if item_d.get("type") == "function_call":
                 return [_function_call_block(item_d)]
         return []
+    if etype == "error":
+        if _is_rate_limit_event(event):
+            raise RateLimitError(rate_limit=_event_rate_limit_meta(event))
+        raise RuntimeError("Codex Responses stream error")
     if etype in ("response.failed", "response.incomplete"):
         detail = _error_detail(event)
         if _is_rate_limit_event(event):
-            raise RateLimitError(
-                f"Codex Responses stream rate limit: {detail}",
-                rate_limit=_event_rate_limit_meta(event),
-            )
+            raise RateLimitError(rate_limit=_event_rate_limit_meta(event))
         raise RuntimeError(f"Codex Responses stream {etype}: {detail}")
     return []
 
@@ -1035,30 +1034,77 @@ def _error_detail(event: dict[str, Any]) -> str:
 
 
 def _is_rate_limit_event(event: dict[str, Any]) -> bool:
-    response = event.get("response")
-    if not isinstance(response, dict):
-        return False
-    response_obj = cast(dict[str, Any], response)
-    status = response_obj.get("status_code") or response_obj.get("status")
-    if status == 429 or str(status) == "429":
-        return True
-    error = response_obj.get("error")
-    haystack = json.dumps(error if error is not None else response_obj).lower()
-    return any(
-        marker in haystack
-        for marker in ("rate_limit", "rate limit", "usage_limit", "too many requests", "429")
+    sources = _structured_error_sources(event)
+    rate_codes = {
+        "rate_limit",
+        "rate_limited",
+        "rate_limit_error",
+        "rate_limit_exceeded",
+        "usage_limit",
+        "usage_limit_reached",
+        "quota_exceeded",
+        "too_many_requests",
+    }
+    for source in sources:
+        for field in ("status_code", "http_status", "status"):
+            status = source.get(field)
+            if status == 429 or str(status) == "429":
+                return True
+        for field in ("code", "type"):
+            raw = source.get(field)
+            if isinstance(raw, str):
+                normalized = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+                if normalized in rate_codes:
+                    return True
+
+    message = _bounded_error_message(event)
+    return bool(
+        re.search(
+            r"(?i)(?:\b(?:api error|http(?: status)?)\s*:?\s*429\b|"
+            r"\btoo many requests\b|\brate[ _-]?limit(?:ed| exceeded| reached)?\b|"
+            r"\busage[ _-]?limit\b|\bquota (?:exceeded|reached)\b)",
+            message,
+        )
     )
 
 
-def _event_rate_limit_meta(event: dict[str, Any]) -> dict[str, int]:
+def _structured_error_sources(event: dict[str, Any]) -> list[dict[str, Any]]:
+    sources = [event]
     response = event.get("response")
-    if not isinstance(response, dict):
-        return {}
-    error = cast(dict[str, Any], response).get("error")
-    source = cast(dict[str, Any], error) if isinstance(error, dict) else {}
+    if isinstance(response, dict):
+        response_obj = cast(dict[str, Any], response)
+        sources.append(response_obj)
+        error = response_obj.get("error")
+        if isinstance(error, dict):
+            sources.append(cast(dict[str, Any], error))
+    top_error = event.get("error")
+    if isinstance(top_error, dict):
+        sources.append(cast(dict[str, Any], top_error))
+    return sources
+
+
+def _bounded_error_message(event: dict[str, Any]) -> str:
+    candidates: list[Any] = []
+    if event.get("type") == "error":
+        candidates.append(event.get("message"))
+    response = event.get("response")
+    if isinstance(response, dict):
+        error = cast(dict[str, Any], response).get("error")
+        if isinstance(error, dict):
+            candidates.append(cast(dict[str, Any], error).get("message"))
+        elif isinstance(error, str):
+            candidates.append(error)
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            return candidate[:500]
+    return ""
+
+
+def _event_rate_limit_meta(event: dict[str, Any]) -> dict[str, int]:
     result: dict[str, int] = {}
-    for key in ("resets_at", "resets_in_seconds"):
-        value = source.get(key)
-        if isinstance(value, int) and not isinstance(value, bool):
-            result[key] = value
+    for source in _structured_error_sources(event):
+        for key in ("resets_at", "resets_in_seconds"):
+            value = source.get(key)
+            if key not in result and isinstance(value, int) and not isinstance(value, bool):
+                result[key] = value
     return result

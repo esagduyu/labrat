@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from labrat.agent.loop import ContentBlock
+
+
+RATE_LIMIT_MESSAGE = "Model provider rate limit reached; retry later."
+_RATE_LIMIT_FIELDS = {"resets_at", "resets_in_seconds"}
 
 
 class RateLimitError(RuntimeError):
@@ -15,14 +19,18 @@ class RateLimitError(RuntimeError):
 
     def __init__(
         self,
-        message: str,
+        _message: str | None = None,
         *,
         response: Any | None = None,
-        rate_limit: dict[str, int] | None = None,
+        rate_limit: Mapping[str, Any] | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(RATE_LIMIT_MESSAGE)
         self.response = response
-        self.rate_limit = dict(rate_limit or {})
+        self.rate_limit = {
+            key: value
+            for key, value in (rate_limit or {}).items()
+            if key in _RATE_LIMIT_FIELDS and isinstance(value, int) and not isinstance(value, bool)
+        }
 
 
 class ModelProvider(ABC):

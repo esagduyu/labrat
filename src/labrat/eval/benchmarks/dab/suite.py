@@ -839,9 +839,14 @@ class DabSuite:
         verification_active = k > 1 or self._reverify or self._postverify
 
         async def _run_once(
-            i: int, extra: str = "", diversity_index: int | None = None
+            i: int,
+            extra: str = "",
+            diversity_index: int | None = None,
+            subdir_name: str | None = None,
         ) -> tuple[str, int, float]:
-            sub = scratch_dir / f"subrun{i}" if verification_active else scratch_dir
+            sub = (
+                scratch_dir / (subdir_name or f"subrun{i}") if verification_active else scratch_dir
+            )
             sub.mkdir(parents=True, exist_ok=True)
             return await self._dispatch_driver_once(
                 task,
@@ -857,8 +862,9 @@ class DabSuite:
         modal_index: int | None = None
         low_confidence: bool | None = None
         consensus_answers: list[str] | None = None
-        chosen_subdir_i: int | None = None
-        results: list[tuple[int, tuple[str, int, float]]] = []
+        chosen_subrun_id: int | None = None
+        chosen_subdir_name: str | None = None
+        results: list[tuple[int, str, tuple[str, int, float]]] = []
 
         if k > 1:
             for i in range(k):
@@ -866,7 +872,7 @@ class DabSuite:
                     r = await _run_once(
                         i, diversity_index=(i if self._consensus_diversity else None)
                     )
-                    results.append((i, r))
+                    results.append((i, f"subrun{i}", r))
                     total_latency += r[2]
                 except Exception:
                     continue  # a failed sub-run is excluded from the vote
@@ -874,17 +880,20 @@ class DabSuite:
                 return await _run_once(0)  # all failed → let run_trial's handler see it
             llm_fn = self._verify_llm_fn()
             idx, low = await choose_modal(
-                [result[0] for _, result in results], question=question, llm_fn=llm_fn
+                [result[0] for _, _, result in results],
+                question=question,
+                llm_fn=llm_fn,
             )
             modal_index = idx
             low_confidence = low
-            consensus_answers = [result[0] for _, result in results]
-            chosen_subdir_i, primary = results[idx]
+            consensus_answers = [result[0] for _, _, result in results]
+            chosen_subrun_id, chosen_subdir_name, primary = results[idx]
         else:
             primary = await _run_once(0)
             total_latency += primary[2]
             if verification_active:  # reverify-only path
-                chosen_subdir_i = 0
+                chosen_subrun_id = 0
+                chosen_subdir_name = "subrun0"
 
         # ── Argumentation: bounded rounds on a split vote ────────────────
         # Only fires when the K-run vote above came back low_confidence AND the
@@ -897,10 +906,10 @@ class DabSuite:
         if k > 1 and low_confidence and self._argue_rounds > 0:
             for round_num in range(self._argue_rounds):
                 try:
-                    argued: list[tuple[int, tuple[str, int, float]]] = []
-                    for result_index, (subrun_id, _current) in enumerate(results):
+                    argued: list[tuple[int, str, tuple[str, int, float]]] = []
+                    for result_index, (subrun_id, _prior_subdir, _current) in enumerate(results):
                         block_lines = ["Other analysts concluded:"]
-                        for other_index, (_other_id, other) in enumerate(results):
+                        for other_index, (_other_id, _other_subdir, other) in enumerate(results):
                             if other_index == result_index:
                                 continue
                             block_lines.append(f"- {other[0][:1500]}")
@@ -914,21 +923,31 @@ class DabSuite:
                             subrun_id,
                             extra=argue_extra,
                             diversity_index=(subrun_id if self._consensus_diversity else None),
+                            subdir_name=f"argue-round{round_num + 1}-subrun{subrun_id}",
                         )
-                        argued.append((subrun_id, r))
-                    total_latency += sum(result[2] for _, result in argued)
-                    results = argued
-                    argue_rounds_used = round_num + 1
+                        argued.append(
+                            (
+                                subrun_id,
+                                f"argue-round{round_num + 1}-subrun{subrun_id}",
+                                r,
+                            )
+                        )
                     llm_fn = self._verify_llm_fn()
                     idx, low = await choose_modal(
-                        [result[0] for _, result in results],
+                        [result[0] for _, _, result in argued],
                         question=question,
                         llm_fn=llm_fn,
                     )
+                    # Commit the tentative round only after every rerun and the
+                    # judge vote succeed. Until here, prior answers and traces are
+                    # untouched and remain the fail-open selection.
+                    total_latency += sum(result[2] for _, _, result in argued)
+                    results = argued
+                    argue_rounds_used = round_num + 1
                     modal_index = idx
                     low_confidence = low
-                    consensus_answers = [result[0] for _, result in results]
-                    chosen_subdir_i, primary = results[idx]
+                    consensus_answers = [result[0] for _, _, result in results]
+                    chosen_subrun_id, chosen_subdir_name, primary = results[idx]
                     if not low_confidence:
                         break
                 except Exception:
@@ -963,7 +982,8 @@ class DabSuite:
                     total_latency += reconcile[2]
                     reconcile_used = True
                     final_answer = reconcile
-                    chosen_subdir_i = 901
+                    chosen_subrun_id = 901
+                    chosen_subdir_name = "subrun901"
             except Exception:
                 pass  # fail-open: keep the primary answer
 
@@ -990,7 +1010,8 @@ class DabSuite:
                     total_latency += revised[2]
                     final_answer = revised
                     postverify_revised = True
-                    chosen_subdir_i = 902
+                    chosen_subrun_id = 902
+                    chosen_subdir_name = "subrun902"
             except Exception:
                 pass  # fail-open: keep the original final answer
 
@@ -1012,6 +1033,8 @@ class DabSuite:
                     "postverify": self._postverify,
                     "postverify_violations": postverify_violations,
                     "postverify_revised": postverify_revised,
+                    "chosen_subrun_id": chosen_subrun_id,
+                    "chosen_subdir": chosen_subdir_name,
                     "chosen_answer": final_answer[0],
                 }
                 (scratch_dir / "verification.json").write_text(json.dumps(vdata, indent=2))
@@ -1019,11 +1042,11 @@ class DabSuite:
                 pass  # fail-open: a write error must never trap the trial
 
             # Best-effort: promote chosen sub-run's trace file to scratch root
-            if chosen_subdir_i is not None:
+            if chosen_subdir_name is not None:
                 try:
                     import shutil
 
-                    chosen_sub = scratch_dir / f"subrun{chosen_subdir_i}"
+                    chosen_sub = scratch_dir / chosen_subdir_name
                     for src in chosen_sub.glob("*_tool_calls.jsonl"):
                         dst = scratch_dir / src.name
                         # The canonical trace must describe the newly selected

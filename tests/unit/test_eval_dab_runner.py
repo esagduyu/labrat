@@ -160,6 +160,58 @@ def test_raw_bash_nonempty_run_is_answer_audited_report_only(
     assert not (output_dir / "submission.json").exists()
 
 
+def test_raw_bash_rejects_stale_submission_before_runner_invocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from scripts import eval_dab
+
+    calls = 0
+
+    class NoRunSuite:
+        name = "dab"
+
+        def tasks(self) -> list[BenchmarkTask]:
+            return [_make_task("ds:1")]
+
+        async def run_trial(
+            self, task: BenchmarkTask, trial_num: int, scratch_dir: Path
+        ) -> TrialResult:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("stale raw-bash output must fail before execution")
+
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: NoRunSuite())
+    dab_dir = tmp_path / "empty-dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "stale-raw"
+    output_dir.mkdir()
+    stale = b'[{"answer":"historical"}]\n'
+    (output_dir / "submission.json").write_bytes(stale)
+
+    with pytest.raises(SystemExit) as captured:
+        eval_dab.main(
+            [
+                "--dab-dir",
+                str(dab_dir),
+                "--output-dir",
+                str(output_dir),
+                "--driver",
+                "raw-bash",
+                "--n-trials",
+                "1",
+            ]
+        )
+
+    assert captured.value.code == 2
+    assert "stale submission.json" in capsys.readouterr().err
+    assert calls == 0
+    assert (output_dir / "submission.json").read_bytes() == stale
+    assert not (output_dir / "config.json").exists()
+    assert not (output_dir / "trials.jsonl").exists()
+
+
 def test_dab_boolean_flags_restore_on_resume_and_reject_conflicts(tmp_path: Path) -> None:
     from scripts.eval_dab import main
 

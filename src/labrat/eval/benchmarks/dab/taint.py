@@ -22,12 +22,13 @@ TRACE_FILENAME_BY_DRIVER = {
 }
 ANSWER_ONLY_DRIVERS = {"raw-bash"}
 _TRACE_FIELDS = {"tool", "input", "ok", "output", "latency_ms"}
-_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*:[1-9][0-9]*$")
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*:[1-9][0-9]*$")
 
 
 def task_trial_dir_name(task_id: str, trial_num: int) -> str:
     """Map one canonical DAB task key to its scratch directory name."""
-    if not _TASK_ID_RE.fullmatch(task_id):
+    dataset = task_id.rsplit(":", 1)[0]
+    if not _TASK_ID_RE.fullmatch(task_id) or ".." in dataset:
         raise ValueError(f"invalid DAB task_id: {task_id!r}")
     if isinstance(trial_num, bool) or trial_num < 0:
         raise ValueError(f"invalid DAB trial_num: {trial_num!r}")

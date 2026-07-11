@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,16 @@ def _write_run(
         trial_dir.mkdir(parents=True)
         # An existing empty JSONL is a valid zero-tool execution trace.
         (trial_dir / "agent_tool_calls.jsonl").write_text("")
+
+
+def _stale_clean_audit(
+    verdicts: dict[str, str],
+) -> Callable[[Path, Path], dict[str, str]]:
+    def audit(trials_jsonl: Path, _scratch_dir: Path) -> dict[str, str]:
+        (trials_jsonl.parent / "taint.json").write_text(json.dumps(verdicts))
+        return verdicts
+
+    return audit
 
 
 def test_build_bundle_includes_artifacts_manifest_and_zero_tool_trace(tmp_path: Path) -> None:
@@ -150,6 +161,64 @@ def test_build_bundle_allows_safe_sibling_output(tmp_path: Path) -> None:
     assert (output_dir / "manifest.json").is_file()
 
 
+def test_force_rejects_output_symlink_without_deleting_target(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-output-link"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    valuable = tmp_path / "valuable-output"
+    valuable.mkdir()
+    marker = valuable / "keep.txt"
+    marker.write_text("do not delete")
+    output_link = tmp_path / "bundle-link"
+    output_link.symlink_to(valuable, target_is_directory=True)
+
+    with pytest.raises(BundleError, match="symlink"):
+        build_bundle(run_dir, output_dir=output_link, force=True)
+
+    assert marker.read_text() == "do not delete"
+    assert output_link.is_symlink()
+
+
+def test_rejects_symlinked_output_parent_before_creating_bundle(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-parent-link"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    external_parent = tmp_path / "external-parent"
+    external_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(external_parent, target_is_directory=True)
+
+    with pytest.raises(BundleError, match="symlink"):
+        build_bundle(run_dir, output_dir=linked_parent / "bundle")
+
+    assert not (external_parent / "bundle").exists()
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["config.json", "trials.jsonl", "submission.json", "report.md", "taint.json"],
+)
+def test_rejects_symlinked_run_artifact_before_read_or_write(
+    tmp_path: Path,
+    artifact_name: str,
+) -> None:
+    run_dir = tmp_path / f"run-core-link-{artifact_name.replace('.', '-')}"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    artifact = run_dir / artifact_name
+    external = tmp_path / f"external-{artifact_name.replace('.', '-')}"
+    if artifact.exists():
+        external.write_bytes(artifact.read_bytes())
+        artifact.unlink()
+    else:
+        external.write_text("valuable taint sentinel")
+    before = external.read_bytes()
+    artifact.symlink_to(external)
+
+    with pytest.raises(BundleError, match="symlink"):
+        build_bundle(run_dir)
+
+    assert external.read_bytes() == before
+    assert artifact.is_symlink()
+
+
 @pytest.mark.parametrize(
     ("task_id", "trace_dir"),
     [
@@ -175,7 +244,7 @@ def test_build_bundle_rejects_task_id_paths_even_with_stale_clean_audit(
     (malicious_trace / "agent_tool_calls.jsonl").write_text("")
     monkeypatch.setattr(
         "scripts.build_dab_trace_bundle.audit_run",
-        lambda *_args, **_kwargs: {f"{task_id}:0": "clean"},
+        _stale_clean_audit({f"{task_id}:0": "clean"}),
     )
 
     with pytest.raises(BundleError, match="unsafe trace source"):
@@ -197,7 +266,7 @@ def test_build_bundle_rejects_symlinked_trial_dir_even_with_stale_clean_audit(
     trial_dir.symlink_to(outside, target_is_directory=True)
     monkeypatch.setattr(
         "scripts.build_dab_trace_bundle.audit_run",
-        lambda *_args, **_kwargs: {"stockindex:1:0": "clean"},
+        _stale_clean_audit({"stockindex:1:0": "clean"}),
     )
 
     with pytest.raises(BundleError, match="unsafe trace source"):
@@ -250,6 +319,14 @@ def test_build_bundle_secret_scan_allows_schema_and_usage_language(tmp_path: Pat
             "prompt_cache_key": "stockindex:1",
             "api_key_enabled": False,
             "input_tokens": 1200,
+            "output_tokens": 30,
+            "prompt_tokens": 1200,
+            "completion_tokens": 30,
+            "total_tokens": 1230,
+            "cached_tokens": 900,
+            "reasoning_tokens": 20,
+            "cache_write_tokens": 0,
+            "max_tokens": 4096,
             "refresh_token_count": 0,
         }
     )
@@ -274,6 +351,56 @@ def test_build_bundle_secret_scan_allows_schema_and_usage_language(tmp_path: Pat
     output = build_bundle(run_dir)
 
     assert (output / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize(
+    "credential_key",
+    [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "token",
+        "auth_token",
+        "refresh_token",
+        "password",
+        "private_key",
+    ],
+)
+def test_build_bundle_rejects_expanded_credential_key_forms(
+    tmp_path: Path,
+    credential_key: str,
+) -> None:
+    run_dir = tmp_path / f"credential-key-{credential_key.lower()}"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    config = json.loads((run_dir / "config.json").read_text())
+    config[credential_key] = "credential-value-must-not-ship"
+    (run_dir / "config.json").write_text(json.dumps(config))
+
+    with pytest.raises(BundleError, match="credential material"):
+        build_bundle(run_dir)
+
+
+@pytest.mark.parametrize(
+    "provider_secret",
+    [
+        "sk-proj-1234567890abcdef",
+        "sk-ant-api03-1234567890abcdef",
+        "ghp_1234567890abcdef",
+        "xoxb-1234567890abcdef",
+        "AIzaSy1234567890abcdefghijklmnop",
+        "-----BEGIN PRIVATE KEY-----\nZmFrZS1wcml2YXRlLWtleQ==\n-----END PRIVATE KEY-----",
+    ],
+)
+def test_build_bundle_rejects_provider_and_pem_secret_patterns(
+    tmp_path: Path,
+    provider_secret: str,
+) -> None:
+    run_dir = tmp_path / "provider-secret"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    (run_dir / "report.md").write_text(f"diagnostic payload: {provider_secret}\n")
+
+    with pytest.raises(BundleError, match="credential material"):
+        build_bundle(run_dir)
 
 
 def test_build_bundle_selects_one_semantic_attempt_after_infra_retry(tmp_path: Path) -> None:

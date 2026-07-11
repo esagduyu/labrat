@@ -462,6 +462,61 @@ async def test_consensus_promotes_trace_from_actual_retained_subrun(tmp_path: Pa
     assert (scratch / "agent_tool_calls.jsonl").read_text() == winning_trace
 
 
+async def test_failed_argumentation_round_retains_prior_answer_and_trace(
+    tmp_path: Path,
+) -> None:
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        consensus_k=2,
+        argue_rounds=1,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "argumentation-atomic"
+    prior_trace = '{"tool":"run_sql","input":{},"ok":true,"output":"prior","latency_ms":1}\n'
+    tentative_trace = (
+        '{"tool":"run_sql","input":{},"ok":true,"output":"tentative","latency_ms":1}\n'
+    )
+    calls: dict[str, int] = {}
+
+    async def dispatch(
+        _task: Any,
+        _db_config_path: Path,
+        subrun: Path,
+        **_kwargs: Any,
+    ) -> tuple[str, int, float]:
+        calls[subrun.name] = calls.get(subrun.name, 0) + 1
+        if subrun.name == "subrun0" and calls[subrun.name] == 1:
+            (subrun / "agent_tool_calls.jsonl").write_text(prior_trace)
+            return ("primary-old", 1, 0.1)
+        if subrun.name == "subrun1" and calls[subrun.name] == 1:
+            (subrun / "agent_tool_calls.jsonl").write_text("")
+            return ("other-old", 0, 0.1)
+        if subrun.name in {"subrun0", "argue-round1-subrun0"}:
+            (subrun / "agent_tool_calls.jsonl").write_text(tentative_trace)
+            return ("primary-tentative", 1, 0.1)
+        raise RuntimeError("later tentative rerun failed")
+
+    with (
+        patch.object(suite, "_dispatch_driver_once", new=dispatch),
+        patch.object(suite, "_verify_llm_fn", return_value=AsyncMock(return_value="0")),
+        patch(
+            "labrat.agent.verification.consensus.choose_modal",
+            new=AsyncMock(return_value=(0, True)),
+        ),
+    ):
+        answer = await suite._run_trial_verified(
+            task,
+            Path(task.config["db_config_path"]),
+            scratch,
+        )
+
+    assert answer[0] == "primary-old"
+    assert (scratch / "agent_tool_calls.jsonl").read_text() == prior_trace
+    assert (scratch / "subrun0" / "agent_tool_calls.jsonl").read_text() == prior_trace
+
+
 async def test_consensus_judge_usage_is_included_in_trial_telemetry(tmp_path: Path) -> None:
     _make_synthetic_fixture(tmp_path)
     suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", consensus_k=2)
@@ -605,6 +660,41 @@ async def test_run_trial_classifies_cli_api_error_429_as_rate_limit(tmp_path: Pa
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
 
     assert result.reason == "infra:rate_limit"
+
+
+async def test_rate_limit_exception_persists_only_sanitized_allowlisted_data(
+    tmp_path: Path,
+) -> None:
+    from labrat.agent.providers.base import RATE_LIMIT_MESSAGE, RateLimitError
+
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    error = RateLimitError(
+        "raw provider quota detail must not persist",
+        rate_limit={
+            "resets_at": 1783767751,
+            "resets_in_seconds": 321,
+            "plan_type": "secret-plan",
+        },
+    )
+
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+
+    assert result.reason == "infra:rate_limit"
+    assert result.meta["rate_limit"] == {
+        "resets_at": 1783767751,
+        "resets_in_seconds": 321,
+    }
+    assert result.artifact["payload"] == f"RateLimitError: {RATE_LIMIT_MESSAGE}"
+    persisted = result.model_dump_json()
+    assert "raw provider quota detail" not in persisted
+    assert "secret-plan" not in persisted
 
 
 async def test_run_trial_isolates_generic_agent_error_as_infra(tmp_path: Path) -> None:
