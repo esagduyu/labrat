@@ -21,7 +21,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from labrat.agent.providers import (
     CODEX_REASONING_EFFORTS,
@@ -34,19 +34,10 @@ from labrat.eval.reporting import report_to_markdown
 from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
 
 _RATE_LIMIT_EXIT_CODE = 4
-_AUDIT_EXIT_CODE = 5
 
 
 class _RateLimitStopError(RuntimeError):
     """Internal control flow: one rate-limit trial was durably recorded."""
-
-    def __init__(self, result: TrialResult) -> None:
-        self.result = result
-        super().__init__(f"{result.task_id} trial {result.trial_num}")
-
-
-class _AuditStopError(RuntimeError):
-    """Internal control flow: one native audit failure was durably recorded."""
 
     def __init__(self, result: TrialResult) -> None:
         self.result = result
@@ -74,11 +65,10 @@ def _rate_limit_reset_summary(result: TrialResult) -> str:
 def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
     """Return set of (task_id, trial_num) pairs already recorded in trials.jsonl.
 
-    Infra failures (``reason`` starts with ``"infra:"``) and ``audit-error``
-    rows are NOT considered completed — they never produced admissible native
-    evidence, so a resume rerun should attempt them again. Retry rows are
-    append-only: a successful rerun adds a new semantic row while preserving
-    the failed attempt.
+    Infra failures (``reason`` starts with ``"infra:"``) are NOT considered
+    completed — they never got a fair shot at the query, so a resume rerun
+    should attempt them again. Retry rows are append-only: a successful rerun
+    adds a new semantic row while preserving the infrastructure attempt.
     """
     completed: set[tuple[str, int]] = set()
     if not trials_jsonl.exists():
@@ -90,7 +80,7 @@ def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
         try:
             obj = json.loads(line)
             reason = obj.get("reason") or ""
-            if isinstance(reason, str) and (reason.startswith("infra:") or reason == "audit-error"):
+            if isinstance(reason, str) and reason.startswith("infra:"):
                 continue
             completed.add((obj["task_id"], obj["trial_num"]))
         except (json.JSONDecodeError, KeyError):
@@ -122,7 +112,7 @@ async def _run_interim(
                 except Exception:
                     continue
                 reason = tr.reason or ""
-                if reason.startswith("infra:") or reason == "audit-error":
+                if reason.startswith("infra:"):
                     # Skip — we'll re-run this and the new line will be appended.
                     infra_keys_to_rewrite.add((tr.task_id, tr.trial_num))
                 else:
@@ -170,10 +160,6 @@ async def _run_interim(
                     # immediately so a quota outage cannot fill trials.jsonl with
                     # zero-token attempts for every remaining task.
                     raise _RateLimitStopError(result)
-                if reason == "audit-error":
-                    # Native evidence is incomplete or inconsistent. Preserve the
-                    # row, keep the key retryable, and stop before another model call.
-                    raise _AuditStopError(result)
 
     score = suite.aggregate(all_trials)
     return BenchmarkReport(
@@ -199,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--driver",
-        choices=["raw-bash", "labrat-agent", "claude-mcp", "codex-mcp"],
+        choices=["raw-bash", "labrat-agent", "claude-mcp"],
         default=None,
         help=(
             "Agent driver. 'raw-bash' (default for new runs) reproduces the Phase 1b "
@@ -207,9 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             "billing). 'labrat-agent' routes through AgentLoop + LabRat tools + "
             "AnthropicProvider (metered API billing). 'claude-mcp' runs claude --print "
             "with the LabRat MCP server mounted (Max-plan billing, LabRat tools used "
-            "natively — recommended Phase 4 measurement). 'codex-mcp' is a "
-            "diagnostic-only native Codex CLI run with a reconciled LabRat MCP trace; "
-            "it is never eligible for submission output. On --output-dir resume, "
+            "natively — recommended Phase 4 measurement). On --output-dir resume, "
             "the driver is restored from config.json unless overridden here "
             "(mismatches are rejected to prevent mixed-driver runs)."
         ),
@@ -218,8 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         "--agent-model",
         default=None,
         help=(
-            "Model id passed to the agent subprocess for labrat-agent, claude-mcp, "
-            "and diagnostic codex-mcp drivers. New codex runs default to gpt-5.6-luna; other "
+            "Model id passed to the agent subprocess for the labrat-agent and "
+            "claude-mcp drivers. New codex runs default to gpt-5.6-luna; other "
             "providers default to claude-sonnet-4-6. Restored from config.json on "
             "resume. Always pass --model explicitly to subprocess-backed providers so "
             "they do not fall through to whatever the parent session uses."
@@ -230,8 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=["anthropic", "claude-code", "openai", "codex"],
         default=None,
         help=(
-            "Model provider for the labrat-agent driver; codex-mcp always forces "
-            "'codex' and rejects any explicit alternative. 'anthropic' (default) uses "
+            "Model provider for the labrat-agent driver. 'anthropic' (default) uses "
             "metered API billing. 'claude-code' shells the claude CLI subprocess "
             "(Max-plan billing; subject to the documented text-protocol conflict for "
             "tool round-trips). 'openai' uses an OpenAI-compatible endpoint. 'codex' "
@@ -245,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Responses reasoning effort for the codex provider on the labrat-agent "
-            "and codex-mcp drivers. GPT-5.6 Luna supports low/medium/high/xhigh/max; Sol and Terra "
+            "driver. GPT-5.6 Luna supports low/medium/high/xhigh/max; Sol and Terra "
             "also support ultra (automatic task delegation). GPT-5.5 retains the "
             "legacy minimal value. New Codex runs default to Luna Max. Ignored by "
             "the other providers."
@@ -267,8 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Enable the ContextLedger for labrat-agent trials and persist its artifacts "
-            "in the trial scratch directory. On by default for new runs and forced off "
-            "for diagnostic codex-mcp runs; restored from "
+            "in the trial scratch directory. On by default for new runs; restored from "
             "config.json on resume. Use --no-agent-ledger for the ablation control."
         ),
     )
@@ -405,8 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Trials per query for pass@k scoring. Defaults to 5 for new runs and is "
-            "restored from config.json on resume. Diagnostic codex-mcp runs require "
-            "exactly one trial."
+            "restored from config.json on resume."
         ),
     )
     parser.add_argument(
@@ -474,14 +455,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"the override to resume, or start a fresh --output-dir."
             )
 
-    effective_driver: str = args.driver or existing_cfg.get("driver") or "raw-bash"
-    configured_provider = args.agent_provider or existing_cfg.get("agent_provider")
-    if effective_driver == "codex-mcp":
-        if configured_provider not in {None, "codex"}:
-            parser.error("--agent-provider must be 'codex' for the codex-mcp driver")
-        effective_provider = "codex"
-    else:
-        effective_provider = configured_provider or "anthropic"
+    effective_driver: Driver = args.driver or existing_cfg.get("driver") or "raw-bash"
+    effective_provider: str = (
+        args.agent_provider or existing_cfg.get("agent_provider") or "anthropic"
+    )
     default_model = "gpt-5.6-luna" if effective_provider == "codex" else "claude-sonnet-4-6"
     effective_model: str = args.agent_model or existing_cfg.get("agent_model") or default_model
     effective_max_turns: int | None = (
@@ -582,50 +559,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_levers is not None
         else existing_cfg.get("agent_levers", True)
     )
-    ledger_default = False if effective_driver == "codex-mcp" else True
     effective_ledger: bool = bool(
         args.agent_ledger
         if args.agent_ledger is not None
-        else existing_cfg.get("agent_ledger", ledger_default)
+        else existing_cfg.get("agent_ledger", True)
     )
-    n_trials_default = 1 if effective_driver == "codex-mcp" else 5
     effective_n_trials: int = (
-        args.n_trials
-        if args.n_trials is not None
-        else existing_cfg.get("n_trials", n_trials_default)
+        args.n_trials if args.n_trials is not None else existing_cfg.get("n_trials", 5)
     )
-
-    if effective_driver == "codex-mcp":
-        if effective_n_trials != 1:
-            parser.error("--n-trials must be 1 for the diagnostic codex-mcp driver")
-        unsupported: list[str] = []
-        if effective_ledger:
-            unsupported.append("--agent-ledger")
-        if effective_verify:
-            unsupported.append("--agent-verify")
-        if (
-            effective_cartograph
-            or effective_cartograph_semantics
-            or effective_cartograph_scent_dir is not None
-        ):
-            unsupported.append("--agent-cartograph/--cartograph-semantics")
-        if effective_consensus is not None:
-            unsupported.append("--agent-consensus")
-        if effective_reverify:
-            unsupported.append("--agent-reverify")
-        if effective_argue_rounds:
-            unsupported.append("--agent-argue-rounds")
-        if effective_postverify:
-            unsupported.append("--agent-postverify")
-        if effective_max_turns is not None:
-            unsupported.append("--max-turns")
-        if unsupported:
-            parser.error("codex-mcp does not support " + ", ".join(unsupported))
 
     suite = DabSuite(
         dab_dir=args.dab_dir,
         hints=effective_hints,
-        driver=cast(Driver, effective_driver),
+        driver=effective_driver,
         agent_model=effective_model,
         agent_provider=effective_provider,
         agent_max_turns=effective_max_turns,
@@ -663,13 +609,12 @@ def main(argv: list[str] | None = None) -> int:
         output_dir = Path("runs") / "dab" / run_id
 
     stale_submission = output_dir / "submission.json"
-    if effective_driver in {"raw-bash", "codex-mcp"} and (
+    if effective_driver == "raw-bash" and (
         stale_submission.exists() or stale_submission.is_symlink()
     ):
-        run_class = "legacy report-only" if effective_driver == "raw-bash" else "diagnostic-only"
         parser.error(
-            f"stale submission.json exists at {stale_submission}; {effective_driver} is "
-            f"{run_class}, so refusing to execute until this output is "
+            f"stale submission.json exists at {stale_submission}; raw-bash is "
+            "legacy report-only, so refusing to execute until this output is "
             "explicitly migrated to a fresh directory"
         )
 
@@ -677,7 +622,6 @@ def main(argv: list[str] | None = None) -> int:
     (output_dir / "config.json").write_text(
         json.dumps(
             {
-                **({"tool_profile": "dab-core-v1"} if effective_driver == "codex-mcp" else {}),
                 "hints": effective_hints,
                 "driver": effective_driver,
                 "agent_model": effective_model,
@@ -705,18 +649,10 @@ def main(argv: list[str] | None = None) -> int:
                     "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
                 ),
                 "submission_eligibility": (
-                    "legacy-report-only"
-                    if effective_driver == "raw-bash"
-                    else ("diagnostic-only" if effective_driver == "codex-mcp" else "trace-audited")
+                    "legacy-report-only" if effective_driver == "raw-bash" else "trace-audited"
                 ),
                 "trace_contract": (
-                    "answer-only"
-                    if effective_driver == "raw-bash"
-                    else (
-                        "native-reconciled"
-                        if effective_driver == "codex-mcp"
-                        else "per-attempt-jsonl"
-                    )
+                    "answer-only" if effective_driver == "raw-bash" else "per-attempt-jsonl"
                 ),
                 "n_trials": effective_n_trials,
                 "task_filter": task_filter,
@@ -727,16 +663,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         report = asyncio.run(_run_interim(suite, effective_n_trials, output_dir, task_filter))
-    except _AuditStopError as exc:
-        print(
-            f"\nDAB diagnostic stopped after an audit error at {exc}. "
-            "The audit row was saved and remains retryable. No taint audit, report, "
-            "or submission was generated. Resume the same run with:\n"
-            f"  uv run python scripts/eval_dab.py --output-dir {output_dir}",
-            file=sys.stderr,
-            flush=True,
-        )
-        return _AUDIT_EXIT_CODE
     except _RateLimitStopError as exc:
         reset = _rate_limit_reset_summary(exc.result)
         print(
@@ -755,15 +681,6 @@ def main(argv: list[str] | None = None) -> int:
             "# Legacy report-only DAB run\n\n"
             "> Submission eligibility: **ineligible**. The raw-bash driver has an "
             "answer-only contamination audit and does not claim trace completeness.\n\n"
-            + report_body
-        )
-    elif effective_driver == "codex-mcp":
-        report_body = report_to_markdown(report)
-        (output_dir / "report.md").write_text(
-            "# Diagnostic-only native Codex DAB run\n\n"
-            "> Submission eligibility: **ineligible**. The codex-mcp driver is "
-            "diagnostic-only and never writes submission.json.\n\n"
-            "> Trace contract: **native-reconciled** Codex JSONL and MCP server calls.\n\n"
             + report_body
         )
 
@@ -787,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"See {output_dir / 'taint.json'} for full verdicts.", file=sys.stderr)
         return 3
 
-    if effective_driver not in {"raw-bash", "codex-mcp"}:
+    if effective_driver != "raw-bash":
         suite.write_submission(report, output_dir)
         (output_dir / "report.md").write_text(report_to_markdown(report))
     print(f"\nRun complete: {output_dir}")
