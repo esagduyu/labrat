@@ -14,15 +14,25 @@ and shows up in ``ResolvedMembers.misses``).
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any, cast
+
 from pydantic import BaseModel
 
 from labrat.maze.document import ScentDoc, Section
+from labrat.maze.scent_audit import ScentContaminationError, audit_scent_doc
 from labrat.maze.store import MazeStore
 
 _SCENT_HEADING = "Scent"
 _TRAILS_HEADING = "Trails"
 _PROMPTS_HEADING = "Suggested Prompts"
 _OVERVIEW_HEADING = "Overview"
+
+# fqn[-2] folder-name conventions that mark staging/intermediate layers, not
+# domains — a Map auto-seeded from these would bundle plumbing, not a
+# business area. Case-insensitive.
+_NON_DOMAIN_FOLDERS = {"staging", "stg", "intermediate", "int", "base"}
 
 
 def _section(doc: ScentDoc, heading: str) -> Section | None:
@@ -95,6 +105,88 @@ def build_map_doc(
             ),
         ],
     )
+
+
+def _table_for_node(node: dict[str, Any]) -> str:
+    """Table name for a dbt manifest model node: alias-first, mirroring
+    ``catalog.dbt.semantic._table_for``'s resolution."""
+    alias = node.get("alias")
+    if isinstance(alias, str) and alias:
+        return alias
+    name = node.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def draft_maps_from_dbt(
+    manifest_path: Path,
+    *,
+    existing_scent_domains: set[str],
+    generated_at: str,
+    model_id: str | None = None,
+) -> dict[str, ScentDoc]:
+    """Cartographer dbt-structure auto-seed: sketch ``kind="map"`` skeletons
+    from a dbt project's folder structure.
+
+    Groups model nodes by their immediate parent folder (``fqn[-2]``),
+    skipping staging/intermediate-convention folders (not domains) and nodes
+    with fewer than 2 fqn segments. Each group's Scent members are its
+    models' table names, filtered to ``existing_scent_domains`` — a Map only
+    points at Scent that already exists. Deterministic, no LLM. Fail-open on
+    an unreadable/invalid manifest (mirrors ``semantic_ingest.py``); fail-loud
+    (``ScentContaminationError``) if a drafted doc trips the contamination
+    audit.
+    """
+    try:
+        manifest: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(manifest, dict):
+        return {}
+    manifest = cast(dict[str, Any], manifest)
+
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, dict):
+        return {}
+    nodes = cast(dict[str, Any], nodes)
+
+    groups: dict[str, list[str]] = {}
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        node = cast(dict[str, Any], node)
+        if node.get("resource_type") != "model":
+            continue
+        fqn_raw = node.get("fqn")
+        if not isinstance(fqn_raw, list):
+            continue
+        fqn = cast(list[Any], fqn_raw)
+        if len(fqn) < 2:
+            continue
+        folder = fqn[-2]
+        if not isinstance(folder, str) or folder.lower() in _NON_DOMAIN_FOLDERS:
+            continue
+        table = _table_for_node(node)
+        if not table:
+            continue
+        groups.setdefault(folder, []).append(table)
+
+    out: dict[str, ScentDoc] = {}
+    for folder in sorted(groups):
+        members = sorted({t for t in groups[folder] if t in existing_scent_domains})
+        if not members:
+            continue
+        doc = build_map_doc(slug=folder, scent=members, trails=[], prompts=[], source="draft")
+        doc.sections = [
+            s.model_copy(update={"generated_at": generated_at, "model_id": model_id})
+            for s in doc.sections
+        ]
+        tag = audit_scent_doc(doc)
+        if tag:
+            raise ScentContaminationError(
+                f"dbt auto-seed for {folder!r} tripped contamination guard: {tag}"
+            )
+        out[folder] = doc
+    return out
 
 
 class ResolvedMembers(BaseModel):
