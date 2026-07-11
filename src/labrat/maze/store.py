@@ -1,6 +1,6 @@
 """The Maze store: resolves ordered reference-doc source layers from disk.
 
-On-disk namespace (forward-compatible with trail/warren kinds + a future team layer):
+On-disk namespace (kind-parameterized — shared by the scent/trail/map kinds):
 
     <project_root>/labrat_maze/<kind>/*.md             (project scope)
     <home>/.labrat/maze/<profile>/<kind>/*.md          (user scope)

@@ -1,7 +1,7 @@
 """Reference-doc data model + markdown parser for the Maze store.
 
-Kind-agnostic: ScentDoc carries a `kind` discriminator ("scent" now; "trail"/"warren"
-later read by the same store/parser). Tolerates missing/malformed frontmatter.
+Kind-agnostic: ScentDoc carries a `kind` discriminator ("scent", "trail", and "map"
+are all read by the same store/parser). Tolerates missing/malformed frontmatter.
 """
 
 from __future__ import annotations
