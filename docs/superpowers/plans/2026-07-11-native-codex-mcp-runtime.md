@@ -212,11 +212,11 @@ async def _dispatch_tool_call(
 ) -> list[TextContent]: ...
 ```
 
-- [ ] **Step 1 RED:** Cover absent policy returning `None`; set-but-missing path; malformed JSON; unknown field; unsupported schema; digest mismatch; exact discovery; hidden-tool direct denial; and denial logged before registry dispatch.
-- [ ] **Step 2:** Run `uv run pytest -q tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py`; expected import/test failures.
-- [ ] **Step 3 GREEN:** Load `LABRAT_MCP_POLICY_PATH` only when set. A set path fails startup on every error. `_serve()` loads policy before opening stdio. Under policy, denial logs `ok=false` and raises an MCP error; without policy, existing discovery/dispatch behavior is unchanged.
-- [ ] **Step 4 REFACTOR:** Keep DAB names and paths out of the generic policy module. Run `uv run pytest -q tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py tests/unit/test_mcp_config.py`.
-- [ ] **Step 5:** Focused task gate and commit:
+- [x] **Step 1 RED:** Cover absent policy returning `None`; set-but-missing path; malformed JSON; unknown field; unsupported schema; digest mismatch; exact discovery; hidden-tool direct denial; and denial logged before registry dispatch.
+- [x] **Step 2:** Run `uv run pytest -q tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py`; expected import/test failures.
+- [x] **Step 3 GREEN:** Load `LABRAT_MCP_POLICY_PATH` only when set. A set path fails startup on every error. `_serve()` loads policy before opening stdio. Under policy, denial logs `ok=false` and raises an MCP error; without policy, existing discovery/dispatch behavior is unchanged.
+- [x] **Step 4 REFACTOR:** Keep DAB names and paths out of the generic policy module. Run `uv run pytest -q tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py tests/unit/test_mcp_config.py`.
+- [x] **Step 5:** Focused task gate and commit:
 
 ```bash
 git add src/labrat/mcp/policy.py src/labrat/mcp/server.py tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py
