@@ -66,7 +66,7 @@ git diff --check
 
 **Files:** Existing dirty files only; rename `scripts/_build_dab_trace_bundle.py` to `scripts/build_dab_trace_bundle.py`; modify `.gitignore`, `tests/unit/test_dab_trace_bundle.py`, and the dirty DAB docs that name the old script.
 
-- [ ] **Step 1: Capture and verify the exact starting state without changing it.**
+- [x] **Step 1: Capture and verify the exact starting state without changing it.**
 
 ```bash
 cd /Users/ege/repos/labrat
@@ -77,7 +77,7 @@ uv run pytest -q tests/unit/test_codex_subscription_provider.py tests/unit/test_
 
 Expected: the branch is `feat/codex-caching-gpt56`; the focused foundation tests pass. Fix only failures caused by the already-present GPT-5.6/cache work.
 
-- [ ] **Step 2: Promote the ignored trace bundler without rewriting it.**
+- [x] **Step 2: Promote the ignored trace bundler without rewriting it.**
 
 ```bash
 mv scripts/_build_dab_trace_bundle.py scripts/build_dab_trace_bundle.py
@@ -85,7 +85,7 @@ mv scripts/_build_dab_trace_bundle.py scripts/build_dab_trace_bundle.py
 
 Update imports to `from scripts.build_dab_trace_bundle import ...`, update `docs/dab-integration.md`, and remove only the `scripts/_build_dab_trace_bundle.py` ignore entry and its obsolete comment from `.gitignore`.
 
-- [ ] **Step 3: Run the promoted entrypoint tests.**
+- [x] **Step 3: Run the promoted entrypoint tests.**
 
 ```bash
 uv run pytest -q tests/unit/test_dab_trace_bundle.py tests/unit/test_dab_taint.py tests/unit/test_eval_dab_runner.py
@@ -94,7 +94,7 @@ uv run python scripts/build_dab_trace_bundle.py --help
 
 Expected: all tests pass and the CLI exits zero without building a bundle.
 
-- [ ] **Step 4: Run the focused checkpoint gate and commit the current foundation once.** Stage the existing modified provider/loop/verifier, DAB runner/suite/taint, their tests, `docs/codex-caching-investigation.md`, `docs/dab-solultra-ablation.md`, the promoted script, and `.gitignore`; do not stage unrelated files.
+- [x] **Step 4: Run the focused checkpoint gate and commit the current foundation once.** Stage the existing modified provider/loop/verifier, DAB runner/suite/taint, their tests, `docs/codex-caching-investigation.md`, `docs/dab-solultra-ablation.md`, the promoted script, and `.gitignore`; do not stage unrelated files.
 
 ```bash
 git add .gitignore docs/dab-integration.md docs/codex-caching-investigation.md docs/dab-solultra-ablation.md scripts/build_dab_trace_bundle.py scripts/eval_dab.py src/labrat/agent/loop.py src/labrat/agent/providers/__init__.py src/labrat/agent/providers/base.py src/labrat/agent/providers/codex_subscription.py src/labrat/agent/verifier.py src/labrat/eval/benchmarks/dab/suite.py src/labrat/eval/benchmarks/dab/taint.py tests/unit/test_claude_mcp_prompt.py tests/unit/test_codex_subscription_provider.py tests/unit/test_dab_prompt_levers.py tests/unit/test_dab_suite_run_trial.py tests/unit/test_dab_taint.py tests/unit/test_dab_trace_bundle.py tests/unit/test_eval_dab_runner.py
