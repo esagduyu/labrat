@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
-from dataclasses import replace
+import pickle
 from typing import Any, cast
 
 import pytest
@@ -304,13 +305,14 @@ def test_filter_registry_rejects_registry_profile_schema_disagreement() -> None:
 
 def test_filter_registry_rejects_duplicate_requested_tool_names() -> None:
     profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
-    duplicate = replace(
-        profile,
+    duplicate = ResolvedToolProfile(
+        name=profile.name,
         tools=(*profile.tools, profile.tools[-1]),
         canonical_schemas=(
             *profile.canonical_schemas,
             dict(profile.canonical_schemas[-1]),
         ),
+        schema_sha256=profile.schema_sha256,
     )
 
     with pytest.raises(ValueError, match=r"duplicate requested tool.*workflow"):
@@ -319,12 +321,14 @@ def test_filter_registry_rejects_duplicate_requested_tool_names() -> None:
 
 def test_filter_registry_rejects_duplicate_canonical_schema_names() -> None:
     profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
-    duplicate = replace(
-        profile,
+    duplicate = ResolvedToolProfile(
+        name=profile.name,
+        tools=profile.tools,
         canonical_schemas=(
             *profile.canonical_schemas[:-1],
             dict(profile.canonical_schemas[0]),
         ),
+        schema_sha256=profile.schema_sha256,
     )
 
     with pytest.raises(ValueError, match=r"duplicate canonical schema.*profile_dataset"):
@@ -333,7 +337,12 @@ def test_filter_registry_rejects_duplicate_canonical_schema_names() -> None:
 
 def test_filter_registry_rejects_canonical_schema_hash_disagreement() -> None:
     profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
-    tampered = replace(profile, schema_sha256="0" * 64)
+    tampered = ResolvedToolProfile(
+        name=profile.name,
+        tools=profile.tools,
+        canonical_schemas=profile.canonical_schemas,
+        schema_sha256="0" * 64,
+    )
 
     with pytest.raises(ValueError, match="schema hash disagrees"):
         filter_registry(build_data_tools_registry(), tampered)
@@ -341,7 +350,12 @@ def test_filter_registry_rejects_canonical_schema_hash_disagreement() -> None:
 
 def test_filter_registry_rejects_profile_name_tool_list_disagreement() -> None:
     profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
-    mislabeled = replace(profile, name="legacy-full-20260710")
+    mislabeled = ResolvedToolProfile(
+        name="legacy-full-20260710",
+        tools=profile.tools,
+        canonical_schemas=profile.canonical_schemas,
+        schema_sha256=profile.schema_sha256,
+    )
 
     with pytest.raises(ValueError, match="disagrees with its name"):
         filter_registry(build_data_tools_registry(), mislabeled)
@@ -400,39 +414,100 @@ def test_consumers_accept_a_valid_crafted_profile() -> None:
     assert contract.schema_sha256 == source.schema_sha256
 
 
-def test_canonical_schema_top_level_entries_are_immutable() -> None:
+def test_canonical_schema_top_level_mutation_is_detached() -> None:
     profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
     before = json.dumps(profile.canonical_schemas)
+    view = profile.canonical_schemas
 
-    with pytest.raises(TypeError):
-        profile.canonical_schemas[0]["tampered"] = True
+    view[0]["tampered"] = True
+
+    assert view[0]["tampered"] is True
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+
+
+def test_canonical_schema_nested_dict_mutation_is_detached() -> None:
+    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    before = json.dumps(profile.canonical_schemas)
+    view = profile.canonical_schemas
+    input_schema = view[0]["input_schema"]
+
+    input_schema["tampered"] = True
+
+    assert view[0]["input_schema"]["tampered"] is True
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+
+
+def test_canonical_schema_nested_list_mutation_is_detached() -> None:
+    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    before = json.dumps(profile.canonical_schemas)
+    view = profile.canonical_schemas
+    nested_list = _first_nested_list(view)
+
+    nested_list.append("tampered")
+
+    assert "tampered" in nested_list
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+
+
+def test_bound_container_initializers_only_mutate_detached_views() -> None:
+    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    before = json.dumps(profile.canonical_schemas)
+    top_level_view = profile.canonical_schemas
+    nested_list_view = profile.canonical_schemas
+    nested_list = _first_nested_list(nested_list_view)
+
+    top_level_view[0].__init__({"name": "detached", "input_schema": {}})
+    nested_list.__init__(["detached"])
+
+    assert top_level_view[0]["name"] == "detached"
+    assert nested_list == ["detached"]
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+
+
+def test_profile_constructor_does_not_retain_the_callers_schema_view() -> None:
+    source = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    caller_schemas = _mutable_schemas(source)
+    profile = _crafted_profile(source, caller_schemas)
+    before = json.dumps(profile.canonical_schemas)
+
+    caller_schemas[0]["input_schema"]["tampered"] = True
 
     assert json.dumps(profile.canonical_schemas) == before
     assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
 
 
-def test_canonical_schema_nested_dicts_are_immutable() -> None:
+def test_copy_deepcopy_and_pickle_round_trips_preserve_profile_integrity() -> None:
+    registry = build_data_tools_registry()
+    profile = resolve_tool_profile("dab-core-v1", registry)
+    round_trips = (
+        copy.copy(profile),
+        copy.deepcopy(profile),
+        pickle.loads(pickle.dumps(profile)),
+    )
+
+    for restored in round_trips:
+        assert restored == profile
+        assert hash(restored) == hash(profile)
+        assert restored.canonical_schemas == profile.canonical_schemas
+        filter_registry(registry, restored)
+        resolve_task_tool_contract("round-trip-task", restored, cartographer=False, mongo=False)
+
+
+def test_standard_json_dumps_supports_the_exact_canonical_options() -> None:
     profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
-    before = json.dumps(profile.canonical_schemas)
-    input_schema = profile.canonical_schemas[0]["input_schema"]
 
-    with pytest.raises(TypeError):
-        input_schema["tampered"] = True
+    serialized = json.dumps(
+        profile.canonical_schemas,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
 
-    assert json.dumps(profile.canonical_schemas) == before
-    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
-
-
-def test_canonical_schema_nested_lists_are_immutable() -> None:
-    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
-    before = json.dumps(profile.canonical_schemas)
-    nested_list = _first_nested_list(profile.canonical_schemas)
-
-    with pytest.raises(TypeError):
-        nested_list.append("tampered")
-
-    assert json.dumps(profile.canonical_schemas) == before
-    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+    assert hashlib.sha256(serialized.encode("utf-8")).hexdigest() == profile.schema_sha256
 
 
 def test_task_contract_copies_the_already_resolved_profile() -> None:

@@ -4,132 +4,55 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
-from typing import Any, Literal, Never, cast
+from dataclasses import dataclass, field
+from typing import Any, Literal, cast
 
 from labrat.agent.tools.base import Tool, ToolRegistry
 
 ToolProfileName = Literal["dab-core-v1", "legacy-full-20260710"]
 
 
-class _FrozenDict(dict[str, Any]):
-    """JSON-compatible dict that rejects every normal mutation API."""
-
-    @staticmethod
-    def _immutable() -> Never:
-        raise TypeError("canonical schemas are immutable")
-
-    def __setitem__(self, key: str, value: Any) -> Never:
-        _ = (key, value)
-        self._immutable()
-
-    def __delitem__(self, key: str) -> Never:
-        _ = key
-        self._immutable()
-
-    def __ior__(self, value: Any) -> Never:
-        _ = value
-        self._immutable()
-
-    def clear(self) -> Never:
-        self._immutable()
-
-    def pop(self, key: str, default: Any = None) -> Never:
-        _ = (key, default)
-        self._immutable()
-
-    def popitem(self) -> Never:
-        self._immutable()
-
-    def setdefault(self, key: str, default: Any = None) -> Never:
-        _ = (key, default)
-        self._immutable()
-
-    def update(self, *args: Any, **kwargs: Any) -> Never:
-        _ = (args, kwargs)
-        self._immutable()
+def _serialize_canonical_schemas(
+    canonical_schemas: tuple[dict[str, Any], ...],
+) -> str:
+    return json.dumps(
+        canonical_schemas,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
 
 
-class _FrozenList(list[Any]):
-    """JSON-compatible list that rejects every normal mutation API."""
-
-    @staticmethod
-    def _immutable() -> Never:
-        raise TypeError("canonical schemas are immutable")
-
-    def __setitem__(self, index: Any, value: Any) -> Never:
-        _ = (index, value)
-        self._immutable()
-
-    def __delitem__(self, index: Any) -> Never:
-        _ = index
-        self._immutable()
-
-    def __iadd__(self, values: Any) -> Never:
-        _ = values
-        self._immutable()
-
-    def __imul__(self, value: Any) -> Never:
-        _ = value
-        self._immutable()
-
-    def append(self, value: Any) -> Never:
-        _ = value
-        self._immutable()
-
-    def clear(self) -> Never:
-        self._immutable()
-
-    def extend(self, values: Any) -> Never:
-        _ = values
-        self._immutable()
-
-    def insert(self, index: Any, value: Any) -> Never:
-        _ = (index, value)
-        self._immutable()
-
-    def pop(self, index: Any = -1) -> Never:
-        _ = index
-        self._immutable()
-
-    def remove(self, value: Any) -> Never:
-        _ = value
-        self._immutable()
-
-    def reverse(self) -> Never:
-        self._immutable()
-
-    def sort(self, *args: Any, **kwargs: Any) -> Never:
-        _ = (args, kwargs)
-        self._immutable()
-
-
-def _freeze_json(value: Any) -> Any:
-    if isinstance(value, _FrozenDict | _FrozenList):
-        return value
-    if isinstance(value, dict):
-        mapping = cast(dict[str, Any], value)
-        return _FrozenDict((key, _freeze_json(nested)) for key, nested in mapping.items())
-    if isinstance(value, list | tuple):
-        sequence = cast(list[Any] | tuple[Any, ...], value)
-        return _FrozenList(_freeze_json(nested) for nested in sequence)
-    return value
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ResolvedToolProfile:
     name: ToolProfileName
     tools: tuple[str, ...]
-    canonical_schemas: tuple[dict[str, Any], ...]
     schema_sha256: str
+    _canonical_json: str = field(init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        frozen_schemas = tuple(_freeze_json(schema) for schema in self.canonical_schemas)
-        object.__setattr__(
-            self,
-            "canonical_schemas",
-            cast(tuple[dict[str, Any], ...], frozen_schemas),
-        )
+    def __init__(
+        self,
+        name: ToolProfileName,
+        tools: tuple[str, ...],
+        canonical_schemas: tuple[dict[str, Any], ...],
+        schema_sha256: str,
+    ) -> None:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "tools", tuple(tools))
+        object.__setattr__(self, "schema_sha256", schema_sha256)
+        object.__setattr__(self, "_canonical_json", _serialize_canonical_schemas(canonical_schemas))
+
+    def _decode_canonical_schemas(self) -> tuple[dict[str, Any], ...]:
+        decoded: object = json.loads(self._canonical_json)
+        if not isinstance(decoded, list):
+            raise ValueError("Canonical schema state must be a JSON array")
+        decoded_list = cast(list[Any], decoded)
+        return cast(tuple[dict[str, Any], ...], tuple(decoded_list))
+
+    @property
+    def canonical_schemas(self) -> tuple[dict[str, Any], ...]:
+        """Return a detached, mutable view of the authoritative canonical JSON."""
+        return self._decode_canonical_schemas()
 
 
 @dataclass(frozen=True)
@@ -190,12 +113,7 @@ _DAB_CORE_V1_VARIANTS = (
 
 
 def _schema_sha256(canonical_schemas: tuple[dict[str, Any], ...]) -> str:
-    payload = json.dumps(
-        canonical_schemas,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
+    payload = _serialize_canonical_schemas(canonical_schemas)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -245,7 +163,7 @@ def _index_requested_tools(
     return by_name
 
 
-def _validate_resolved_profile(profile: ResolvedToolProfile) -> None:
+def _validate_profile_integrity(profile: ResolvedToolProfile) -> None:
     duplicate_tool = _first_duplicate(profile.tools)
     if duplicate_tool is not None:
         raise ValueError(
@@ -261,11 +179,12 @@ def _validate_resolved_profile(profile: ResolvedToolProfile) -> None:
     else:
         raise ValueError(f"Unknown tool profile: {profile.name!r}")
 
-    if len(profile.canonical_schemas) != len(profile.tools):
+    canonical_schemas = profile._decode_canonical_schemas()  # pyright: ignore[reportPrivateUsage]
+    if len(canonical_schemas) != len(profile.tools):
         raise ValueError(f"Tool profile {profile.name!r} disagrees with its canonical schemas")
 
     canonical_names: list[str] = []
-    for index, canonical in enumerate(profile.canonical_schemas):
+    for index, canonical in enumerate(canonical_schemas):
         canonical = _canonical_entry(canonical, index)
         canonical_name = canonical["name"]
         if not isinstance(canonical_name, str) or not canonical_name:
@@ -290,11 +209,14 @@ def _validate_resolved_profile(profile: ResolvedToolProfile) -> None:
             )
 
     try:
-        computed_hash = _schema_sha256(profile.canonical_schemas)
+        normalized_json = _serialize_canonical_schemas(canonical_schemas)
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"Tool profile {profile.name!r} canonical schemas are not valid JSON"
         ) from exc
+    if normalized_json != profile._canonical_json:  # pyright: ignore[reportPrivateUsage]
+        raise ValueError(f"Tool profile {profile.name!r} canonical schemas are not normalized")
+    computed_hash = hashlib.sha256(normalized_json.encode("utf-8")).hexdigest()
     if computed_hash != profile.schema_sha256:
         raise ValueError(
             f"Tool profile {profile.name!r} schema hash disagrees with canonical schemas"
@@ -340,10 +262,11 @@ def filter_registry(
     registry: ToolRegistry,
     profile: ResolvedToolProfile,
 ) -> ToolRegistry:
-    _validate_resolved_profile(profile)
+    _validate_profile_integrity(profile)
     by_name = _index_requested_tools(registry, profile.tools, profile.name)
+    canonical_schemas = profile._decode_canonical_schemas()  # pyright: ignore[reportPrivateUsage]
     filtered = ToolRegistry()
-    for tool_name, canonical in zip(profile.tools, profile.canonical_schemas, strict=True):
+    for tool_name, canonical in zip(profile.tools, canonical_schemas, strict=True):
         tool = by_name[tool_name]
         if (
             canonical.get("name") != tool_name
@@ -363,7 +286,7 @@ def resolve_task_tool_contract(
     cartographer: bool,
     mongo: bool,
 ) -> TaskToolContract:
-    _validate_resolved_profile(profile)
+    _validate_profile_integrity(profile)
     if profile.name == "dab-core-v1":
         requested_conditional = (("search_reference_docs",) if cartographer else ()) + (
             ("load_mongo_collection",) if mongo else ()
