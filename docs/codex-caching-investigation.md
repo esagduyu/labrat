@@ -167,6 +167,16 @@ The next defensible general result is a larger paced Luna comparison with an unc
 - the small paced smoke reduced observed noncached input, but cache reads remained variable; and
 - elimination of ChatGPT-subscription exhaustion is **not established**.
 
+### Native-host diagnostic decision rule
+
+Before spending more campaign time on a native Codex host, run one diagnostic-only
+Luna-low pair over the same synthetic DuckDB and fixed nine-call tool sequence. Keep
+the native path for a separate promotion decision only if both arms are valid and it
+reduces aggregate noncached input by at least 30% versus the Responses adapter. Remove
+the native detour if the reduction is below 20%; in the 20–30% band, run at most one
+additional pair before deciding. This diagnostic does not score DAB and cannot make a
+host submission-eligible.
+
 ## DAB grounding controls
 
 The three benchmark-facing grounding/context controls use tri-state CLI parsing so omitted flags inherit an existing run's `config.json` value instead of silently changing it on resume.
