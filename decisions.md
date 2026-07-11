@@ -908,3 +908,35 @@ an existing one (including adding a member on top of its current set), and block
 (without writing) on a contaminated Overview. `TESTING.md` "Maps (v1)" section documents the
 full manual gate: auto-seed → curate → activate (additive) → scoped retrieval → deactivate
 (byte-identical restore) → dangling-reference soft-miss.
+
+## Map v1.1: activation visibility (2026-07-10)
+
+**Problem:** Map v1 shipped fully functional (auto-seed/curate/activate/scope) but invisible —
+an active Map left no trace in the UI once its modal closed, and the entry binding was hidden
+from the footer. A user could activate Revenue, forget, and misread scoped retrieval as a bug.
+
+**Fix — UI only, no engine change:** `_StatusBar` (`screens/main.py`) gains `set_active_maps`
+(mirrors `set_thread`: stores a **copy** of the list + `self.refresh()`) and a render segment
+`🗺 Maps: <a>, <b>` appended only when non-empty (>3 active → first 3 + `, +N`); empty state is
+byte-identical to pre-v1.1 (no trailing segment). `MainScreen.action_manage_maps` now pushes
+`MapActivateScreen` with a dismiss callback (`lambda _=None: self._refresh_map_indicator()`)
+that fans the **live** `self._active_maps` out to every `_StatusBar` — the modal covers the
+screen while open, so refresh-on-dismiss is sufficient; `_active_maps` itself is still
+mutated-not-reassigned by the modal, `set_active_maps` copies only for display. The
+`ctrl+shift+p` binding flips `show=False` → `show=True` (footer-discoverable). A new
+`_maybe_nudge_map_seed` (called at the end of `_run_scent_prepass`, once per screen instance via
+a `_map_nudge_shown` flag) notifies `🗺 dbt project detected — press Ctrl+Shift+P → Auto-seed to
+sketch domain Maps` when a dbt-configured profile has zero `kind="map"` docs — points at the
+existing explicit auto-seed action, never runs it automatically (the v1 explicit-action decision
+stands unchanged).
+
+No engine, retrieval-filter, or `active_maps`-plumbing files touched — `src/labrat/screens/
+main.py` is the only source edit, so benchmark-safety is unaffected by construction.
+
+Tests: `tests/tui/test_map_activation_visibility.py` (4 cases, full-`MainScreen` `_Host` +
+`ecommerce_db` pattern) — status bar shows `🗺 Maps: revenue` after activating via the real
+modal (space + escape) and dismissing, and the segment disappears again after deactivating;
+empty active set never renders the segment; a dbt-configured, Map-less profile gets the nudge
+on first connect, a profile with an existing Map does not. `tests/tui/test_maps_tui.py` and
+`tests/tui/test_main_screen_scent.py` re-run green (unchanged behavior). `TESTING.md` "Maps
+(v1)" section extended with the status-bar/footer/nudge manual-gate steps and checklist items.
