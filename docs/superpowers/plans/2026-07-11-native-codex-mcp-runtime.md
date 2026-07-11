@@ -227,7 +227,7 @@ git commit -m "feat(mcp): enforce optional fail-closed tool policy"
 
 ### Task 3: SQL, relation, database, identifier, and helper authorization
 
-**Files:** Create `src/labrat/mcp/sql_policy.py`; create `tests/unit/test_mcp_sql_policy.py`; extend `src/labrat/mcp/policy.py` and `tests/unit/test_mcp_policy.py`.
+**Files:** Create `src/labrat/mcp/sql_policy.py`; create `tests/unit/test_mcp_sql_policy.py`; extend `src/labrat/mcp/policy.py`, `tests/unit/test_mcp_policy.py`, and the policy-backed fixtures in `tests/unit/test_mcp_server.py`.
 
 **Interfaces:**
 
@@ -259,11 +259,11 @@ Use `sqlglot.parse(query, read="duckdb")`; require exactly one non-null statemen
 - [ ] **Step 1 RED:** Parameterize safe SELECT/CTE/window/set/join/attached-alias cases and every denial family in spec 7.3. Add injection tests for `sample_rows`, `column_stats`, `verify_join`, `describe_table`, and database arguments.
 - [ ] **Step 2:** Run `uv run pytest -q tests/unit/test_mcp_sql_policy.py tests/unit/test_mcp_policy.py`; expected failures.
 - [ ] **Step 3 GREEN:** Implement only AST and explicit structured-argument checks; do not use substring-only SQL authorization.
-- [ ] **Step 4 REFACTOR:** Run `uv run pytest -q tests/unit/test_mcp_sql_policy.py tests/unit/test_mcp_policy.py`, then rely on the task's full-suite gate for existing tool regressions.
+- [ ] **Step 4 REFACTOR:** Run `uv run pytest -q tests/unit/test_mcp_sql_policy.py tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py`, then rely on the final integration gate for unrelated tool regressions.
 - [ ] **Step 5:** Focused task gate and commit:
 
 ```bash
-git add src/labrat/mcp/sql_policy.py src/labrat/mcp/policy.py tests/unit/test_mcp_sql_policy.py tests/unit/test_mcp_policy.py
+git add src/labrat/mcp/sql_policy.py src/labrat/mcp/policy.py tests/unit/test_mcp_sql_policy.py tests/unit/test_mcp_policy.py tests/unit/test_mcp_server.py
 git commit -m "feat(mcp): authorize SQL sources and helper identifiers"
 ```
 
