@@ -1,7 +1,8 @@
 # Native Codex MCP DAB Runtime — Design
 
-> **Status:** Design approved in conversation on 2026-07-11; written spec awaiting
-> user review. This spec defines a native
+> **Status:** Design, written spec, and implementation direction approved in
+> conversation on 2026-07-11; security amendment incorporated during implementation-
+> plan review. This spec defines a native
 > `codex-mcp` DataAgentBench driver, a submission-grade restricted MCP boundary,
 > immutable experiment manifests, and the experiment sequence that decides whether
 > native Codex and GPT-5.6 Luna Max earn the full 270-trial run.
@@ -171,9 +172,20 @@ the scrubbed policy artifact.
 
 ### 5.4 Whole-host isolation launcher
 
-A dedicated launcher creates the submission environment for Codex CLI and the MCP
-server together. The boundary is not an MCP-only container: the Codex host must also
-be unable to inspect the DataAgentBench checkout or host filesystem.
+A dedicated launcher creates one per-attempt isolation envelope with two installed-only
+containers on separate networks:
+
+- a Codex worker with inference egress, a fresh per-attempt `CODEX_HOME`, and access
+  only to the private MCP endpoint; and
+- a LabRat MCP sidecar with the exact task data and MCP-only database credentials,
+  but no Codex authentication, inference egress, or general internet access.
+
+The worker launches only a small installed stdio-to-private-MCP bridge. The sidecar
+remains the authoritative policy and tool-dispatch boundary. This split is required:
+putting Codex and database credentials in one process/container would make MCP-only
+secrets visible to the host we are trying to constrain. Both containers remain inside
+the same whole-host isolation envelope, so neither can inspect the DataAgentBench
+checkout or host filesystem.
 
 ### 5.5 Experiment manifest and resume guard
 
@@ -349,21 +361,36 @@ a benchmark-only Mongo principal scoped to the exact permitted database.
 
 ## 8. Isolation contract
 
-The submission container runs as a non-root user and contains installed Codex CLI
-and an installed LabRat package, not mounted source checkouts. It has:
+The submission isolation envelope uses a non-root Codex worker and a non-root LabRat
+MCP sidecar. Both contain installed artifacts, not mounted source checkouts. The
+envelope has:
 
 - no DataAgentBench checkout;
 - no validator, `ground_truth.csv`, expected answer, historical run, or user Maze;
 - no host home directory;
 - no Docker socket;
-- one dedicated writable `CODEX_HOME` authentication/rollout volume;
+- one minimal private authentication store used only to seed a fresh, disposable
+  per-attempt `CODEX_HOME` for the Codex worker;
 - one writable per-attempt scratch directory;
-- individual DuckDB/SQLite files mounted read-only rather than a whole
-  `query_dataset` directory;
+- individual DuckDB/SQLite files mounted read-only into the MCP sidecar rather than
+  a whole `query_dataset` directory;
 - a read-only scrubbed policy file;
 - CPU, memory, process, and wall-clock limits; and
-- only the network paths required for Codex inference and explicitly declared live
-  DAB databases.
+- three disjoint network paths: worker-to-inference proxy, worker-to-MCP sidecar,
+  and sidecar-to-explicitly-declared live DAB databases.
+
+The Codex worker never receives database files, database credentials, or a data-plane
+network route. The MCP sidecar never receives Codex authentication, `CODEX_HOME`, or
+an inference/general-internet route. A private per-attempt MCP network contains only
+the worker and sidecar. The worker's local MCP bridge has no filesystem/data access
+and forwards only the MCP protocol to that sidecar.
+
+The persistent authentication store contains only the minimum Codex credential
+material. Before each attempt, a trusted bootstrap copies that material into a fresh
+per-attempt home. After the attempt, trusted code extracts scrubbed request usage,
+persists only refreshed credential material when necessary, and destroys the
+per-attempt home. Historical rollouts are therefore never mounted into a later
+attempt.
 
 PostgreSQL uses a benchmark-only role with `CONNECT` and `SELECT` only on exact DAB
 databases. Mongo uses a database-scoped benchmark principal. Port restriction alone
@@ -536,6 +563,12 @@ Native Codex wins the host gate only when:
 2. its raw pass count is no more than one pass out of 18 below `labrat-agent`; and
 3. its paired median noncached input per semantic trial is at least 25% lower.
 
+For both the host and Ledger gates, pair on identical `(task_id, trial_num)` keys,
+compute the median noncached input separately over the paired control and treatment
+values, and define reduction as
+`1 - treatment_median / control_median`. Missing usage, a mismatched key set, or a
+zero control median makes the efficiency predicate incomplete and unable to pass.
+
 If efficiency improves by less than 25%, native remains a useful diagnostic but does
 not justify changing the official runtime. If safety or accuracy fails, the full run
 uses `labrat-agent`.
@@ -572,6 +605,9 @@ Do not treat all recently shipped features as one switch.
   applicable rather than assigning it a zero.
 - Evaluate the bounded verification-v2 composite on the hard tail after the base
   runtime winner is known; keep its multiplied model-call cost separate.
+- Treat `run_program`, `dispatch_subagent`, `llm_extract`, `llm_classify`, and the
+  verification-v2 composite as report-only AgentLoop studies. They do not change the
+  certified submission tool profile or flow into the model-tier/full-run freeze.
 - Treat deterministic SQL checks and warnings as common substrate until a genuine
   null tool profile exists; do not claim a causal delta from their mere presence.
 - Do not rerun semantic Scent in this sequence because it already measured
@@ -602,12 +638,21 @@ Arms:
 
 A larger tier earns its cost only if it both improves the completed hard-tail
 stratified score and obtains at least one pass on a query where Luna is 0/3. A tie or
-swapped stochastic passes retains Luna. Choose the cheapest arm satisfying the rule.
-Sol Ultra must add a clear beyond Sol High to justify its incremental effort.
+swapped stochastic passes retains Luna. Choose the lowest tier in the frozen order
+Luna Max, Terra High, Sol High, Sol Ultra that satisfies the rule. Sol Ultra must add
+a clear beyond Sol High to justify its incremental effort.
+
+If `codex-mcp` wins the host gate, pass native Ultra directly and keep native
+multi-agent disabled. If `labrat-agent` wins, its existing Ultra behavior (wire Max
+plus proactive LabRat dispatch) is a labeled composite, report-only arm; it cannot
+promote the official model because it is not a pure model/effort comparison. In that
+branch the promotion decision is limited to the comparable Luna Max, Terra High, and
+Sol High arms.
 
 ### 12.7 Report before the full run
 
-Publish a durable report with:
+Before the full run, publish immutable `prelaunch_evidence.json` and
+`prelaunch_report.md` with:
 
 - stratified Pass@1, per-query results, raw passes, and zero-to-pass clears;
 - aggregate and per-trial input, cached input, noncached input, output, and reasoning
@@ -622,6 +667,10 @@ Publish a durable report with:
 
 Cache comparison uses absolute noncached input and paired task results. Cache-read
 percentage is supporting context, not the selection criterion.
+
+After the full run and strict bundle, publish separate immutable
+`final_evidence.json` and `final_report.md` that add full-run and artifact results.
+Never rewrite the prelaunch evidence used to freeze the winning configuration.
 
 ### 12.8 Full trace-complete run
 
@@ -764,7 +813,10 @@ The design is successfully implemented when:
 9. The full run reaches 270 semantic attempts with complete traces and a clean strict
    bundle.
 10. No secret, validator, ground truth, answer key, user memory, or unrelated
-    database appears in a prompt, trace, manifest, bundle, or container mount.
+    database appears in a prompt, trace, manifest, or bundle. Container secrets are
+    limited to the Codex worker's minimal private authentication material and the MCP
+    sidecar's exact database credentials; neither is mounted into the other container,
+    and no historical rollout is mounted into a new attempt.
 
 ## 17. References
 
