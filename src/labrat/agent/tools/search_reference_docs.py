@@ -83,7 +83,20 @@ class SearchReferenceDocsTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        docs = MazeStore.from_env(profile=ctx.profile_name).docs(kind="scent")
+        store = MazeStore.from_env(profile=ctx.profile_name)
+        docs = store.docs(kind="scent")
+
+        active = ctx.active_maps or []
+        if active:
+            from labrat.maze.map import resolve_members
+
+            map_docs = [
+                d for s in active if (d := store.load_domain(s, kind="map", scope=None)) is not None
+            ]
+            resolved = resolve_members(map_docs, store)
+            allowed = set(resolved.scent)
+            docs = [d for d in docs if d.domain in allowed]
+
         q_stems = _stems(args.question)
         stem_to_term = {stem(t): t for t in question_tokens(args.question)}
 

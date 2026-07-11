@@ -48,7 +48,11 @@ class ToolContext:
     ``run_agent_task`` for the per-row llm_extract/llm_classify tools; it defaults
     to None, and every deterministic context leaves it None. ``subagent_runner``
     follows the same pattern for scoped sub-agent dispatch; deterministic contexts
-    leave it None.
+    leave it None. ``active_maps`` follows the same injection pattern for the Map
+    activation retrieval filter (search_reference_docs / search_trails): a
+    non-empty list of Map slugs narrows retrieval to those Maps' member domains;
+    None or an empty list (every existing/benchmark construction site) leaves
+    retrieval byte-identical to today.
     """
 
     def __init__(
@@ -63,6 +67,7 @@ class ToolContext:
         read_only: bool = False,
         llm_fn: LLMFn | None = None,
         subagent_runner: SubagentRunner | None = None,
+        active_maps: list[str] | None = None,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -79,6 +84,7 @@ class ToolContext:
         self.read_only = read_only
         self.llm_fn = llm_fn
         self.subagent_runner = subagent_runner
+        self.active_maps = active_maps
 
     @property
     def connection(self) -> object:
