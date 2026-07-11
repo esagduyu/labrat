@@ -1,5 +1,11 @@
 # Native Codex MCP DAB Whole-Host Isolation Implementation Plan
 
+> **Status (2026-07-11): deferred / inactive.** Do not implement this plan during
+> the GPT-5.6 DAB campaign. Native Codex is limited to a standalone synthetic cache
+> diagnostic; the official trace-complete run remains on `labrat-agent`. Revisit
+> whole-host isolation only if the diagnostic proves a material cache advantage and
+> the user separately approves promotion to an official DAB driver.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the native `codex-mcp` DataAgentBench path submission-eligible with a resource-bounded two-container isolation envelope: a data-blind Codex worker and a credential-bearing LabRat MCP sidecar on disjoint networks, plus fresh per-attempt Codex state, exact read-only data mounts, executable containment canaries, and a digest-bound eligibility artifact.

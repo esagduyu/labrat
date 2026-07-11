@@ -1,5 +1,12 @@
 # Native Codex MCP DAB Runtime Implementation Plan
 
+> **Status (2026-07-11): stopped / superseded.** This plan expanded a cache-host
+> diagnostic into a submission-grade runtime and is no longer the active execution
+> plan. Do not continue its tasks. The only authorized native-Codex work is one
+> standalone synthetic Luna-low cache A/B; official DAB ablations and submission
+> remain on `labrat-agent`. Promote a native DAB runtime only after that measurement
+> shows a material advantage and the user approves the separate scope.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:** `docs/superpowers/specs/2026-07-11-native-codex-mcp-dab-design.md` — authoritative; read it in full before Task 0.

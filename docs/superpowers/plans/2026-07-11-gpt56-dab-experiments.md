@@ -1,5 +1,12 @@
 # GPT-5.6 DAB Experiments and Submission Operations — Implementation Plan
 
+> **Status (2026-07-11): superseded as an implementation plan.** Its 16-task
+> experiment-controller expansion is not required for the original campaign. Use
+> the existing resumable `scripts/eval_dab.py` path for the Luna-Max feature subset,
+> the hard-task tier study, and the final 270 trials. The only pre-ablation detour is
+> one standalone synthetic Luna-low native-vs-Responses cache A/B; it has no
+> submission or promotion authority by itself.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:** `docs/superpowers/specs/2026-07-11-native-codex-mcp-dab-design.md`
