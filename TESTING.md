@@ -1310,6 +1310,14 @@ dbt semantic ingest).
    (Product-domain Scent no longer appears). Reopen Maps, activate the Product Map too — the
    status line shows `Active: product, revenue` (**additive union** — both domains' grounding
    is now in scope).
+4a. **Status-bar indicator (v1.1):** with Revenue active, closing the Maps modal (Esc) refreshes
+   the top status bar — it should now read `🗺 Maps: revenue` after the `🐀 LabRat` segment.
+   Activating a second Map shows `🗺 Maps: product, revenue`; with more than 3 active Maps the
+   bar truncates to the first three plus a `+N` suffix. Deactivating every Map and closing the
+   modal removes the segment entirely — the status bar must be byte-identical to a session that
+   never touched Maps (no trailing spaces or empty `Maps:` label).
+4b. **Discoverable binding:** the footer (bottom of screen) now lists a `^⇧p Maps` binding
+   (previously hidden) — Maps is reachable without knowing the shortcut in advance.
 5. **Deactivate restores full grounding:** press **space** on both active rows to turn them back
    to `· inactive` — status line shows `Active: none`. Ask the same revenue question again → the
    agent's retrieval traces are back to full-warehouse grounding, identical to before any Map
@@ -1318,6 +1326,12 @@ dbt semantic ingest).
    points at, then activate that Map and ask a matching question — the agent should NOT error;
    the dangling member simply drops out of scope (a Map is pointers, not content, so a stale
    reference degrades gracefully rather than breaking the bundle).
+7. **First-connect nudge (v1.1):** connect a fresh profile that has `dbt_project_path`
+   configured and zero Maps on disk — after the Cartographer pre-pass completes, a toast fires:
+   `🗺 dbt project detected — press Ctrl+Shift+P → Auto-seed to sketch domain Maps`. The nudge
+   does NOT auto-run the seed (explicit action only) and fires at most once per session. Connect
+   again once at least one Map exists (or connect a profile with no dbt project configured) —
+   no nudge.
 
 **Check:**
 - [ ] `Ctrl+Shift+P` opens the Maps screen; empty store shows zero rows (no phantom Maps)
@@ -1331,3 +1345,9 @@ dbt semantic ingest).
       (resolved) members only
 - [ ] Deactivating every Map restores retrieval byte-identical to no-Map-ever-activated
 - [ ] A dangling member (deleted Scent/Trail doc) is dropped silently, never an error
+- [ ] Status bar shows `🗺 Maps: <names>` while any Map is active (truncated to 3 + `+N` beyond
+      that), refreshed on Maps-modal dismiss, and shows nothing (byte-identical to no-Maps) when
+      the active set is empty
+- [ ] Footer lists the Maps binding (`^⇧p`) — no longer hidden
+- [ ] First connect on a dbt-configured, Map-less profile fires the auto-seed nudge exactly once;
+      a profile with an existing Map (or no dbt project) gets no nudge

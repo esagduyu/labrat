@@ -50,19 +50,35 @@ class _StatusBar(Widget):
         self._dialect = dialect
         self._thread = thread
         self._connected = connected
+        self._active_maps: list[str] = []
 
     def set_thread(self, name: str) -> None:
         self._thread = name
         self.refresh()
 
+    def set_active_maps(self, maps: list[str]) -> None:
+        """Display copy of the active-Maps set. Mirrors ``set_thread``; takes a
+        copy for rendering — never rebinds the caller's live list."""
+        self._active_maps = list(maps)
+        self.refresh()
+
     def render(self) -> str:
         status = "● connected" if self._connected else "○ disconnected"
+        maps_segment = ""
+        if self._active_maps:
+            shown = self._active_maps[:3]
+            extra = len(self._active_maps) - len(shown)
+            names = ", ".join(shown)
+            if extra > 0:
+                names += f", +{extra}"
+            maps_segment = f"  \U0001f5fa Maps: {names}"
         return (
             f" profile: {self._profile}"
             f"  dialect: {self._dialect}"
             f"  thread: {self._thread}"
             f"  {status}"
             f"  \U0001f400 LabRat"
+            f"{maps_segment}"
         )
 
 
@@ -161,7 +177,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
         Binding("ctrl+shift+h", "harvest_review", "Harvest", show=False),
         Binding("ctrl+shift+d", "record_decision", "Record Decision", show=False),
-        Binding("ctrl+shift+p", "manage_maps", "Maps", show=False),
+        Binding("ctrl+shift+p", "manage_maps", "Maps", show=True),
         Binding("f9", "reingest_semantics", "Re-ingest dbt", show=False),
         Binding("f8", "share_answer", "Share", show=True),
     ]
@@ -204,6 +220,8 @@ class MainScreen(Screen[None]):
         # in place (append/remove), never reassign, or the live link the search
         # tools read (ctx.active_maps) breaks.
         self._active_maps: list[str] = []
+        # First-connect nudge (v1.1): fires at most once per screen instance.
+        self._map_nudge_shown = False
 
     def compose(self) -> ComposeResult:
         connected = self._connection is not None
@@ -456,6 +474,24 @@ class MainScreen(Screen[None]):
                 severity="warning",
                 timeout=8,
             )
+        self._maybe_nudge_map_seed()
+
+    def _maybe_nudge_map_seed(self) -> None:
+        """Point a dbt-configured, Map-less profile at the auto-seed action.
+        Fires at most once per screen instance; never auto-runs the seed —
+        the explicit-action decision stands."""
+        if self._map_nudge_shown:
+            return
+        if self._profile_obj is None or not self._profile_obj.dbt_project_path:
+            return
+        if self._resolve_map_store().docs(kind="map"):
+            return
+        self._map_nudge_shown = True
+        self.notify(
+            "\U0001f5fa dbt project detected — press Ctrl+Shift+P → Auto-seed to "
+            "sketch domain Maps",
+            timeout=8,
+        )
 
     # ── dbt semantic-layer ingestion (T1b) ──────────────────────────────────
 
@@ -608,8 +644,16 @@ class MainScreen(Screen[None]):
 
         store = self._resolve_map_store()
         self.app.push_screen(
-            MapActivateScreen(store, self._active_maps, on_auto_seed=self.action_auto_seed_maps)
+            MapActivateScreen(store, self._active_maps, on_auto_seed=self.action_auto_seed_maps),
+            lambda _=None: self._refresh_map_indicator(),
         )
+
+    def _refresh_map_indicator(self) -> None:
+        """Sync the status-bar Maps segment with the (possibly just-edited)
+        ``_active_maps`` set. Mirrors the ``set_thread`` fan-out — the modal
+        covers the screen while open, so refreshing on dismiss is sufficient."""
+        for bar in self.query(_StatusBar):
+            bar.set_active_maps(self._active_maps)
 
     def action_auto_seed_maps(self) -> int:
         """Cartographer dbt-structure auto-seed: sketch Map skeletons from the
