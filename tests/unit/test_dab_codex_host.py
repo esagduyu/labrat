@@ -6,7 +6,7 @@ import asyncio
 import json
 import stat
 import tomllib
-from dataclasses import is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,19 +18,20 @@ from labrat.eval.benchmarks.dab.codex_host import (
     CodexHostConfig,
     CodexInfrastructureError,
     McpLaunch,
-    NativeMcpCall,
     NativeRunResult,
-    RequestUsage,
     build_codex_command,
-    extract_request_usage,
     parse_codex_events,
-    reconcile_mcp_trace,
     run_codex,
 )
 
 
 def _config(
-    tmp_path: Path, *, mcp: bool = True, model: str = "gpt-5.6-luna", effort: str = "low"
+    tmp_path: Path,
+    *,
+    mcp: bool = True,
+    model: str = "gpt-5.6-luna",
+    effort: str = "low",
+    mcp_log_dir: Path | None = None,
 ) -> CodexHostConfig:
     (tmp_path / "repo").mkdir(exist_ok=True)
     (tmp_path / "workspace").mkdir(exist_ok=True)
@@ -56,7 +57,7 @@ def _config(
                     ),
                 ),
                 ("LABRAT_MCP_PRIMARY", "main"),
-                ("LABRAT_MCP_LOG_DIR", str(tmp_path / 'a"b')),
+                ("LABRAT_MCP_LOG_DIR", str(mcp_log_dir or tmp_path / "artifacts")),
                 ("LABRAT_MCP_POLICY_PATH", str(tmp_path / "policy.json")),
             ),
             enabled_tools=("list_tables", "run_sql"),
@@ -80,7 +81,7 @@ def _config(
 
 @pytest.mark.parametrize(
     "record_type",
-    [McpLaunch, CodexHostConfig, NativeMcpCall, RequestUsage, NativeRunResult],
+    [McpLaunch, CodexHostConfig, NativeRunResult],
 )
 def test_public_records_are_frozen_dataclasses(record_type: type[object]) -> None:
     assert is_dataclass(record_type)
@@ -116,7 +117,7 @@ def test_build_command_is_locked_down_and_injects_exact_mcp_config(tmp_path: Pat
         "read-only",
     ):
         assert required in command
-    assert "--ephemeral" not in command
+    assert "--ephemeral" in command
     assert "--yolo" not in command
     assert "--dangerously-bypass-approvals-and-sandbox" not in command
     assert command[-1] == "-"
@@ -152,25 +153,13 @@ def test_build_command_without_mcp_has_no_server_configuration(tmp_path: Path) -
 def test_build_command_emits_parseable_toml_for_unicode_and_injection_text(
     tmp_path: Path,
 ) -> None:
-    config = _config(tmp_path)
-    assert config.mcp is not None
     hostile = '😀\n" -c injected=true'
+    artifact_dir = tmp_path / hostile
+    config = _config(tmp_path, mcp_log_dir=artifact_dir)
     config = CodexHostConfig(
         **{
             **config.__dict__,
-            "mcp": McpLaunch(
-                command=config.mcp.command,
-                args=config.mcp.args,
-                cwd=config.mcp.cwd,
-                env=tuple(
-                    (
-                        key,
-                        str(tmp_path / hostile) if key == "LABRAT_MCP_LOG_DIR" else value,
-                    )
-                    for key, value in config.mcp.env
-                ),
-                enabled_tools=config.mcp.enabled_tools,
-            ),
+            "artifact_dir": artifact_dir,
         }
     )
     command = build_codex_command(config)
@@ -178,6 +167,12 @@ def test_build_command_emits_parseable_toml_for_unicode_and_injection_text(
     for override in overrides:
         tomllib.loads(override)
     assert not any(value == "injected=true" for value in command)
+
+
+def test_build_command_requires_mcp_trace_in_artifact_directory(tmp_path: Path) -> None:
+    config = _config(tmp_path, mcp_log_dir=tmp_path / "outside")
+    with pytest.raises(ValueError, match="trace directory"):
+        build_codex_command(config)
 
 
 def test_build_command_rejects_secret_capable_mcp_environment(tmp_path: Path) -> None:
@@ -305,7 +300,6 @@ def _zero_tool_events() -> list[str]:
 
 def test_parse_observed_zero_tool_jsonl_shape() -> None:
     result = parse_codex_events(_zero_tool_events(), enabled_tools=())
-    assert result.thread_id == "thread-1"
     assert result.final_text == "answer"
     assert result.tool_calls == 0
     assert result.usage == {
@@ -314,7 +308,12 @@ def test_parse_observed_zero_tool_jsonl_shape() -> None:
         "output_tokens": 9,
         "reasoning_output_tokens": 0,
     }
-    assert result.mcp_calls == ()
+    assert [field.name for field in fields(result)] == [
+        "final_text",
+        "tool_calls",
+        "latency_seconds",
+        "usage",
+    ]
 
 
 def test_parse_two_completed_mcp_calls_and_final_message() -> None:
@@ -385,10 +384,6 @@ def test_parse_two_completed_mcp_calls_and_final_message() -> None:
     )
     result = parse_codex_events(lines, enabled_tools=("list_tables", "run_sql"))
     assert result.tool_calls == 2
-    assert result.mcp_calls == (
-        NativeMcpCall("list_tables", {}, "completed"),
-        NativeMcpCall("run_sql", {"query": "SELECT 1"}, "completed"),
-    )
 
 
 @pytest.mark.parametrize(
@@ -440,9 +435,7 @@ def test_parse_requires_ordered_lifecycle_and_audits_started_mcp_items() -> None
         parse_codex_events(forbidden_start, enabled_tools=("run_sql",))
 
 
-def test_parse_reconciles_failed_mcp_calls_and_rejects_unfinished_calls(
-    tmp_path: Path,
-) -> None:
+def test_parse_counts_failed_mcp_calls_and_rejects_unfinished_calls() -> None:
     common = [
         {"type": "thread.started", "thread_id": "thread-1"},
         {"type": "turn.started"},
@@ -486,13 +479,7 @@ def test_parse_reconciles_failed_mcp_calls_and_rejects_unfinished_calls(
         },
     ]
     parsed = parse_codex_events(_event_lines(*failed), enabled_tools=("run_sql",))
-    assert parsed.mcp_calls == (NativeMcpCall("run_sql", {"query": "SELECT 1"}, "failed"),)
-    trace = tmp_path / "failed-mcp.jsonl"
-    trace.write_text(
-        json.dumps({"tool": "run_sql", "input": {"query": "SELECT 1"}, "ok": False}) + "\n",
-        encoding="utf-8",
-    )
-    reconcile_mcp_trace(parsed.mcp_calls, trace)
+    assert parsed.tool_calls == 1
 
     unfinished = [
         *common,
@@ -514,211 +501,17 @@ def test_parse_reconciles_failed_mcp_calls_and_rejects_unfinished_calls(
         parse_codex_events(_event_lines(*unfinished), enabled_tools=("run_sql",))
 
 
-def test_parsed_evidence_is_defensively_immutable() -> None:
-    result = parse_codex_events(_zero_tool_events(), enabled_tools=())
-    usage = result.usage
+def test_native_result_copies_aggregate_usage_on_construction() -> None:
+    usage = {"input_tokens": 10}
+    result = NativeRunResult("answer", 0, 0.1, usage)
     usage["input_tokens"] = 0
-    assert result.usage["input_tokens"] == 8_517
-
-    call = NativeMcpCall("run_sql", {"nested": {"value": 1}}, "completed")
-    arguments = call.arguments
-    arguments["nested"]["value"] = 2
-    assert call.arguments == {"nested": {"value": 1}}
+    assert result.usage == {"input_tokens": 10}
 
 
 def test_malformed_json_does_not_retain_raw_text_as_exception_cause() -> None:
     with pytest.raises(CodexAuditError) as raised:
         parse_codex_events(['{"secret":"raw token"'], enabled_tools=())
     assert raised.value.__cause__ is None
-
-
-def test_private_trace_readers_sanitize_invalid_utf8(tmp_path: Path) -> None:
-    private_bytes = b"\xffsecret SQL and token"
-    rollout = tmp_path / "rollout.jsonl"
-    server_trace = tmp_path / "mcp_tool_calls.jsonl"
-    rollout.write_bytes(private_bytes)
-    server_trace.write_bytes(private_bytes)
-
-    with pytest.raises(CodexAuditError) as rollout_error:
-        extract_request_usage(rollout, "thread-1")
-    with pytest.raises(CodexAuditError) as trace_error:
-        reconcile_mcp_trace((), server_trace)
-    assert rollout_error.value.__cause__ is None
-    assert trace_error.value.__cause__ is None
-
-
-def _usage_values(input_tokens: int, cached: int, output: int, reasoning: int) -> dict[str, int]:
-    return {
-        "input_tokens": input_tokens,
-        "cached_input_tokens": cached,
-        "output_tokens": output,
-        "reasoning_output_tokens": reasoning,
-        "total_tokens": input_tokens + output,
-    }
-
-
-def _write_rollout(path: Path, records: list[dict[str, object]]) -> None:
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-
-
-def test_extract_request_usage_deduplicates_cumulative_snapshots(tmp_path: Path) -> None:
-    rollout = tmp_path / "rollout.jsonl"
-    first_last = _usage_values(100, 64, 10, 4)
-    first_total = _usage_values(100, 64, 10, 4)
-    second_last = _usage_values(150, 128, 20, 8)
-    second_total = _usage_values(250, 192, 30, 12)
-    token = lambda last, total: {  # noqa: E731 - compact fixture constructor
-        "type": "event_msg",
-        "payload": {
-            "type": "token_count",
-            "info": {"last_token_usage": last, "total_token_usage": total},
-        },
-    }
-    _write_rollout(
-        rollout,
-        [
-            {"type": "session_meta", "payload": {"id": "thread-1"}},
-            {"type": "session_meta", "payload": {"id": "thread-1"}},
-            token(first_last, first_total),
-            token(first_last, first_total),
-            token(second_last, second_total),
-        ],
-    )
-
-    usage = extract_request_usage(rollout, "thread-1")
-    assert usage == (
-        RequestUsage(1, 100, 64, 36, 10, 4),
-        RequestUsage(2, 150, 128, 22, 20, 8),
-    )
-
-
-@pytest.mark.parametrize("wrong_thread", [True, False])
-def test_extract_request_usage_rejects_wrong_thread_or_regression(
-    tmp_path: Path, wrong_thread: bool
-) -> None:
-    rollout = tmp_path / "rollout.jsonl"
-    first = _usage_values(100, 64, 10, 4)
-    second = _usage_values(90, 64, 9, 3)
-    _write_rollout(
-        rollout,
-        [
-            {
-                "type": "session_meta",
-                "payload": {"id": "wrong" if wrong_thread else "thread-1"},
-            },
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "token_count",
-                    "info": {"last_token_usage": first, "total_token_usage": first},
-                },
-            },
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "token_count",
-                    "info": {"last_token_usage": second, "total_token_usage": second},
-                },
-            },
-        ],
-    )
-    with pytest.raises(CodexAuditError):
-        extract_request_usage(rollout, "thread-1")
-
-
-def test_extract_request_usage_rejects_nonconsecutive_regression(
-    tmp_path: Path,
-) -> None:
-    rollout = tmp_path / "rollout.jsonl"
-    first = _usage_values(100, 64, 10, 4)
-    second_total = _usage_values(250, 192, 30, 12)
-    second_last = _usage_values(150, 128, 20, 8)
-    records: list[dict[str, object]] = [
-        {"type": "session_meta", "payload": {"id": "thread-1"}},
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "info": {"last_token_usage": first, "total_token_usage": first},
-            },
-        },
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "info": {
-                    "last_token_usage": second_last,
-                    "total_token_usage": second_total,
-                },
-            },
-        },
-    ]
-    _write_rollout(rollout, [*records, records[1]])
-    with pytest.raises(CodexAuditError, match="regressed"):
-        extract_request_usage(rollout, "thread-1")
-
-
-def test_extract_request_usage_ignores_duplicate_total_with_changed_last_snapshot(
-    tmp_path: Path,
-) -> None:
-    rollout = tmp_path / "rollout.jsonl"
-    total = _usage_values(100, 64, 10, 4)
-    changed_last = _usage_values(0, 0, 0, 0)
-    _write_rollout(
-        rollout,
-        [
-            {"type": "session_meta", "payload": {"id": "thread-1"}},
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "token_count",
-                    "info": {"last_token_usage": total, "total_token_usage": total},
-                },
-            },
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "token_count",
-                    "info": {
-                        "last_token_usage": changed_last,
-                        "total_token_usage": total,
-                    },
-                },
-            },
-        ],
-    )
-    assert extract_request_usage(rollout, "thread-1") == (RequestUsage(1, 100, 64, 36, 10, 4),)
-
-
-def test_reconcile_mcp_trace_accepts_exact_ordered_calls(tmp_path: Path) -> None:
-    trace = tmp_path / "mcp_tool_calls.jsonl"
-    trace.write_text(
-        json.dumps({"tool": "list_tables", "input": {}, "ok": True})
-        + "\n"
-        + json.dumps({"tool": "run_sql", "input": {"query": "SELECT 1"}, "ok": True})
-        + "\n",
-        encoding="utf-8",
-    )
-    reconcile_mcp_trace(
-        (
-            NativeMcpCall("list_tables", {}, "completed"),
-            NativeMcpCall("run_sql", {"query": "SELECT 1"}, "completed"),
-        ),
-        trace,
-    )
-
-
-def test_reconcile_mcp_trace_accepts_empty_and_rejects_mismatch(tmp_path: Path) -> None:
-    trace = tmp_path / "mcp_tool_calls.jsonl"
-    trace.write_text("", encoding="utf-8")
-    reconcile_mcp_trace((), trace)
-
-    trace.write_text(
-        json.dumps({"tool": "run_sql", "input": {"query": "SELECT 2"}, "ok": True}) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(CodexAuditError):
-        reconcile_mcp_trace((NativeMcpCall("run_sql", {"query": "SELECT 1"}, "completed"),), trace)
 
 
 class _FakeProcess:
@@ -805,28 +598,6 @@ def _runner_events(*, mcp: bool = False, answer: str = "answer") -> bytes:
     return b"".join(json.dumps(record).encode() + b"\n" for record in records)
 
 
-def _write_runner_rollouts(
-    config: CodexHostConfig,
-    *,
-    count: int = 1,
-    usage: dict[str, int] | None = None,
-) -> None:
-    sessions = config.codex_home / "sessions" / "2026" / "07"
-    sessions.mkdir(parents=True, exist_ok=True)
-    usage = usage or _usage_values(100, 64, 10, 4)
-    records = [
-        {"type": "session_meta", "payload": {"id": "thread-1"}},
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "info": {"last_token_usage": usage, "total_token_usage": usage},
-            },
-        },
-    ]
-    for index in range(count):
-        _write_rollout(sessions / f"rollout-thread-1-{index}.jsonl", records)
-
 
 def _install_fake_processes(
     monkeypatch: pytest.MonkeyPatch,
@@ -834,29 +605,18 @@ def _install_fake_processes(
     *,
     events: bytes | None = None,
     answer: str = "answer",
-    rollout_count: int = 1,
     trace: tuple[dict[str, object], ...] = (),
     version: bytes = b"codex-cli 0.144.1\n",
     exec_returncode: int = 0,
     exec_stderr: bytes = b"",
     timeout: bool = False,
     cancelled: bool = False,
-    filename_collision: bool = False,
-    rollout_usage: dict[str, int] | None = None,
 ) -> tuple[list[tuple[tuple[str, ...], dict[str, Any]]], list[_FakeProcess]]:
     calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
     processes: list[_FakeProcess] = []
 
     def finish_exec() -> None:
         (config.artifact_dir / "final_answer.txt").write_text(answer, encoding="utf-8")
-        if rollout_count:
-            _write_runner_rollouts(config, count=rollout_count, usage=rollout_usage)
-        if filename_collision:
-            collision = config.codex_home / "sessions" / "rollout-thread-1-collision.jsonl"
-            _write_rollout(
-                collision,
-                [{"type": "session_meta", "payload": {"id": "different-thread"}}],
-            )
         trace_path = config.artifact_dir / "mcp_tool_calls.jsonl"
         trace_path.write_text(
             "".join(json.dumps(record) + "\n" for record in trace), encoding="utf-8"
@@ -905,7 +665,12 @@ async def test_run_codex_success_is_auth_only_scrubbed_and_trace_complete(
     result = await run_codex("private prompt", config, parent_env=parent)
 
     assert result.final_text == "answer"
-    assert result.request_usage == (RequestUsage(1, 100, 64, 36, 10, 4),)
+    assert result.usage == {
+        "input_tokens": 100,
+        "cached_input_tokens": 64,
+        "output_tokens": 10,
+        "reasoning_output_tokens": 4,
+    }
     assert calls[0][0] == (str(config.executable), "--version")
     assert calls[1][0][-1] == "-"
     assert processes[1].input == b"private prompt"
@@ -923,23 +688,18 @@ async def test_run_codex_success_is_auth_only_scrubbed_and_trace_complete(
     assert stat.S_IMODE(config.artifact_dir.stat().st_mode) == 0o700
     for artifact in config.artifact_dir.iterdir():
         assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
-    assert (config.artifact_dir / "codex_events.jsonl").read_bytes() == _runner_events()
-    usage_rows = [
-        json.loads(line)
-        for line in (config.artifact_dir / "codex_token_usage.jsonl").read_text().splitlines()
-    ]
-    assert set(usage_rows[0]) == {
-        "request_index",
-        "input_tokens",
-        "cached_input_tokens",
-        "noncached_input_tokens",
-        "output_tokens",
-        "reasoning_output_tokens",
+    assert {artifact.name for artifact in config.artifact_dir.iterdir()} == {
+        "codex_events.jsonl",
+        "final_answer.txt",
+        "mcp_tool_calls.jsonl",
     }
+    assert (config.artifact_dir / "codex_events.jsonl").read_bytes() == _runner_events()
+    assert (config.artifact_dir / "final_answer.txt").read_text() == "answer"
+    assert (config.artifact_dir / "mcp_tool_calls.jsonl").read_text() == ""
 
 
 @pytest.mark.asyncio
-async def test_run_codex_reconciles_two_mcp_calls(
+async def test_run_codex_counts_two_mcp_calls_and_preserves_raw_trace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path)
@@ -953,10 +713,14 @@ async def test_run_codex_reconciles_two_mcp_calls(
 
     assert result.tool_calls == 2
     assert result.latency_seconds >= 0
+    assert [
+        json.loads(line)
+        for line in (config.artifact_dir / "mcp_tool_calls.jsonl").read_text().splitlines()
+    ] == list(trace)
 
 
 @pytest.mark.asyncio
-async def test_run_codex_rejects_version_answer_and_rollout_mismatches(
+async def test_run_codex_rejects_version_and_answer_mismatches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path)
@@ -971,40 +735,6 @@ async def test_run_codex_rejects_version_answer_and_rollout_mismatches(
     with pytest.raises(CodexAuditError, match="answer"):
         await run_codex("prompt", config)
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("rollout_count", [0, 2])
-async def test_run_codex_requires_exactly_one_matching_rollout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rollout_count: int
-) -> None:
-    config = _config(tmp_path)
-    _install_fake_processes(monkeypatch, config, rollout_count=rollout_count)
-    with pytest.raises(CodexAuditError, match="rollout"):
-        await run_codex("prompt", config)
-
-
-@pytest.mark.asyncio
-async def test_run_codex_ignores_filename_only_rollout_collision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = _config(tmp_path)
-    _install_fake_processes(monkeypatch, config, filename_collision=True)
-    result = await run_codex("prompt", config)
-    assert result.thread_id == "thread-1"
-
-
-@pytest.mark.asyncio
-async def test_run_codex_reconciles_rollout_totals_with_terminal_usage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = _config(tmp_path)
-    _install_fake_processes(
-        monkeypatch,
-        config,
-        rollout_usage=_usage_values(101, 64, 10, 4),
-    )
-    with pytest.raises(CodexAuditError, match="terminal usage"):
-        await run_codex("prompt", config)
 
 
 @pytest.mark.asyncio

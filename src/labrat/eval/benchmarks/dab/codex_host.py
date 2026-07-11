@@ -1,8 +1,8 @@
-"""Pure contracts for the diagnostic native-Codex DAB host.
+"""Temporary standalone host for restricted native-Codex DAB diagnostics.
 
-This module intentionally stops short of submission eligibility.  It builds a
-locked-down ``codex exec`` command and audits the resulting native, MCP, and
-token-usage traces.  Process orchestration is added at the suite seam.
+This module intentionally stops short of submission eligibility. It launches a
+locked-down ``codex exec`` process and retains only aggregate public usage plus
+raw native and MCP traces.
 """
 
 from __future__ import annotations
@@ -54,7 +54,6 @@ _USAGE_KEYS = (
     "output_tokens",
     "reasoning_output_tokens",
 )
-_TOTAL_USAGE_KEYS = (*_USAGE_KEYS, "total_tokens")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXPECTED_CLI_VERSION = "0.144.1"
 _DIAGNOSTIC_MCP_ENV_KEYS = frozenset(
@@ -114,80 +113,15 @@ class CodexHostConfig:
     mcp: McpLaunch | None
 
 
-@dataclass(frozen=True, init=False)
-class NativeMcpCall:
-    tool: str
-    status: Literal["completed", "failed"]
-    _arguments_json: str
-
-    def __init__(
-        self,
-        tool: str,
-        arguments: dict[str, Any],
-        status: Literal["completed", "failed"],
-    ) -> None:
-        if status not in {"completed", "failed"}:
-            raise ValueError("Native MCP calls must have a terminal status")
-        try:
-            encoded = json.dumps(
-                arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-            )
-        except (TypeError, ValueError, RecursionError) as exc:
-            raise ValueError("Native MCP arguments must be JSON") from exc
-        object.__setattr__(self, "tool", tool)
-        object.__setattr__(self, "status", status)
-        object.__setattr__(self, "_arguments_json", encoded)
-
-    @property
-    def arguments(self) -> dict[str, Any]:
-        return cast(dict[str, Any], json.loads(self._arguments_json))
-
-
 @dataclass(frozen=True)
-class RequestUsage:
-    request_index: int
-    input_tokens: int
-    cached_input_tokens: int
-    noncached_input_tokens: int
-    output_tokens: int
-    reasoning_output_tokens: int
-
-
-@dataclass(frozen=True, init=False)
 class NativeRunResult:
     final_text: str
     tool_calls: int
     latency_seconds: float
-    thread_id: str
-    request_usage: tuple[RequestUsage, ...]
-    mcp_calls: tuple[NativeMcpCall, ...]
-    _usage_json: str
+    usage: dict[str, int]
 
-    def __init__(
-        self,
-        final_text: str,
-        tool_calls: int,
-        latency_seconds: float,
-        thread_id: str,
-        usage: dict[str, int],
-        request_usage: tuple[RequestUsage, ...],
-        mcp_calls: tuple[NativeMcpCall, ...],
-    ) -> None:
-        object.__setattr__(self, "final_text", final_text)
-        object.__setattr__(self, "tool_calls", tool_calls)
-        object.__setattr__(self, "latency_seconds", latency_seconds)
-        object.__setattr__(self, "thread_id", thread_id)
-        object.__setattr__(self, "request_usage", tuple(request_usage))
-        object.__setattr__(self, "mcp_calls", tuple(mcp_calls))
-        object.__setattr__(
-            self,
-            "_usage_json",
-            json.dumps(usage, sort_keys=True, separators=(",", ":")),
-        )
-
-    @property
-    def usage(self) -> dict[str, int]:
-        return cast(dict[str, int], json.loads(self._usage_json))
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "usage", dict(self.usage))
 
 
 def _toml_string(value: str) -> str:
@@ -291,6 +225,12 @@ def _validate_config(config: CodexHostConfig) -> None:
         ):
             raise ValueError("MCP enabled tools must be nonempty and unique")
         _validate_diagnostic_mcp(config.mcp)
+        mcp_environment = dict(config.mcp.env)
+        if (
+            Path(mcp_environment["LABRAT_MCP_LOG_DIR"]).resolve()
+            != config.artifact_dir.resolve()
+        ):
+            raise ValueError("Diagnostic MCP trace directory must match native artifacts")
 
 
 def build_codex_command(config: CodexHostConfig) -> list[str]:
@@ -304,6 +244,7 @@ def build_codex_command(config: CodexHostConfig) -> list[str]:
         "--strict-config",
         "--skip-git-repo-check",
         "--json",
+        "--ephemeral",
         "--color",
         "never",
         "--sandbox",
@@ -354,10 +295,11 @@ def _nonnegative_int(value: object, *, category: str) -> int:
     return value
 
 
-def _usage(value: object, *, include_total: bool, category: str) -> dict[str, int]:
+def _usage(value: object, *, category: str) -> dict[str, int]:
     mapping = _mapping(value, category=category)
-    keys = _TOTAL_USAGE_KEYS if include_total else _USAGE_KEYS
-    parsed = {key: _nonnegative_int(mapping.get(key), category=category) for key in keys}
+    parsed = {
+        key: _nonnegative_int(mapping.get(key), category=category) for key in _USAGE_KEYS
+    }
     if parsed["cached_input_tokens"] > parsed["input_tokens"]:
         raise CodexAuditError(f"Malformed {category}")
     return parsed
@@ -370,19 +312,12 @@ def _json_line(raw: str, *, category: str) -> dict[str, Any]:
         raise CodexAuditError(f"Malformed {category}") from None
 
 
-def _read_utf8_lines(path: Path, *, category: str) -> list[str]:
-    try:
-        return path.read_text(encoding="utf-8", errors="strict").splitlines()
-    except (OSError, UnicodeError):
-        raise CodexAuditError(f"Malformed {category}") from None
-
-
 def parse_codex_events(lines: Iterable[str], *, enabled_tools: tuple[str, ...]) -> NativeRunResult:
     """Audit Codex CLI JSONL and return its normalized terminal evidence."""
     thread_id: str | None = None
     final_text: str | None = None
     terminal_usage: dict[str, int] | None = None
-    calls: list[NativeMcpCall] = []
+    tool_calls = 0
     terminal = False
     turn_started = False
     started_items: dict[str, tuple[str, str | None, str | None]] = {}
@@ -419,7 +354,6 @@ def parse_codex_events(lines: Iterable[str], *, enabled_tools: tuple[str, ...]) 
 
             tool: str | None = None
             arguments_json: str | None = None
-            mcp_status: Literal["completed", "failed"] | None = None
             if item_type == "mcp_tool_call":
                 if item.get("server") != "labrat":
                     raise CodexAuditError("Forbidden native MCP server")
@@ -435,7 +369,6 @@ def parse_codex_events(lines: Iterable[str], *, enabled_tools: tuple[str, ...]) 
                 if event_type == "item.completed":
                     if status not in {"completed", "failed"}:
                         raise CodexAuditError("Native MCP call has no terminal status")
-                    mcp_status = cast(Literal["completed", "failed"], status)
                 elif status != "in_progress":
                     raise CodexAuditError("Malformed native MCP status")
 
@@ -461,22 +394,13 @@ def parse_codex_events(lines: Iterable[str], *, enabled_tools: tuple[str, ...]) 
                     raise CodexAuditError("Malformed native agent message")
                 final_text = text
             elif item_type == "mcp_tool_call":
-                arguments = _mapping(item.get("arguments"), category="native MCP arguments")
-                calls.append(
-                    NativeMcpCall(
-                        tool=cast(str, tool),
-                        arguments=arguments,
-                        status=cast(Literal["completed", "failed"], mcp_status),
-                    )
-                )
+                tool_calls += 1
         elif event_type == "turn.completed":
             if thread_id is None or not turn_started or terminal_usage is not None:
                 raise CodexAuditError("Duplicate native terminal turn")
             if started_items:
                 raise CodexAuditError("Native turn ended with incomplete items")
-            terminal_usage = _usage(
-                event.get("usage"), include_total=False, category="native aggregate usage"
-            )
+            terminal_usage = _usage(event.get("usage"), category="native aggregate usage")
             terminal = True
         elif event_type in {"turn.failed", "error"}:
             raise CodexAuditError("Native Codex reported a failed turn")
@@ -493,105 +417,16 @@ def parse_codex_events(lines: Iterable[str], *, enabled_tools: tuple[str, ...]) 
         raise CodexAuditError("Incomplete native Codex trace")
     return NativeRunResult(
         final_text=final_text,
-        tool_calls=len(calls),
+        tool_calls=tool_calls,
         latency_seconds=0.0,
-        thread_id=thread_id,
         usage=terminal_usage,
-        request_usage=(),
-        mcp_calls=tuple(calls),
     )
-
-
-def extract_request_usage(rollout_path: Path, thread_id: str) -> tuple[RequestUsage, ...]:
-    """Extract only scrubbed per-request token counters from one private rollout."""
-    if not rollout_path.is_file():
-        raise CodexAuditError("Native rollout is missing")
-    session_ids: list[str] = []
-    prior_total: dict[str, int] | None = None
-    prior_fingerprint: tuple[int, ...] | None = None
-    requests: list[RequestUsage] = []
-
-    for raw in _read_utf8_lines(rollout_path, category="native rollout"):
-        if not raw.strip():
-            continue
-        record = _json_line(raw, category="native rollout record")
-        if record.get("type") == "session_meta":
-            payload = _mapping(record.get("payload"), category="native session metadata")
-            value = payload.get("id")
-            if not isinstance(value, str):
-                raise CodexAuditError("Malformed native session metadata")
-            session_ids.append(value)
-            continue
-        if record.get("type") != "event_msg":
-            continue
-        payload = _mapping(record.get("payload"), category="native rollout event")
-        if payload.get("type") != "token_count":
-            continue
-        info = _mapping(payload.get("info"), category="native token count")
-        total = _usage(
-            info.get("total_token_usage"),
-            include_total=True,
-            category="native cumulative usage",
-        )
-        last = _usage(
-            info.get("last_token_usage"),
-            include_total=True,
-            category="native request usage",
-        )
-        fingerprint = tuple(total[key] for key in _TOTAL_USAGE_KEYS)
-        if prior_total is not None and any(
-            total[key] < prior_total[key] for key in _TOTAL_USAGE_KEYS
-        ):
-            raise CodexAuditError("Native cumulative usage regressed")
-        if fingerprint == prior_fingerprint:
-            continue
-        prior_total = total
-        prior_fingerprint = fingerprint
-        requests.append(
-            RequestUsage(
-                request_index=len(requests) + 1,
-                input_tokens=last["input_tokens"],
-                cached_input_tokens=last["cached_input_tokens"],
-                noncached_input_tokens=(last["input_tokens"] - last["cached_input_tokens"]),
-                output_tokens=last["output_tokens"],
-                reasoning_output_tokens=last["reasoning_output_tokens"],
-            )
-        )
-
-    if not session_ids or set(session_ids) != {thread_id} or not requests:
-        raise CodexAuditError("Native rollout does not match the completed thread")
-    return tuple(requests)
-
-
-def reconcile_mcp_trace(native_calls: tuple[NativeMcpCall, ...], server_trace_path: Path) -> None:
-    """Require one ordered server record for every completed native MCP item."""
-    if not server_trace_path.is_file():
-        raise CodexAuditError("MCP server trace is missing")
-    server_calls: list[tuple[str, dict[str, Any], bool]] = []
-    for raw in _read_utf8_lines(server_trace_path, category="MCP server trace"):
-        if not raw.strip():
-            continue
-        record = _json_line(raw, category="MCP server trace")
-        tool = record.get("tool")
-        ok = record.get("ok")
-        if not isinstance(tool, str) or type(ok) is not bool:
-            raise CodexAuditError("Malformed MCP server trace")
-        arguments = _mapping(record.get("input"), category="MCP server arguments")
-        server_calls.append((tool, arguments, ok))
-
-    if len(server_calls) != len(native_calls):
-        raise CodexAuditError("Native and MCP server trace lengths disagree")
-    for native, (tool, arguments, ok) in zip(native_calls, server_calls, strict=True):
-        expected_ok = native.status == "completed"
-        if native.tool != tool or native.arguments != arguments or ok is not expected_ok:
-            raise CodexAuditError("Native and MCP server traces disagree")
 
 
 _SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL")
 _ARTIFACT_NAMES = (
     "codex_events.jsonl",
     "final_answer.txt",
-    "codex_token_usage.jsonl",
     "mcp_tool_calls.jsonl",
 )
 _FINAL_ANSWER_SENTINEL = b"LABRAT_CODEX_FINAL_ANSWER_NOT_WRITTEN"
@@ -785,56 +620,6 @@ async def _invoke(
     return returncode, stdout, stderr
 
 
-def _matching_rollout(config: CodexHostConfig, thread_id: str) -> Path:
-    sessions = config.codex_home / "sessions"
-    matches: list[Path] = []
-    paths = sorted(sessions.rglob("*.jsonl")) if sessions.is_dir() else []
-    for path in paths:
-        metadata_match = False
-        for raw in _read_utf8_lines(path, category="native rollout"):
-            if not raw.strip():
-                continue
-            record = _json_line(raw, category="native rollout record")
-            if record.get("type") != "session_meta":
-                continue
-            payload = _mapping(record.get("payload"), category="native session metadata")
-            metadata_match = metadata_match or payload.get("id") == thread_id
-        if metadata_match:
-            matches.append(path)
-    if len(matches) != 1:
-        raise CodexAuditError("Expected exactly one native rollout")
-    return matches[0]
-
-
-def _write_request_usage(path: Path, usage: tuple[RequestUsage, ...]) -> None:
-    rows = (
-        {
-            "request_index": item.request_index,
-            "input_tokens": item.input_tokens,
-            "cached_input_tokens": item.cached_input_tokens,
-            "noncached_input_tokens": item.noncached_input_tokens,
-            "output_tokens": item.output_tokens,
-            "reasoning_output_tokens": item.reasoning_output_tokens,
-        }
-        for item in usage
-    )
-    path.write_text(
-        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
-        encoding="utf-8",
-    )
-
-
-def _reconcile_request_usage(aggregate: dict[str, int], requests: tuple[RequestUsage, ...]) -> None:
-    totals = {
-        "input_tokens": sum(item.input_tokens for item in requests),
-        "cached_input_tokens": sum(item.cached_input_tokens for item in requests),
-        "output_tokens": sum(item.output_tokens for item in requests),
-        "reasoning_output_tokens": sum(item.reasoning_output_tokens for item in requests),
-    }
-    if totals != aggregate:
-        raise CodexAuditError("Native request usage disagrees with terminal usage")
-
-
 async def run_codex(
     prompt: str,
     config: CodexHostConfig,
@@ -911,23 +696,11 @@ async def run_codex(
         if final_text == _FINAL_ANSWER_SENTINEL.decode("ascii") or final_text != parsed.final_text:
             raise CodexAuditError("Native Codex final answer disagrees with events")
 
-        request_usage = extract_request_usage(
-            _matching_rollout(config, parsed.thread_id), parsed.thread_id
-        )
-        _reconcile_request_usage(parsed.usage, request_usage)
-        reconcile_mcp_trace(parsed.mcp_calls, config.artifact_dir / "mcp_tool_calls.jsonl")
-        try:
-            _write_request_usage(config.artifact_dir / "codex_token_usage.jsonl", request_usage)
-        except OSError:
-            raise CodexAuditError("Unable to persist native Codex usage") from None
         return NativeRunResult(
             final_text=parsed.final_text,
             tool_calls=parsed.tool_calls,
             latency_seconds=latency,
-            thread_id=parsed.thread_id,
             usage=parsed.usage,
-            request_usage=request_usage,
-            mcp_calls=parsed.mcp_calls,
         )
     finally:
         _scrub_codex_home(config.codex_home)
