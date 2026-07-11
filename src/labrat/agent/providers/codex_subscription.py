@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from labrat.agent.loop import ContentBlock, TextBlock, ToolUseBlock
-from labrat.agent.providers.base import ModelProvider
+from labrat.agent.providers.base import ModelProvider, RateLimitError
 
 _RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 _TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -179,7 +179,7 @@ class CodexSubscriptionProvider(ModelProvider):
         # ChatGPT HTTP transport uses store=false and replays ordered model-visible
         # fields, with Responses Lite transport IDs normalized away.
         self._replay_items: list[dict[str, Any]] = []
-        self._expected_assistant_cursor: tuple[str, tuple[str, ...]] | None = None
+        self._expected_assistant_cursor: str | None = None
         self._last_request_mode = "initial_full"
         self._last_cache_pacing_wait_seconds = 0.0
         self._conversation_id = _conversation_id or uuid.uuid4().hex
@@ -475,6 +475,11 @@ class CodexSubscriptionProvider(ModelProvider):
                             _CACHE_BREAKPOINT_SUPPORT[self._model] = True
                         return
                     except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code == 429:
+                            raise RateLimitError(
+                                "Codex Responses API rate limit (HTTP 429)",
+                                response=exc.response,
+                            ) from exc
                         if (
                             exc.response.status_code == 400
                             and sent_cache_breakpoint
@@ -674,12 +679,11 @@ def _messages_after_last_assistant(
 
 def _last_assistant_cursor(
     messages: list[dict[str, Any]],
-) -> tuple[str, tuple[str, ...]] | None:
+) -> str | None:
     for message in reversed(messages):
         if message.get("role") != "assistant":
             continue
-        text_parts: list[str] = []
-        call_ids: list[str] = []
+        blocks: list[dict[str, Any]] = []
         content = message.get("content")
         if isinstance(content, list):
             for raw_block in cast(list[Any], content):
@@ -687,18 +691,26 @@ def _last_assistant_cursor(
                     continue
                 block = cast(dict[str, Any], raw_block)
                 if block.get("type") == "text":
-                    text_parts.append(str(block.get("text", "")))
+                    blocks.append({"type": "text", "text": str(block.get("text", ""))})
                 elif block.get("type") == "tool_use":
-                    call_ids.append(str(block.get("id", "")))
-        return (_text_digest("".join(text_parts)), tuple(call_ids))
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": str(block.get("id", "")),
+                            "name": str(block.get("name", "")),
+                            "input": block.get("input", {}),
+                        }
+                    )
+                else:
+                    blocks.append({"type": str(block.get("type", "")), "block": block})
+        return _assistant_content_digest(blocks)
     return None
 
 
 def _response_output_cursor(
     output_items: list[dict[str, Any]],
-) -> tuple[str, tuple[str, ...]]:
-    text_parts: list[str] = []
-    call_ids: list[str] = []
+) -> str:
+    blocks: list[dict[str, Any]] = []
     for item in output_items:
         if item.get("type") == "message":
             content = item.get("content")
@@ -708,14 +720,37 @@ def _response_output_cursor(
                         continue
                     block = cast(dict[str, Any], raw_block)
                     if block.get("type") == "output_text":
-                        text_parts.append(str(block.get("text", "")))
+                        blocks.append({"type": "text", "text": str(block.get("text", ""))})
+                    else:
+                        blocks.append({"type": str(block.get("type", "")), "block": block})
         elif item.get("type") == "function_call":
-            call_ids.append(str(item.get("call_id") or item.get("id") or ""))
-    return (_text_digest("".join(text_parts)), tuple(call_ids))
+            raw_arguments = item.get("arguments", "")
+            try:
+                arguments: Any = (
+                    json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+                )
+            except json.JSONDecodeError:
+                arguments = {"raw": raw_arguments}
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": str(item.get("call_id") or item.get("id") or ""),
+                    "name": str(item.get("name", "")),
+                    "input": arguments,
+                }
+            )
+    return _assistant_content_digest(blocks)
 
 
-def _text_digest(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
+def _assistant_content_digest(blocks: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        blocks,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _mark_first_input_text_cache_breakpoint(input_items: list[dict[str, Any]]) -> None:
@@ -879,6 +914,11 @@ def _reduce_event(event: dict[str, Any]) -> list[ContentBlock]:
         return []
     if etype in ("response.failed", "response.incomplete"):
         detail = _error_detail(event)
+        if _is_rate_limit_event(event):
+            raise RateLimitError(
+                f"Codex Responses stream rate limit: {detail}",
+                rate_limit=_event_rate_limit_meta(event),
+            )
         raise RuntimeError(f"Codex Responses stream {etype}: {detail}")
     return []
 
@@ -930,9 +970,13 @@ def _extract_usage(event: dict[str, Any]) -> dict[str, int] | None:
         return 0
 
     reasoning = 0
-    out_details = u.get("output_tokens_details")
-    if isinstance(out_details, dict):
-        reasoning = _int(cast(dict[str, Any], out_details).get("reasoning_tokens"))
+    for details_name in ("output_tokens_details", "completion_tokens_details"):
+        out_details = u.get(details_name)
+        if isinstance(out_details, dict):
+            candidate = cast(dict[str, Any], out_details).get("reasoning_tokens")
+            if isinstance(candidate, int):
+                reasoning = candidate
+                break
 
     return {
         "input_tokens": _int(u.get("input_tokens") or u.get("prompt_tokens")),
@@ -988,3 +1032,33 @@ def _error_detail(event: dict[str, Any]) -> str:
         if status:
             return str(status)
     return json.dumps(event)[:200]
+
+
+def _is_rate_limit_event(event: dict[str, Any]) -> bool:
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return False
+    response_obj = cast(dict[str, Any], response)
+    status = response_obj.get("status_code") or response_obj.get("status")
+    if status == 429 or str(status) == "429":
+        return True
+    error = response_obj.get("error")
+    haystack = json.dumps(error if error is not None else response_obj).lower()
+    return any(
+        marker in haystack
+        for marker in ("rate_limit", "rate limit", "usage_limit", "too many requests", "429")
+    )
+
+
+def _event_rate_limit_meta(event: dict[str, Any]) -> dict[str, int]:
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return {}
+    error = cast(dict[str, Any], response).get("error")
+    source = cast(dict[str, Any], error) if isinstance(error, dict) else {}
+    result: dict[str, int] = {}
+    for key in ("resets_at", "resets_in_seconds"):
+        value = source.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            result[key] = value
+    return result

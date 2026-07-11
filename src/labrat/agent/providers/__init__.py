@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from labrat.agent.providers.anthropic_direct import AnthropicProvider
-from labrat.agent.providers.base import ModelProvider
+from labrat.agent.providers.base import ModelProvider, RateLimitError
 from labrat.agent.providers.claude_code import ClaudeCodeProvider
 from labrat.agent.providers.codex_subscription import (
     CODEX_MODEL_IDS,
@@ -73,6 +73,7 @@ __all__ = [
     "ModelProvider",
     "OpenAICompatibleProvider",
     "ProviderName",
+    "RateLimitError",
     "build_provider",
     "resolve_codex_model_config",
 ]

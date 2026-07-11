@@ -5,6 +5,7 @@ contamination pattern list in maze/scent_audit."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -19,7 +20,57 @@ TRACE_FILENAME_BY_DRIVER = {
     "claude-mcp": "mcp_tool_calls.jsonl",
     "labrat-agent": "agent_tool_calls.jsonl",
 }
+ANSWER_ONLY_DRIVERS = {"raw-bash"}
 _TRACE_FIELDS = {"tool", "input", "ok", "output", "latency_ms"}
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*:[1-9][0-9]*$")
+
+
+def task_trial_dir_name(task_id: str, trial_num: int) -> str:
+    """Map one canonical DAB task key to its scratch directory name."""
+    if not _TASK_ID_RE.fullmatch(task_id):
+        raise ValueError(f"invalid DAB task_id: {task_id!r}")
+    if isinstance(trial_num, bool) or trial_num < 0:
+        raise ValueError(f"invalid DAB trial_num: {trial_num!r}")
+    return f"{task_id.replace(':', '_')}__trial{trial_num}"
+
+
+def resolve_trial_trace(
+    scratch_dir: Path,
+    task_id: str,
+    trial_num: int,
+    trace_filename: str,
+) -> Path:
+    """Return a contained, non-symlinked trace path or fail closed."""
+    if trace_filename not in TRACE_FILENAMES:
+        raise ValueError(f"invalid trace filename: {trace_filename!r}")
+    if scratch_dir.is_symlink():
+        raise ValueError("scratch directory must not be a symlink")
+    try:
+        scratch_root = scratch_dir.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("scratch directory is missing or unreadable") from exc
+    trial_dir = scratch_dir / task_trial_dir_name(task_id, trial_num)
+    if trial_dir.is_symlink():
+        raise ValueError("trial directory must not be a symlink")
+    try:
+        resolved_trial = trial_dir.resolve(strict=True)
+        resolved_trial.relative_to(scratch_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError("trial directory is missing or escapes scratch") from exc
+    if not resolved_trial.is_dir():
+        raise ValueError("trial path is not a directory")
+
+    trace = trial_dir / trace_filename
+    if trace.is_symlink():
+        raise ValueError("trace file must not be a symlink")
+    try:
+        resolved_trace = trace.resolve(strict=True)
+        resolved_trace.relative_to(scratch_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError("trace file is missing or escapes scratch") from exc
+    if not resolved_trace.is_file():
+        raise ValueError("trace path is not a regular file")
+    return resolved_trace
 
 
 def classify_trial(text: str) -> str:
@@ -43,7 +94,10 @@ def expected_trace_filenames(run_dir: Path) -> tuple[str, ...]:
     if not isinstance(parsed, dict):
         return TRACE_FILENAMES
     config = cast(dict[str, Any], parsed)
-    filename = TRACE_FILENAME_BY_DRIVER.get(str(config.get("driver") or ""))
+    driver = str(config.get("driver") or "")
+    if driver in ANSWER_ONLY_DRIVERS:
+        return ()
+    filename = TRACE_FILENAME_BY_DRIVER.get(driver)
     return (filename,) if filename is not None else TRACE_FILENAMES
 
 
@@ -54,6 +108,8 @@ def validate_trace_jsonl(trace: Path) -> str | None:
     that made zero tool calls. Non-empty lines must match the shared tool-trace
     schema emitted by :func:`append_tool_trace`.
     """
+    if trace.is_symlink():
+        return f"unsafe trace {trace.name}: symlinks are not allowed"
     try:
         lines = trace.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
@@ -125,7 +181,9 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
     `agent_tool_calls.jsonl` (labrat-agent driver). The configured driver's trace
     is required and every non-empty line must match the shared trace schema.
     Missing or malformed traces classify as :data:`AUDIT_ERROR`; an existing
-    empty JSONL file is a valid zero-tool trace.
+    empty JSONL file is a valid zero-tool trace. The legacy ``raw-bash`` driver
+    is explicitly answer-only/report-only, so its artifact is contamination-
+    scanned without claiming trace completeness.
 
     Deliberately does NOT substring-scan `reason` — that's the DAB validator's PASS/
     FAIL message, not agent output, and several official validators (agnews,
@@ -165,11 +223,30 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
 
         reason = str(r.get("reason") or "")
         parts = [_artifact_text(r)]
-        safe = task_id.replace(":", "_")
-        trial_dir = scratch_dir / f"{safe}__trial{trial_num}"
-        required_paths = [trial_dir / name for name in expected_names]
-        present_required = [trace for trace in required_paths if trace.is_file()]
-        if not present_required:
+        if not expected_names:
+            verdict = CHEATING if reason.startswith("contaminated:") else classify_trial(parts[0])
+            verdicts[key] = _merge_verdict(verdicts.get(key), verdict)
+            continue
+        try:
+            trial_dir = scratch_dir / task_trial_dir_name(task_id, trial_num)
+        except ValueError:
+            verdicts[key] = _merge_verdict(verdicts.get(key), AUDIT_ERROR)
+            continue
+
+        present_required: list[Path] = []
+        unsafe_trace_path = False
+        for trace_name in expected_names:
+            candidate = trial_dir / trace_name
+            if not candidate.exists() and not candidate.is_symlink():
+                continue
+            try:
+                present_required.append(
+                    resolve_trial_trace(scratch_dir, task_id, trial_num, trace_name)
+                )
+            except ValueError:
+                unsafe_trace_path = True
+                break
+        if unsafe_trace_path or not present_required:
             verdicts[key] = _merge_verdict(verdicts.get(key), AUDIT_ERROR)
             continue
 
@@ -178,8 +255,18 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
         traces = list(present_required)
         for trace_name in TRACE_FILENAMES:
             candidate = trial_dir / trace_name
-            if candidate.is_file() and candidate not in traces:
-                traces.append(candidate)
+            if candidate.exists() or candidate.is_symlink():
+                try:
+                    resolved = resolve_trial_trace(scratch_dir, task_id, trial_num, trace_name)
+                except ValueError:
+                    unsafe_trace_path = True
+                    break
+                if resolved not in traces:
+                    traces.append(resolved)
+
+        if unsafe_trace_path:
+            verdicts[key] = _merge_verdict(verdicts.get(key), AUDIT_ERROR)
+            continue
 
         trace_error = False
         for trace in traces:

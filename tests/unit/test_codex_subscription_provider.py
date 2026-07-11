@@ -218,7 +218,7 @@ async def test_sse_reducer_emits_text_then_tool_call() -> None:
 def test_reduce_event_raises_on_failed() -> None:
     with pytest.raises(RuntimeError, match=r"response\.failed"):
         _reduce_event(
-            {"type": "response.failed", "response": {"error": {"message": "rate_limited"}}}
+            {"type": "response.failed", "response": {"error": {"message": "backend exploded"}}}
         )
 
 
@@ -353,6 +353,39 @@ def test_extract_usage_chat_completions_cached_field_fallback() -> None:
     assert usage["cached_tokens"] == 800
 
 
+def test_extract_usage_reasoning_tokens_supports_both_shapes_without_double_counting() -> None:
+    from labrat.agent.providers.codex_subscription import _extract_usage
+
+    chat_shape = {
+        "type": "response.completed",
+        "response": {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "completion_tokens_details": {"reasoning_tokens": 12},
+            }
+        },
+    }
+    usage = _extract_usage(chat_shape)
+    assert usage is not None
+    assert usage["reasoning_tokens"] == 12
+
+    both_shapes = {
+        "type": "response.completed",
+        "response": {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "output_tokens_details": {"reasoning_tokens": 7},
+                "completion_tokens_details": {"reasoning_tokens": 12},
+            }
+        },
+    }
+    usage = _extract_usage(both_shapes)
+    assert usage is not None
+    assert usage["reasoning_tokens"] == 7
+
+
 def test_extract_usage_ignores_non_completed_and_missing() -> None:
     from labrat.agent.providers.codex_subscription import _extract_usage
 
@@ -392,6 +425,37 @@ async def test_consume_accumulates_usage_and_yields_blocks() -> None:
     assert provider.usage["requests"] == 1
     assert provider.request_usage[0]["cache_write_tokens"] == 0
     assert provider.request_usage[0]["cache_write_tokens_reported"] is False
+
+
+async def test_http_200_sse_rate_limit_raises_stable_error() -> None:
+    from labrat.agent.providers.base import RateLimitError
+
+    provider = CodexSubscriptionProvider(model="gpt-5.6-luna", reasoning_effort="low")
+    stream = (
+        'data: {"type":"response.failed","response":{'
+        '"status":"failed","error":{"code":"rate_limit_exceeded",'
+        '"message":"API Error: 429 Too Many Requests"}}}\n\n'
+    )
+
+    with pytest.raises(RateLimitError, match="429"):
+        _ = [block async for block in provider._consume(_alines(stream))]
+
+
+async def test_http_429_stream_raises_stable_rate_limit_error(monkeypatch: Any) -> None:
+    import httpx
+
+    from labrat.agent.providers.base import RateLimitError
+
+    provider = CodexSubscriptionProvider(model="gpt-5.6-luna", reasoning_effort="low")
+    _stub_provider_auth(provider, monkeypatch)
+    client = _FakeAsyncClient([_FakeStreamResponse(429, error="usage limit reached; resets later")])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: client)
+
+    stream = await provider.stream([{"role": "user", "content": "question"}], [], "sys")
+    with pytest.raises(RateLimitError, match="HTTP 429") as captured:
+        _ = [block async for block in stream]
+
+    assert captured.value.response.status_code == 429
 
 
 async def test_gpt56_cache_key_pacing_is_shared_process_wide(monkeypatch: Any) -> None:
@@ -757,6 +821,61 @@ def test_replay_cursor_mismatch_reconstructs_fresh_lite_history() -> None:
     assert body["input"][0]["type"] == "additional_tools"
     assert sum(item.get("type") == "additional_tools" for item in body["input"]) == 1
     assert "old answer" not in json.dumps(body["input"])
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input"),
+    [
+        ("describe_table", {"sql": "SELECT 1"}),
+        ("run_sql", {"sql": "SELECT 2"}),
+    ],
+)
+def test_exact_replay_rejects_changed_tool_identity_with_same_call_id(
+    tool_name: str,
+    tool_input: dict[str, str],
+) -> None:
+    from labrat.agent.providers.codex_subscription import _response_output_cursor
+
+    provider = CodexSubscriptionProvider(model="gpt-5.6-luna", reasoning_effort="low")
+    first = provider._to_responses_request([{"role": "user", "content": "question"}], [], "sys")
+    raw_output = [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "run_sql",
+            "arguments": '{"sql":"SELECT 1"}',
+        }
+    ]
+    provider._replay_items = [*first["input"], *raw_output]
+    provider._expected_assistant_cursor = _response_output_cursor(raw_output)
+
+    body = provider._to_responses_request(
+        [
+            {"role": "user", "content": "question"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": tool_name,
+                        "input": tool_input,
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "1"}],
+            },
+        ],
+        [],
+        "sys",
+    )
+
+    assert provider._last_request_mode == "reconstructed_full"
+    function_calls = [item for item in body["input"] if item.get("type") == "function_call"]
+    assert function_calls[-1]["name"] == tool_name
+    assert json.loads(function_calls[-1]["arguments"]) == tool_input
 
 
 def test_bound_conversations_isolate_replay_but_share_usage() -> None:

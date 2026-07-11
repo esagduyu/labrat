@@ -10,6 +10,21 @@ if TYPE_CHECKING:
     from labrat.agent.loop import ContentBlock
 
 
+class RateLimitError(RuntimeError):
+    """Stable provider-level signal for retryable quota exhaustion."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        response: Any | None = None,
+        rate_limit: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.response = response
+        self.rate_limit = dict(rate_limit or {})
+
+
 class ModelProvider(ABC):
     """Abstract interface for a model API backend.
 

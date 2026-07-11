@@ -19,7 +19,7 @@ import json
 import re
 import shutil
 import sys
-import tempfile
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +29,7 @@ from labrat.eval.benchmarks.dab.taint import (
     TRACE_FILENAME_BY_DRIVER,
     audit_run,
     gate,
+    resolve_trial_trace,
     validate_trace_jsonl,
 )
 
@@ -46,6 +47,44 @@ OFFICIAL_QUERY_COUNTS = {
     "stockindex": 3,
     "stockmarket": 5,
     "yelp": 7,
+}
+_CREDENTIAL_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "refresh_token",
+    "authorization",
+    "password",
+    "passwd",
+    "client_secret",
+    "secret_key",
+    "credentials",
+    "credential",
+    "dsn",
+    "connection_uri",
+    "database_url",
+}
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"\b(?:sk-(?:proj-)?|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{8,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
+    re.compile(
+        r"(?i)\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|refresh[_ -]?token|"
+        r"password|passwd|client[_ -]?secret|authorization|dsn)\b\s*[:=]\s*"
+        r"(?!<redacted>|redacted|none|null|\*{3})[\"']?[^\s,\"']{4,}"
+    ),
+)
+_SAFE_CREDENTIAL_PLACEHOLDERS = {
+    "",
+    "none",
+    "null",
+    "redacted",
+    "<redacted>",
+    "***",
+    "not-set",
 }
 
 
@@ -91,6 +130,50 @@ def _scrub_obj(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _scrub_obj(item) for key, item in value.items()}
     return value
+
+
+def _credential_value_present(value: Any) -> bool:
+    if value is None or value is False or value == 0:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized not in _SAFE_CREDENTIAL_PLACEHOLDERS and not (
+            normalized.startswith("${") and normalized.endswith("}")
+        )
+    if isinstance(value, (list, dict, tuple, set)):
+        return bool(value)
+    return True
+
+
+def _secret_reason(value: Any, *, path: str = "$") -> str | None:
+    if isinstance(value, dict):
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+            child_path = f"{path}.{key}"
+            if normalized_key in _CREDENTIAL_KEYS and _credential_value_present(item):
+                return f"credential-shaped field {child_path}"
+            nested = _secret_reason(item, path=child_path)
+            if nested is not None:
+                return nested
+        return None
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = _secret_reason(item, path=f"{path}[{index}]")
+            if nested is not None:
+                return nested
+        return None
+    if isinstance(value, str):
+        for pattern in _SECRET_VALUE_PATTERNS:
+            if pattern.search(value):
+                return f"secret-shaped value at {path}"
+    return None
+
+
+def _assert_no_secrets(value: Any, *, source: str) -> None:
+    reason = _secret_reason(value)
+    if reason is not None:
+        raise BundleError(f"credential material detected in {source}: {reason}")
 
 
 def _load_json(path: Path) -> Any:
@@ -152,10 +235,10 @@ def _select_attempts(
     return selected, grouped
 
 
-def _submission_keys(submission: Any) -> set[tuple[str, int]]:
+def _submission_entries(submission: Any) -> dict[tuple[str, int], dict[str, Any]]:
     if not isinstance(submission, list):
         raise BundleError("submission.json must contain a JSON array")
-    keys: set[tuple[str, int]] = set()
+    entries: dict[tuple[str, int], dict[str, Any]] = {}
     for index, entry in enumerate(submission):
         if not isinstance(entry, dict):
             raise BundleError(f"submission.json entry {index} is not an object")
@@ -169,10 +252,27 @@ def _submission_keys(submission: Any) -> set[tuple[str, int]]:
         if "answer" not in entry:
             raise BundleError(f"submission.json entry {index} is missing answer")
         key = (f"{dataset}:{query}", run)
-        if key in keys:
+        if key in entries:
             raise BundleError(f"submission.json has duplicate entry for {key[0]} trial {key[1]}")
-        keys.add(key)
-    return keys
+        entries[key] = entry
+    return entries
+
+
+def _canonical_answer(value: Any) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _trial_answer(attempt: TrialAttempt) -> Any:
+    artifact = attempt.record.get("artifact")
+    if isinstance(artifact, dict):
+        return artifact.get("payload", "")
+    return "" if artifact is None else artifact
 
 
 def _official_task_ids() -> set[str]:
@@ -212,11 +312,10 @@ def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(_scrub_obj(record), default=str) + "\n")
 
 
-def _copy_trace(source: Path, destination: Path) -> int:
+def _load_trace_records(source: Path) -> list[dict[str, Any]]:
     error = validate_trace_jsonl(source)
     if error is not None:
         raise BundleError(error)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
     for line in source.read_text(encoding="utf-8").splitlines():
         if line.strip():
@@ -224,6 +323,11 @@ def _copy_trace(source: Path, destination: Path) -> int:
             if not isinstance(record, dict):  # guarded by validate_trace_jsonl
                 raise BundleError(f"malformed trace {source.name}: expected object")
             records.append(record)
+    return records
+
+
+def _copy_trace_records(records: list[dict[str, Any]], destination: Path) -> int:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     _write_jsonl(destination, records)
     return len(records)
 
@@ -239,6 +343,23 @@ def _replace_output(temp_dir: Path, output_dir: Path, *, force: bool) -> None:
     temp_dir.replace(output_dir)
 
 
+def _validate_output_destination(run_dir: Path, destination: Path) -> Path:
+    """Resolve and reject destinations that could destroy bundle inputs."""
+    run = run_dir.expanduser().resolve()
+    resolved = destination.expanduser().resolve()
+    core_inputs = tuple((run / name).resolve() for name in CORE_ARTIFACTS)
+    scratch = (run / "scratch").resolve()
+
+    unsafe = resolved == run or run.is_relative_to(resolved)
+    unsafe = unsafe or resolved == scratch or resolved.is_relative_to(scratch)
+    unsafe = unsafe or any(
+        resolved == artifact or resolved.is_relative_to(artifact) for artifact in core_inputs
+    )
+    if unsafe:
+        raise BundleError(f"unsafe output destination overlaps protected run inputs: {resolved}")
+    return resolved
+
+
 def build_bundle(
     run_dir: Path,
     *,
@@ -250,13 +371,10 @@ def build_bundle(
     run_dir = run_dir.expanduser().resolve()
     if not run_dir.is_dir():
         raise BundleError(f"run directory not found: {run_dir}")
-    output_dir = (
-        output_dir.expanduser().resolve()
-        if output_dir is not None
-        else (run_dir / "trace_bundle").resolve()
+    output_dir = _validate_output_destination(
+        run_dir,
+        output_dir if output_dir is not None else run_dir / "trace_bundle",
     )
-    if output_dir == run_dir:
-        raise BundleError("output directory cannot be the run directory itself")
 
     for artifact in CORE_ARTIFACTS:
         if not (run_dir / artifact).is_file():
@@ -278,7 +396,8 @@ def build_bundle(
     selected_keys = set(selected)
 
     submission = _load_json(run_dir / "submission.json")
-    submission_keys = _submission_keys(submission)
+    submission_entries = _submission_entries(submission)
+    submission_keys = set(submission_entries)
     if submission_keys != selected_keys:
         missing = len(selected_keys - submission_keys)
         extra = len(submission_keys - selected_keys)
@@ -286,6 +405,14 @@ def build_bundle(
             "submission.json does not match selected semantic trials "
             f"(missing={missing}, extra={extra})"
         )
+    for key, attempt in selected.items():
+        if _canonical_answer(submission_entries[key]["answer"]) != _canonical_answer(
+            _trial_answer(attempt)
+        ):
+            raise BundleError(
+                f"submission answer does not match selected semantic trial for "
+                f"{key[0]} trial {key[1]}"
+            )
     if strict_official:
         _validate_strict_official(config, selected_keys)
 
@@ -296,16 +423,39 @@ def build_bundle(
         suffix = "" if len(offenders) <= 8 else f", +{len(offenders) - 8} more"
         raise BundleError(f"trace audit failed for: {preview}{suffix}")
 
+    try:
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise BundleError(f"invalid report.md: {exc}") from exc
+
+    _assert_no_secrets(config, source="config.json")
+    _assert_no_secrets([attempt.record for attempt in attempts], source="trials.jsonl")
+    _assert_no_secrets(submission, source="submission.json")
+    _assert_no_secrets(report, source="report.md")
+    _assert_no_secrets(verdicts, source="taint.json")
+
+    trace_sources: dict[tuple[str, int], tuple[Path, list[dict[str, Any]]]] = {}
+    for task_id, trial_num in sorted(selected):
+        try:
+            source = resolve_trial_trace(run_dir / "scratch", task_id, trial_num, trace_filename)
+        except ValueError as exc:
+            raise BundleError(
+                f"unsafe trace source for {task_id} trial {trial_num}: {exc}"
+            ) from exc
+        records = _load_trace_records(source)
+        _assert_no_secrets(records, source=f"trace {task_id} trial {trial_num}")
+        trace_sources[(task_id, trial_num)] = (source, records)
+
+    temp_dir = _validate_output_destination(
+        run_dir,
+        output_dir.parent / f".{output_dir.name}.tmp-{uuid.uuid4().hex}",
+    )
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.tmp-", dir=output_dir.parent))
+    temp_dir.mkdir()
     try:
         _write_json(temp_dir / "config.json", config)
         _write_jsonl(temp_dir / "trials.jsonl", [attempt.record for attempt in attempts])
         _write_json(temp_dir / "submission.json", submission)
-        try:
-            report = (run_dir / "report.md").read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise BundleError(f"invalid report.md: {exc}") from exc
         (temp_dir / "report.md").write_text(_scrub_text(report), encoding="utf-8")
         _write_json(temp_dir / "taint.json", verdicts)
 
@@ -318,17 +468,12 @@ def build_bundle(
             infra_attempts = [item for item in group if item.is_infra]
             total_infra_attempts += len(infra_attempts)
 
-            source = (
-                run_dir
-                / "scratch"
-                / f"{task_id.replace(':', '_')}__trial{trial_num}"
-                / trace_filename
-            )
+            _source, trace_records_payload = trace_sources[key]
             relative_trace = (
                 Path("traces") / f"{_safe_name(task_id)}__trial{trial_num}" / trace_filename
             )
             destination = temp_dir / relative_trace
-            trace_records = _copy_trace(source, destination)
+            trace_records = _copy_trace_records(trace_records_payload, destination)
             trace_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
 
             manifest_trials.append(

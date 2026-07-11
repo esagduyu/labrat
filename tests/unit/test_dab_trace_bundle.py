@@ -8,6 +8,7 @@ import pytest
 from scripts.build_dab_trace_bundle import (
     OFFICIAL_QUERY_COUNTS,
     BundleError,
+    _validate_output_destination,
     build_bundle,
 )
 
@@ -103,6 +104,176 @@ def test_build_bundle_rejects_duplicate_semantic_attempts(tmp_path: Path) -> Non
 
     with pytest.raises(BundleError, match="2 non-infra attempts"):
         build_bundle(run_dir)
+
+
+def test_build_bundle_rejects_submission_answer_mismatch(tmp_path: Path) -> None:
+    run_dir = tmp_path / "stale-answer"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    submission = json.loads((run_dir / "submission.json").read_text())
+    submission[0]["answer"] = "edited after scoring"
+    (run_dir / "submission.json").write_text(json.dumps(submission))
+
+    with pytest.raises(BundleError, match="answer does not match selected semantic trial"):
+        build_bundle(run_dir)
+
+
+def test_output_destination_rejects_run_inputs_and_ancestors_without_mutation(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run-protected"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    config_before = (run_dir / "config.json").read_bytes()
+    trials_before = (run_dir / "trials.jsonl").read_bytes()
+
+    unsafe = [
+        run_dir / "config.json",
+        run_dir / "trials.jsonl",
+        run_dir,
+        run_dir.parent,
+        run_dir.parent.parent,
+    ]
+    for destination in unsafe:
+        with pytest.raises(BundleError, match="unsafe output destination"):
+            _validate_output_destination(run_dir, destination)
+
+    assert (run_dir / "config.json").read_bytes() == config_before
+    assert (run_dir / "trials.jsonl").read_bytes() == trials_before
+
+
+def test_build_bundle_allows_safe_sibling_output(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-source"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    output_dir = tmp_path / "run-bundle"
+
+    assert build_bundle(run_dir, output_dir=output_dir) == output_dir
+    assert (run_dir / "config.json").is_file()
+    assert (output_dir / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize(
+    ("task_id", "trace_dir"),
+    [
+        ("../escape:1", "escape_1__trial0"),
+        ("nested/escape:1", "scratch/nested/escape_1__trial0"),
+    ],
+)
+def test_build_bundle_rejects_task_id_paths_even_with_stale_clean_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task_id: str,
+    trace_dir: str,
+) -> None:
+    run_dir = tmp_path / "unsafe-task"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    (run_dir / "trials.jsonl").write_text(json.dumps(_trial(task_id, 0)) + "\n")
+    dataset, query = task_id.rsplit(":", 1)
+    (run_dir / "submission.json").write_text(
+        json.dumps([{"dataset": dataset, "query": query, "run": 0, "answer": "42"}])
+    )
+    malicious_trace = run_dir / trace_dir
+    malicious_trace.mkdir(parents=True, exist_ok=True)
+    (malicious_trace / "agent_tool_calls.jsonl").write_text("")
+    monkeypatch.setattr(
+        "scripts.build_dab_trace_bundle.audit_run",
+        lambda *_args, **_kwargs: {f"{task_id}:0": "clean"},
+    )
+
+    with pytest.raises(BundleError, match="unsafe trace source"):
+        build_bundle(run_dir)
+
+
+def test_build_bundle_rejects_symlinked_trial_dir_even_with_stale_clean_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "symlink-trial"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    trial_dir = run_dir / "scratch" / "stockindex_1__trial0"
+    (trial_dir / "agent_tool_calls.jsonl").unlink()
+    trial_dir.rmdir()
+    outside = run_dir / "outside"
+    outside.mkdir()
+    (outside / "agent_tool_calls.jsonl").write_text("")
+    trial_dir.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        "scripts.build_dab_trace_bundle.audit_run",
+        lambda *_args, **_kwargs: {"stockindex:1:0": "clean"},
+    )
+
+    with pytest.raises(BundleError, match="unsafe trace source"):
+        build_bundle(run_dir)
+
+
+@pytest.mark.parametrize("secret_location", ["config", "report", "trace"])
+def test_build_bundle_fails_closed_on_credential_material_before_copy(
+    tmp_path: Path,
+    secret_location: str,
+) -> None:
+    run_dir = tmp_path / f"secret-{secret_location}"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    if secret_location == "config":
+        config = json.loads((run_dir / "config.json").read_text())
+        config["api_key"] = "sk-proj-1234567890abcdef"
+        (run_dir / "config.json").write_text(json.dumps(config))
+    elif secret_location == "report":
+        (run_dir / "report.md").write_text(
+            "database=postgresql://analyst:hunter2@db.internal/benchmark\n"
+        )
+    else:
+        trace = run_dir / "scratch" / "stockindex_1__trial0" / "agent_tool_calls.jsonl"
+        trace.write_text(
+            json.dumps(
+                {
+                    "tool": "run_sql",
+                    "input": {"password": "hunter2"},
+                    "ok": True,
+                    "output": "1",
+                    "latency_ms": 1,
+                }
+            )
+            + "\n"
+        )
+    output_dir = tmp_path / f"bundle-{secret_location}"
+
+    with pytest.raises(BundleError, match="credential material"):
+        build_bundle(run_dir, output_dir=output_dir)
+
+    assert not output_dir.exists()
+
+
+def test_build_bundle_secret_scan_allows_schema_and_usage_language(tmp_path: Path) -> None:
+    run_dir = tmp_path / "safe-language"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    config = json.loads((run_dir / "config.json").read_text())
+    config.update(
+        {
+            "prompt_cache_key": "stockindex:1",
+            "api_key_enabled": False,
+            "input_tokens": 1200,
+            "refresh_token_count": 0,
+        }
+    )
+    (run_dir / "config.json").write_text(json.dumps(config))
+    (run_dir / "report.md").write_text(
+        "The password column was analyzed. See https://example.com/docs for methodology.\n"
+    )
+    trace = run_dir / "scratch" / "stockindex_1__trial0" / "agent_tool_calls.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "tool": "run_sql",
+                "input": {"query": "SELECT password FROM users"},
+                "ok": True,
+                "output": "password column has 0 nulls",
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+
+    output = build_bundle(run_dir)
+
+    assert (output / "manifest.json").is_file()
 
 
 def test_build_bundle_selects_one_semantic_attempt_after_infra_retry(tmp_path: Path) -> None:

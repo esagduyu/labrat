@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from labrat.eval.types import BenchmarkTask, TrialResult
+from labrat.eval.types import AggregateScore, BenchmarkTask, TrialResult
 
 
 def _make_task(task_id: str = "ds:1") -> BenchmarkTask:
@@ -101,6 +101,63 @@ def test_dab_ablation_flags_keep_backward_compatible_defaults(tmp_path: Path) ->
     assert cfg["hints"] is False
     assert cfg["agent_levers"] is True
     assert cfg["agent_ledger"] is True
+
+
+def test_raw_bash_nonempty_run_is_answer_audited_report_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import eval_dab
+
+    class RawReportSuite:
+        name = "dab"
+
+        def tasks(self) -> list[BenchmarkTask]:
+            return [_make_task("ds:1")]
+
+        async def run_trial(
+            self, task: BenchmarkTask, trial_num: int, scratch_dir: Path
+        ) -> TrialResult:
+            return _make_trial(task.id, trial_num, passed=True)
+
+        def aggregate(self, results: list[TrialResult]) -> AggregateScore:
+            return AggregateScore(
+                overall=1.0,
+                per_task={"ds:1": 1.0},
+                n_tasks=1,
+                n_trials=len(results),
+                n_passes=len(results),
+            )
+
+        def write_submission(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("raw-bash must never write submission.json")
+
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: RawReportSuite())
+    dab_dir = tmp_path / "empty-dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "raw-report"
+
+    rc = eval_dab.main(
+        [
+            "--dab-dir",
+            str(dab_dir),
+            "--output-dir",
+            str(output_dir),
+            "--n-trials",
+            "1",
+            "--driver",
+            "raw-bash",
+        ]
+    )
+
+    assert rc == 0
+    config = json.loads((output_dir / "config.json").read_text())
+    assert config["submission_eligibility"] == "legacy-report-only"
+    assert config["trace_contract"] == "answer-only"
+    assert config["trace_attempt_policy"] == "not-applicable"
+    assert json.loads((output_dir / "taint.json").read_text()) == {"ds:1:0": "clean"}
+    assert "Legacy report-only" in (output_dir / "report.md").read_text()
+    assert not (output_dir / "submission.json").exists()
 
 
 def test_dab_boolean_flags_restore_on_resume_and_reject_conflicts(tmp_path: Path) -> None:
@@ -298,3 +355,49 @@ def test_rate_limit_persists_one_retryable_row_then_stops_before_packaging(
     assert "reset_at=2026-07-11T11:02:31+00:00" in message
     assert "resets_in_seconds=321" in message
     assert f"--output-dir {output_dir}" in message
+
+
+def test_runner_normalizes_textual_429_to_retryable_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import eval_dab
+
+    class TextRateLimitedSuite:
+        name = "dab"
+
+        def tasks(self) -> list[BenchmarkTask]:
+            return [_make_task("ds:1"), _make_task("ds:2")]
+
+        async def run_trial(
+            self, task: BenchmarkTask, trial_num: int, scratch_dir: Path
+        ) -> TrialResult:
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason="infra:agent_error",
+                latency_seconds=0.0,
+                artifact={"type": "text", "payload": "API Error: 429 Too Many Requests"},
+            )
+
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: TextRateLimitedSuite())
+    monkeypatch.setattr(
+        eval_dab,
+        "audit_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("textual 429 must stop before audit")
+        ),
+    )
+    dab_dir = tmp_path / "empty-dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "text-429"
+
+    rc = eval_dab.main(
+        ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir), "--n-trials", "1"]
+    )
+
+    assert rc == eval_dab._RATE_LIMIT_EXIT_CODE
+    rows = [json.loads(line) for line in (output_dir / "trials.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "infra:rate_limit"

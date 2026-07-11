@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from labrat.agent.verifier import LLMFn
 
-from labrat.agent.providers import build_provider
+from labrat.agent.providers import RateLimitError, build_provider
 from labrat.agent.verifier import provider_llm_fn
 from labrat.eval.benchmarks.dab.env import (
     DabTaskEnv,
@@ -85,7 +85,7 @@ _INFRA_PATTERNS: tuple[tuple[str, str], ...] = (
     # 5xx / overloaded are transient infra, NOT a real attempt — must be retried, not
     # scored as a semantic fail. (A 2026-06-23 Claude outage miscounted 14 such trials.)
     ("API Error: 5", "api_error"),
-    ("API Error: 429", "api_error"),
+    ("API Error: 429", "rate_limit"),
     ("Overloaded", "api_error"),
 )
 
@@ -106,8 +106,31 @@ def _http_status_code(exc: Exception) -> int | None:
     return status_code if isinstance(status_code, int) else None
 
 
+def is_rate_limit_error(value: object) -> bool:
+    """Classify quota exhaustion consistently across providers and CLI text."""
+    if isinstance(value, RateLimitError):
+        return True
+    if isinstance(value, Exception) and _http_status_code(value) == 429:
+        return True
+    text = str(value)
+    return _detect_infra_failure(text) == "rate_limit" or bool(
+        re.search(r"\b429\b.*(?:too many requests|rate.?limit)", text, re.IGNORECASE)
+    )
+
+
 def _rate_limit_meta(exc: Exception) -> dict[str, int]:
     """Extract only safe reset telemetry from a 429 response body."""
+    stable = getattr(exc, "rate_limit", None)
+    if isinstance(stable, dict):
+        sanitized = {
+            key: value
+            for key, value in cast("dict[str, Any]", stable).items()
+            if key in {"resets_at", "resets_in_seconds"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        }
+        if sanitized:
+            return sanitized
     response = getattr(exc, "response", None)
     if response is None:
         return {}
@@ -637,7 +660,7 @@ class DabSuite:
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
             # fail only THIS trial, not crash the whole run. Record it as an infra failure
             # so aggregate() skips it and a --output-dir resume auto-retries it.
-            if _http_status_code(exc) == 429:
+            if is_rate_limit_error(exc):
                 tag = "rate_limit"
             elif isinstance(exc, TimeoutError):
                 tag = "timeout"
@@ -728,6 +751,31 @@ class DabSuite:
                 if isinstance(item, dict):
                     self._last_request_usage.append(dict(cast("dict[str, Any]", item)))
 
+    def _capture_provider_usage_delta(
+        self,
+        provider: Any,
+        before_usage: dict[str, int],
+        before_request_count: int,
+        *,
+        usage_role: str,
+    ) -> None:
+        provider_usage = getattr(provider, "usage", None)
+        if isinstance(provider_usage, dict):
+            if self._last_usage is None:
+                self._last_usage = {}
+            for key, value in cast("dict[str, Any]", provider_usage).items():
+                if isinstance(value, int) and not isinstance(value, bool):
+                    delta = value - before_usage.get(key, 0)
+                    if delta:
+                        self._last_usage[key] = self._last_usage.get(key, 0) + delta
+        request_usage = getattr(provider, "request_usage", None)
+        if isinstance(request_usage, list):
+            for item in cast("list[Any]", request_usage)[before_request_count:]:
+                if isinstance(item, dict):
+                    captured = dict(cast("dict[str, Any]", item))
+                    captured["usage_role"] = usage_role
+                    self._last_request_usage.append(captured)
+
     # ── verified dispatch (consensus + re-derive) ─────────────────────────────
 
     def _verify_llm_fn(self) -> LLMFn:
@@ -739,7 +787,30 @@ class DabSuite:
         provider = build_provider(
             judge_provider, self._agent_model, reasoning=self._agent_reasoning
         )
-        return provider_llm_fn(provider)
+        llm_fn = provider_llm_fn(provider)
+
+        async def _tracked(prompt: str) -> str:
+            raw_usage = getattr(provider, "usage", None)
+            before_usage: dict[str, int] = {}
+            if isinstance(raw_usage, dict):
+                for key, value in cast("dict[str, Any]", raw_usage).items():
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        before_usage[key] = value
+            raw_requests = getattr(provider, "request_usage", None)
+            before_request_count = (
+                len(cast("list[Any]", raw_requests)) if isinstance(raw_requests, list) else 0
+            )
+            try:
+                return await llm_fn(prompt)
+            finally:
+                self._capture_provider_usage_delta(
+                    provider,
+                    before_usage,
+                    before_request_count,
+                    usage_role="verification",
+                )
+
+        return _tracked
 
     def _cartograph_llm_fn(self) -> LLMFn:
         # Author the semantics pass with the independent semantics model. Route to the
@@ -787,7 +858,7 @@ class DabSuite:
         low_confidence: bool | None = None
         consensus_answers: list[str] | None = None
         chosen_subdir_i: int | None = None
-        results: list[tuple[str, int, float]] = []
+        results: list[tuple[int, tuple[str, int, float]]] = []
 
         if k > 1:
             for i in range(k):
@@ -795,19 +866,20 @@ class DabSuite:
                     r = await _run_once(
                         i, diversity_index=(i if self._consensus_diversity else None)
                     )
-                    results.append(r)
+                    results.append((i, r))
                     total_latency += r[2]
                 except Exception:
                     continue  # a failed sub-run is excluded from the vote
             if not results:
                 return await _run_once(0)  # all failed → let run_trial's handler see it
             llm_fn = self._verify_llm_fn()
-            idx, low = await choose_modal([r[0] for r in results], question=question, llm_fn=llm_fn)
+            idx, low = await choose_modal(
+                [result[0] for _, result in results], question=question, llm_fn=llm_fn
+            )
             modal_index = idx
             low_confidence = low
-            consensus_answers = [r[0] for r in results]
-            primary = results[idx]
-            chosen_subdir_i = idx
+            consensus_answers = [result[0] for _, result in results]
+            chosen_subdir_i, primary = results[idx]
         else:
             primary = await _run_once(0)
             total_latency += primary[2]
@@ -825,13 +897,13 @@ class DabSuite:
         if k > 1 and low_confidence and self._argue_rounds > 0:
             for round_num in range(self._argue_rounds):
                 try:
-                    argued: list[tuple[str, int, float]] = []
-                    for i in range(len(results)):
+                    argued: list[tuple[int, tuple[str, int, float]]] = []
+                    for result_index, (subrun_id, _current) in enumerate(results):
                         block_lines = ["Other analysts concluded:"]
-                        for j, r in enumerate(results):
-                            if j == i:
+                        for other_index, (_other_id, other) in enumerate(results):
+                            if other_index == result_index:
                                 continue
-                            block_lines.append(f"- {r[0][:1500]}")
+                            block_lines.append(f"- {other[0][:1500]}")
                         block_lines.append(
                             "Reconsider your answer in light of the above. If you still "
                             "believe your answer is correct, restate it; otherwise revise. "
@@ -839,23 +911,24 @@ class DabSuite:
                         )
                         argue_extra = "\n".join(block_lines)
                         r = await _run_once(
-                            i,
+                            subrun_id,
                             extra=argue_extra,
-                            diversity_index=(i if self._consensus_diversity else None),
+                            diversity_index=(subrun_id if self._consensus_diversity else None),
                         )
-                        argued.append(r)
-                    total_latency += sum(r[2] for r in argued)
+                        argued.append((subrun_id, r))
+                    total_latency += sum(result[2] for _, result in argued)
                     results = argued
                     argue_rounds_used = round_num + 1
                     llm_fn = self._verify_llm_fn()
                     idx, low = await choose_modal(
-                        [r[0] for r in results], question=question, llm_fn=llm_fn
+                        [result[0] for _, result in results],
+                        question=question,
+                        llm_fn=llm_fn,
                     )
                     modal_index = idx
                     low_confidence = low
-                    consensus_answers = [r[0] for r in results]
-                    primary = results[idx]
-                    chosen_subdir_i = idx
+                    consensus_answers = [result[0] for _, result in results]
+                    chosen_subdir_i, primary = results[idx]
                     if not low_confidence:
                         break
                 except Exception:
@@ -1084,6 +1157,11 @@ class DabSuite:
         # re-resolved by the claude CLI against the new cwd and double. The harness
         # passes a repo-relative scratch dir, so this matters in practice.
         scratch_dir = scratch_dir.resolve()
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        # One JSONL file represents exactly one fresh Claude attempt. Reset it
+        # before dispatch so retries cannot inherit calls and zero-tool successes
+        # still leave a valid empty trace.
+        (scratch_dir / "mcp_tool_calls.jsonl").write_text("", encoding="utf-8")
 
         if not shutil.which("claude"):
             raise RuntimeError(

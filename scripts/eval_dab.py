@@ -28,8 +28,8 @@ from labrat.agent.providers import (
     PROVIDER_NAMES,
     resolve_codex_model_config,
 )
-from labrat.eval.benchmarks.dab.suite import DabSuite, Driver
-from labrat.eval.benchmarks.dab.taint import audit_run, gate
+from labrat.eval.benchmarks.dab.suite import DabSuite, Driver, is_rate_limit_error
+from labrat.eval.benchmarks.dab.taint import audit_run, gate, task_trial_dir_name
 from labrat.eval.reporting import report_to_markdown
 from labrat.eval.types import BenchmarkReport, BenchmarkSuite, TrialResult
 
@@ -67,8 +67,8 @@ def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
 
     Infra failures (``reason`` starts with ``"infra:"``) are NOT considered
     completed — they never got a fair shot at the query, so a resume rerun
-    should attempt them again. The harness rewrites those lines in place when
-    they succeed on rerun.
+    should attempt them again. Retry rows are append-only: a successful rerun
+    adds a new semantic row while preserving the infrastructure attempt.
     """
     completed: set[tuple[str, int]] = set()
     if not trials_jsonl.exists():
@@ -134,9 +134,15 @@ async def _run_interim(
             for trial_num in range(n_trials):
                 if (task.id, trial_num) in completed:
                     continue
-                scratch = output_dir / "scratch" / f"{task.id.replace(':', '_')}__trial{trial_num}"
+                scratch = output_dir / "scratch" / task_trial_dir_name(task.id, trial_num)
                 scratch.mkdir(parents=True, exist_ok=True)
                 result = await suite.run_trial(task, trial_num, scratch)
+                artifact = result.artifact
+                payload = artifact.get("payload", "") if isinstance(artifact, dict) else artifact
+                if result.reason != "infra:rate_limit" and is_rate_limit_error(payload):
+                    result = result.model_copy(
+                        update={"passed": False, "reason": "infra:rate_limit"}
+                    )
                 f.write(result.model_dump_json() + "\n")
                 f.flush()
                 all_trials.append(result)
@@ -629,7 +635,15 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_reasoning": effective_reasoning,
                 "agent_levers": effective_levers,
                 "agent_ledger": effective_ledger,
-                "trace_attempt_policy": "reset_on_attempt",
+                "trace_attempt_policy": (
+                    "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
+                ),
+                "submission_eligibility": (
+                    "legacy-report-only" if effective_driver == "raw-bash" else "trace-audited"
+                ),
+                "trace_contract": (
+                    "answer-only" if effective_driver == "raw-bash" else "per-attempt-jsonl"
+                ),
                 "n_trials": effective_n_trials,
                 "task_filter": task_filter,
             },
@@ -651,6 +665,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _RATE_LIMIT_EXIT_CODE
 
+    if effective_driver == "raw-bash":
+        report_body = report_to_markdown(report)
+        (output_dir / "report.md").write_text(
+            "# Legacy report-only DAB run\n\n"
+            "> Submission eligibility: **ineligible**. The raw-bash driver has an "
+            "answer-only contamination audit and does not claim trace completeness.\n\n"
+            + report_body
+        )
+
     # Pre-submission taint-audit gate: classify every trial (answer text + MCP
     # trace) for answer-key / external-dataset leakage before assembling
     # submission.json. Refuse to write a submission from an unaudited run — see
@@ -671,8 +694,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"See {output_dir / 'taint.json'} for full verdicts.", file=sys.stderr)
         return 3
 
-    suite.write_submission(report, output_dir)
-    (output_dir / "report.md").write_text(report_to_markdown(report))
+    if effective_driver != "raw-bash":
+        suite.write_submission(report, output_dir)
+        (output_dir / "report.md").write_text(report_to_markdown(report))
     print(f"\nRun complete: {output_dir}")
     print(f"Overall score: {report.score.overall:.3f}")
     return 0
