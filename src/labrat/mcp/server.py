@@ -61,8 +61,11 @@ from labrat.agent.tool_trace import append_tool_trace
 from labrat.agent.tools.base import ToolContext, ToolRegistry
 from labrat.db.base import Connection
 from labrat.mcp.config import resolve_from_env
+from labrat.mcp.policy import PolicyDenied, PolicySession, load_policy_from_env
 
 _TOOL_LOG_FILENAME = "mcp_tool_calls.jsonl"
+_POLICY_DENIED_MESSAGE = "MCP policy denied tool call"
+_POLICY_DENIED_OUTPUT = f"Error: {_POLICY_DENIED_MESSAGE}"
 
 
 def _log_tool_call(
@@ -102,22 +105,95 @@ def _build_context_from_env() -> tuple[ToolContext, list[Connection]]:
     return ctx, list(rc.connections.values())
 
 
-def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
+def _listed_tools(registry: ToolRegistry, policy: PolicySession | None) -> list[Tool]:
+    """Build MCP schemas from exactly the tools visible in the active policy."""
+    visible = registry.tools if policy is None else policy.visible_tools(registry)
+    out: list[Tool] = []
+    for tool in visible:
+        schema = tool.anthropic_schema()
+        out.append(
+            Tool(
+                name=schema["name"],
+                description=schema.get("description", ""),
+                inputSchema=schema["input_schema"],
+            )
+        )
+    return out
+
+
+async def _dispatch_tool_call(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    ctx: ToolContext,
+    registry: ToolRegistry,
+    policy: PolicySession | None,
+    log_dir: str | None,
+) -> list[TextContent]:
+    """Authorize, dispatch, audit, and render one MCP tool call."""
+    t0 = time.monotonic()
+    if policy is not None:
+        try:
+            policy.authorize(name, arguments, ctx)
+        except PolicyDenied:
+            _log_tool_call(
+                log_dir,
+                name=name,
+                arguments=arguments,
+                ok=False,
+                output=_POLICY_DENIED_OUTPUT,
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            # The SDK's call_tool wrapper converts raised exceptions into a
+            # CallToolResult with isError=True. Re-raise a sanitized error so
+            # neither policy details nor supplied arguments reach the host.
+            raise PolicyDenied(_POLICY_DENIED_MESSAGE) from None
+
+    dispatch = await registry.dispatch(name, arguments, ctx)
+    if not dispatch.ok:
+        error_text = f"Error: {dispatch.error}"
+        _log_tool_call(
+            log_dir,
+            name=name,
+            arguments=arguments,
+            ok=False,
+            output=error_text,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
+        return [TextContent(type="text", text=error_text)]
+
+    if policy is not None:
+        policy.record_success(name, arguments)
+
+    value = dispatch.value
+    payload: str
+    dumper = getattr(value, "model_dump_json", None)
+    if callable(dumper):
+        payload = str(dumper())
+    else:
+        try:
+            payload = json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            payload = str(value)
+    _log_tool_call(
+        log_dir,
+        name=name,
+        arguments=arguments,
+        ok=True,
+        output=payload,
+        latency_ms=(time.monotonic() - t0) * 1000,
+    )
+    return [TextContent(type="text", text=payload)]
+
+
+def _build_server(
+    ctx: ToolContext, registry: ToolRegistry, policy: PolicySession | None = None
+) -> Server[Any, Any]:
     server: Server[Any, Any] = Server("labrat")
 
     @server.list_tools()
     async def _list_tools() -> list[Tool]:  # pyright: ignore[reportUnusedFunction]
-        out: list[Tool] = []
-        for tool in registry.tools:
-            schema = tool.anthropic_schema()
-            out.append(
-                Tool(
-                    name=schema["name"],
-                    description=schema.get("description", ""),
-                    inputSchema=schema["input_schema"],
-                )
-            )
-        return out
+        return _listed_tools(registry, policy)
 
     log_dir = os.environ.get("LABRAT_MCP_LOG_DIR")
 
@@ -125,46 +201,24 @@ def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
     async def _call_tool(  # pyright: ignore[reportUnusedFunction]
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
-        t0 = time.monotonic()
-        dispatch = await registry.dispatch(name, arguments, ctx)
-        if not dispatch.ok:
-            error_text = f"Error: {dispatch.error}"
-            _log_tool_call(
-                log_dir,
-                name=name,
-                arguments=arguments,
-                ok=False,
-                output=error_text,
-                latency_ms=(time.monotonic() - t0) * 1000,
-            )
-            return [TextContent(type="text", text=error_text)]
-        value = dispatch.value
-        payload: str
-        dumper = getattr(value, "model_dump_json", None)
-        if callable(dumper):
-            payload = str(dumper())
-        else:
-            try:
-                payload = json.dumps(value, default=str)
-            except (TypeError, ValueError):
-                payload = str(value)
-        _log_tool_call(
-            log_dir,
-            name=name,
-            arguments=arguments,
-            ok=True,
-            output=payload,
-            latency_ms=(time.monotonic() - t0) * 1000,
+        return await _dispatch_tool_call(
+            name,
+            arguments,
+            ctx=ctx,
+            registry=registry,
+            policy=policy,
+            log_dir=log_dir,
         )
-        return [TextContent(type="text", text=payload)]
 
     return server
 
 
 async def _serve() -> None:
+    loaded_policy = load_policy_from_env(os.environ)
+    policy = PolicySession(loaded_policy) if loaded_policy is not None else None
     ctx, live = _build_context_from_env()
     registry = build_data_tools_registry()
-    server = _build_server(ctx, registry)
+    server = _build_server(ctx, registry, policy)
     init_options = InitializationOptions(
         server_name="labrat",
         server_version="0.1.0",
