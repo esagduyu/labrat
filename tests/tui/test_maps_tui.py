@@ -16,7 +16,7 @@ from labrat.maze.map import build_map_doc, scent_members, trail_members
 from labrat.maze.store import MazeStore
 from labrat.profile.model import Profile
 from labrat.screens.main import MainScreen
-from labrat.screens.maps import MapActivateScreen, MapEditScreen
+from labrat.screens.maps import MapActivateScreen, MapEditScreen, _overview_body
 
 
 class _Host(App[None]):
@@ -111,6 +111,42 @@ async def test_map_activate_screen_lists_only_existing_maps(tmp_path: Path, monk
         assert table.row_count == 0
 
         # No rows -> toggling can't activate a phantom slug.
+        await pilot.press("space")
+        await pilot.pause()
+        assert active_maps == []
+
+
+async def test_map_activate_toggle_keeps_cursor_on_toggled_map(tmp_path: Path, monkeypatch) -> None:
+    """M2 regression: toggling a non-first row must leave the cursor on that
+    same map (not reset to row 0), so a following space acts on the map the
+    user is looking at, not whatever landed on top after the reload."""
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    store = MazeStore(project_root=tmp_path, home=tmp_path / "home", profile="default")
+    _seed_scent(store, "campaigns", "revenue", "subscriptions")
+    for name in ("campaigns", "revenue", "subscriptions"):
+        store.write_doc(build_map_doc(name, scent=[name], trails=[], prompts=[]), kind="map")
+
+    active_maps: list[str] = []
+    screen = MapActivateScreen(store, active_maps)
+    async with _Host(screen).run_test() as pilot:
+        await pilot.pause()
+        table = pilot.app.screen.query_one("#maps-table", DataTable)
+        assert table.row_count == 3
+
+        # Rows sort alphabetically: campaigns(0), revenue(1), subscriptions(2).
+        # Move the cursor onto "revenue" (row 1) and toggle it.
+        table.cursor_coordinate = Coordinate(1, 0)
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+
+        assert active_maps == ["revenue"]
+        # Cursor must still be on the "revenue" row, not reset to row 0.
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
+        assert str(key.value) == "revenue"
+
+        # A second toggle from here must act on "revenue" again (deactivate it),
+        # not on whatever ended up at row 0.
         await pilot.press("space")
         await pilot.pause()
         assert active_maps == []
@@ -314,6 +350,49 @@ async def test_map_edit_screen_edits_existing_map(tmp_path: Path, monkeypatch) -
     doc = store.load_domain("revenue", kind="map", scope="project")
     assert doc is not None
     assert set(scent_members(doc)) == {"subscriptions", "campaigns"}
+
+
+async def test_map_edit_screen_new_map_blocks_slug_collision(tmp_path: Path, monkeypatch) -> None:
+    """M1 regression: saving a New Map whose slug collides with an existing
+    curated Map must NOT clobber it — block the save and leave the existing
+    Map's content untouched."""
+    monkeypatch.setenv("LABRAT_MAZE_DIR", str(tmp_path))
+    store = MazeStore(project_root=tmp_path, home=tmp_path / "home", profile="default")
+    _seed_scent(store, "subscriptions", "campaigns")
+    existing = build_map_doc(
+        "revenue",
+        scent=["subscriptions"],
+        trails=[],
+        prompts=["What's our ARR?"],
+        overview="Curated revenue overview — do not lose me.",
+    )
+    store.write_doc(existing, kind="map")
+    map_path = tmp_path / "labrat_maze" / "map" / "revenue.md"
+    written_before = map_path.read_text(encoding="utf-8")
+
+    screen = MapEditScreen(store, None)  # New Map path
+    async with _Host(screen).run_test() as pilot:
+        await pilot.pause()
+        # "Revenue" slugifies to "revenue" — collides with the existing curated Map.
+        pilot.app.screen.query_one("#slug-input", Input).value = "Revenue"
+        pilot.app.screen.query_one("#overview", TextArea).text = "Clobbering overview."
+
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        # Blocked: screen stays open, status warns about the collision.
+        assert isinstance(pilot.app.screen, MapEditScreen)
+        status = pilot.app.screen.query_one("#status", Label)
+        status_text = str(status.render())
+        assert "already exists" in status_text
+        assert "revenue" in status_text
+
+    # No write happened — the curated Map's content is byte-identical.
+    assert map_path.read_text(encoding="utf-8") == written_before
+    doc = store.load_domain("revenue", kind="map", scope="project")
+    assert doc is not None
+    assert scent_members(doc) == ["subscriptions"]
+    assert _overview_body(doc) == "Curated revenue overview — do not lose me."
 
 
 async def test_map_edit_screen_blocks_contaminated_overview(tmp_path: Path, monkeypatch) -> None:

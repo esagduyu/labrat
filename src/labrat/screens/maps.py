@@ -187,6 +187,18 @@ class MapActivateScreen(ModalScreen[None]):
             self._active_maps.append(slug)
             self.notify(f"Map activated: {slug}", timeout=3)
         self._reload()
+        self._seek_to_slug(slug)
+
+    def _seek_to_slug(self, slug: str) -> None:
+        """Restore the cursor to ``slug``'s row after ``_reload()`` rebuilds the
+        table (which resets the cursor to row 0) — otherwise consecutive
+        toggles act on whatever map ended up at the top instead of the one
+        the user is actually looking at."""
+        table = self.query_one("#maps-table", DataTable)
+        for row_index, doc in enumerate(self._maps):
+            if doc.domain == slug:
+                table.cursor_coordinate = Coordinate(row_index, 0)
+                return
 
     @on(Button.Pressed, "#new-btn")
     def action_new_map(self) -> None:
@@ -350,6 +362,13 @@ class MapEditScreen(ModalScreen[str | None]):
         if self._is_new and not self.query_one("#slug-input", Input).value.strip():
             self.query_one("#status", Label).update("[red]Enter a Map slug first.[/red]")
             return
+        if self._is_new:
+            slug = self._slug()
+            if self._store.load_domain(slug, kind="map", scope=None) is not None:
+                self.query_one("#status", Label).update(
+                    f"[red]Map '{slug}' already exists — cancel and press E to edit it.[/red]"
+                )
+                return
         doc = self._built_doc()
         try:
             apply_map(self._store, doc)
