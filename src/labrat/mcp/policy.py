@@ -13,8 +13,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
     StringConstraints,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -34,7 +38,7 @@ _SAFE_TASK_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 SafeIdentifier = Annotated[
-    str,
+    StrictStr,
     StringConstraints(
         min_length=1,
         max_length=MAX_IDENTIFIER_CHARS_CEILING,
@@ -42,16 +46,16 @@ SafeIdentifier = Annotated[
     ),
 ]
 SafeTaskId = Annotated[
-    str,
+    StrictStr,
     StringConstraints(
         min_length=1,
         max_length=MAX_IDENTIFIER_CHARS_CEILING,
         pattern=_SAFE_TASK_ID_PATTERN,
     ),
 ]
-Sha256Hex = Annotated[str, StringConstraints(pattern=_SHA256_PATTERN)]
-NonnegativeInt = Annotated[int, Field(ge=0, strict=True)]
-PositiveRows = Annotated[int, Field(ge=1, le=MAX_ROWS_CEILING, strict=True)]
+Sha256Hex = Annotated[StrictStr, StringConstraints(pattern=_SHA256_PATTERN)]
+NonnegativeInt = Annotated[StrictInt, Field(ge=0)]
+PositiveRows = Annotated[StrictInt, Field(ge=1, le=MAX_ROWS_CEILING)]
 
 
 class PolicyLoadError(RuntimeError):
@@ -108,16 +112,14 @@ class MongoGrant(BaseModel):
 class PolicyLimits(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_rows: Annotated[int, Field(ge=1, le=MAX_ROWS_CEILING, strict=True)]
-    max_sample_rows: Annotated[int, Field(ge=1, le=MAX_SAMPLE_ROWS_CEILING, strict=True)]
-    max_tables: Annotated[int, Field(ge=1, le=MAX_TABLES_CEILING, strict=True)]
-    max_output_chars: Annotated[int, Field(ge=1, le=MAX_OUTPUT_CHARS_CEILING, strict=True)]
-    max_sql_chars: Annotated[int, Field(ge=1, le=MAX_SQL_CHARS_CEILING, strict=True)]
-    max_identifier_chars: Annotated[int, Field(ge=1, le=MAX_IDENTIFIER_CHARS_CEILING, strict=True)]
-    max_mongo_depth: Annotated[int, Field(ge=1, le=MAX_MONGO_DEPTH_CEILING, strict=True)]
-    max_mongo_filter_bytes: Annotated[
-        int, Field(ge=1, le=MAX_MONGO_FILTER_BYTES_CEILING, strict=True)
-    ]
+    max_rows: Annotated[StrictInt, Field(ge=1, le=MAX_ROWS_CEILING)]
+    max_sample_rows: Annotated[StrictInt, Field(ge=1, le=MAX_SAMPLE_ROWS_CEILING)]
+    max_tables: Annotated[StrictInt, Field(ge=1, le=MAX_TABLES_CEILING)]
+    max_output_chars: Annotated[StrictInt, Field(ge=1, le=MAX_OUTPUT_CHARS_CEILING)]
+    max_sql_chars: Annotated[StrictInt, Field(ge=1, le=MAX_SQL_CHARS_CEILING)]
+    max_identifier_chars: Annotated[StrictInt, Field(ge=1, le=MAX_IDENTIFIER_CHARS_CEILING)]
+    max_mongo_depth: Annotated[StrictInt, Field(ge=1, le=MAX_MONGO_DEPTH_CEILING)]
+    max_mongo_filter_bytes: Annotated[StrictInt, Field(ge=1, le=MAX_MONGO_FILTER_BYTES_CEILING)]
 
 
 class McpPolicy(BaseModel):
@@ -133,9 +135,16 @@ class McpPolicy(BaseModel):
     source_grants: tuple[SourceGrant, ...]
     mongo_grants: tuple[MongoGrant, ...]
     limits: PolicyLimits
-    cartographer_enabled: bool
+    cartographer_enabled: StrictBool
     builder_sha256: Sha256Hex
     digest: Sha256Hex
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _schema_version_is_exact_integer_one(cls, value: Any) -> Any:
+        if type(value) is not int or value != 1:
+            raise ValueError("schema_version must be the integer 1")
+        return value
 
     @model_validator(mode="after")
     def _grant_identities_are_unique(self) -> Self:

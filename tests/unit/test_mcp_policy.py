@@ -90,6 +90,25 @@ def _write_policy(path: Path, data: dict[str, object] | None = None) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _signed_policy_data(data: dict[str, object] | None = None) -> dict[str, Any]:
+    policy = McpPolicy.model_validate(_policy_data() if data is None else data)
+    return policy.model_copy(update={"digest": policy_digest(policy)}).model_dump(mode="json")
+
+
+def _set_path(data: dict[str, Any], path: tuple[str | int, ...], value: object) -> None:
+    target: Any = data
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+
+
+def _assert_load_fails_schema_validation(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(PolicyLoadError, match="schema validation") as exc_info:
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+    assert isinstance(exc_info.value.__cause__, ValidationError)
+
+
 class _Input(BaseModel):
     value: str = ""
 
@@ -119,6 +138,40 @@ def _registry(*names: str) -> ToolRegistry:
     for name in names:
         registry.register(_Tool(name))
     return registry
+
+
+_INTEGER_SCALAR_PATHS: tuple[tuple[str | int, ...], ...] = (
+    ("trial_num",),
+    ("attempt_num",),
+    ("mongo_grants", 0, "max_rows"),
+    ("limits", "max_rows"),
+    ("limits", "max_sample_rows"),
+    ("limits", "max_tables"),
+    ("limits", "max_output_chars"),
+    ("limits", "max_sql_chars"),
+    ("limits", "max_identifier_chars"),
+    ("limits", "max_mongo_depth"),
+    ("limits", "max_mongo_filter_bytes"),
+)
+
+_REQUIRED_STRING_SCALAR_PATHS: tuple[tuple[str | int, ...], ...] = (
+    ("run_manifest_sha256",),
+    ("task_id",),
+    ("primary_database",),
+    ("allowed_tools", 0),
+    ("source_grants", 0, "alias"),
+    ("source_grants", 0, "db_type"),
+    ("source_grants", 0, "relations", 0, "database"),
+    ("source_grants", 0, "relations", 0, "table"),
+    ("source_grants", 0, "relations", 0, "columns", 0),
+    ("mongo_grants", 0, "alias"),
+    ("mongo_grants", 0, "database"),
+    ("mongo_grants", 0, "collection"),
+    ("mongo_grants", 0, "target_table"),
+    ("mongo_grants", 0, "primary_database"),
+    ("builder_sha256",),
+    ("digest",),
+)
 
 
 def test_canonical_policy_bytes_are_exact_sorted_ascii_json_without_digest() -> None:
@@ -385,6 +438,95 @@ def test_mongo_grant_max_rows_is_positive_and_bounded(value: int) -> None:
 
     with pytest.raises(ValidationError):
         McpPolicy.model_validate(data)
+
+
+@pytest.mark.parametrize("raw_value", [True, 1.0, "1", False, 0])
+def test_load_policy_rejects_coerced_schema_version(tmp_path: Path, raw_value: object) -> None:
+    data = _signed_policy_data()
+    data["schema_version"] = raw_value
+
+    _assert_load_fails_schema_validation(tmp_path / "policy.json", data)
+
+
+@pytest.mark.parametrize(
+    ("valid_value", "raw_value"),
+    [
+        (False, 0),
+        (True, 1),
+        (False, "false"),
+        (True, "true"),
+        (False, None),
+    ],
+)
+def test_load_policy_rejects_coerced_cartographer_boolean(
+    tmp_path: Path, valid_value: bool, raw_value: object
+) -> None:
+    base = _policy_data()
+    base["cartographer_enabled"] = valid_value
+    data = _signed_policy_data(base)
+    data["cartographer_enabled"] = raw_value
+
+    _assert_load_fails_schema_validation(tmp_path / "policy.json", data)
+
+
+@pytest.mark.parametrize("path", _INTEGER_SCALAR_PATHS)
+@pytest.mark.parametrize("raw_value", [True, 1.0, "1"])
+def test_load_policy_rejects_coerced_integer_scalars(
+    tmp_path: Path, path: tuple[str | int, ...], raw_value: object
+) -> None:
+    base = deepcopy(_policy_data())
+    _set_path(base, path, 1)
+    data = _signed_policy_data(base)
+    _set_path(data, path, raw_value)
+
+    _assert_load_fails_schema_validation(tmp_path / "policy.json", data)
+
+
+@pytest.mark.parametrize("path", _REQUIRED_STRING_SCALAR_PATHS)
+@pytest.mark.parametrize("raw_value", [True, 1, 1.5, None])
+def test_load_policy_rejects_non_string_json_scalars(
+    tmp_path: Path, path: tuple[str | int, ...], raw_value: object
+) -> None:
+    data = _signed_policy_data()
+    _set_path(data, path, raw_value)
+
+    _assert_load_fails_schema_validation(tmp_path / "policy.json", data)
+
+
+@pytest.mark.parametrize("raw_value", [True, 1, 1.5])
+def test_load_policy_rejects_non_string_nullable_schema_name(
+    tmp_path: Path, raw_value: object
+) -> None:
+    data = _signed_policy_data()
+    _set_path(data, ("source_grants", 0, "relations", 0, "schema_name"), raw_value)
+
+    _assert_load_fails_schema_validation(tmp_path / "policy.json", data)
+
+
+def test_load_policy_preserves_json_arrays_as_immutable_tuples(tmp_path: Path) -> None:
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+
+    loaded = load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+
+    assert loaded is not None
+    assert isinstance(loaded.allowed_tools, tuple)
+    assert isinstance(loaded.source_grants, tuple)
+    assert isinstance(loaded.source_grants[0].relations, tuple)
+    assert isinstance(loaded.source_grants[0].relations[0].columns, tuple)
+
+
+def test_load_policy_allows_null_for_nullable_schema_name(tmp_path: Path) -> None:
+    base = deepcopy(_policy_data())
+    _set_path(base, ("source_grants", 0, "relations", 0, "schema_name"), None)
+    data = _signed_policy_data(base)
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+
+    assert loaded is not None
+    assert loaded.source_grants[0].relations[0].schema_name is None
 
 
 def test_load_policy_absent_env_returns_none_without_file_access(monkeypatch: Any) -> None:
