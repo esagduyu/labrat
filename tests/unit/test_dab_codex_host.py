@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import stat
 import tomllib
 from dataclasses import is_dataclass
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 
+import labrat.eval.benchmarks.dab.codex_host as codex_host_module
 from labrat.eval.benchmarks.dab.codex_host import (
     CodexAuditError,
     CodexHostConfig,
@@ -22,6 +25,7 @@ from labrat.eval.benchmarks.dab.codex_host import (
     extract_request_usage,
     parse_codex_events,
     reconcile_mcp_trace,
+    run_codex,
 )
 
 
@@ -30,12 +34,31 @@ def _config(
 ) -> CodexHostConfig:
     (tmp_path / "repo").mkdir(exist_ok=True)
     (tmp_path / "workspace").mkdir(exist_ok=True)
+    (tmp_path / "source-home").mkdir(exist_ok=True)
+    (tmp_path / "source-home" / "auth.json").write_text('{"token":"auth"}', encoding="utf-8")
+    (tmp_path / "home").mkdir(exist_ok=True)
     launch = (
         McpLaunch(
-            command="uv",
-            args=("run", "python", "-m", "labrat.mcp.server"),
+            command=str(tmp_path / "bin" / "python"),
+            args=("-m", "labrat.mcp.server"),
             cwd=tmp_path / "repo",
-            env=(("LABRAT_MCP_PRIMARY", "main"), ("QUOTED", 'a"b')),
+            env=(
+                (
+                    "LABRAT_MCP_CONNECTIONS",
+                    json.dumps(
+                        {
+                            "main": {
+                                "db_type": "duckdb",
+                                "db_path": str(tmp_path / "db.duckdb"),
+                                "read_only": True,
+                            }
+                        }
+                    ),
+                ),
+                ("LABRAT_MCP_PRIMARY", "main"),
+                ("LABRAT_MCP_LOG_DIR", str(tmp_path / 'a"b')),
+                ("LABRAT_MCP_POLICY_PATH", str(tmp_path / "policy.json")),
+            ),
             enabled_tools=("list_tables", "run_sql"),
         )
         if mcp
@@ -46,6 +69,7 @@ def _config(
         expected_version="0.144.1",
         model=model,
         reasoning_effort=effort,
+        source_codex_home=tmp_path / "source-home",
         codex_home=tmp_path / "home",
         workspace_dir=tmp_path / "workspace",
         artifact_dir=tmp_path / "artifacts",
@@ -114,10 +138,10 @@ def test_build_command_is_locked_down_and_injects_exact_mcp_config(tmp_path: Pat
         "standalone_web_search",
     ):
         assert f"--disable {feature}" in joined
-    assert 'mcp_servers.labrat.command="uv"' in command
-    assert 'mcp_servers.labrat.args=["run","python","-m","labrat.mcp.server"]' in command
+    assert f'mcp_servers.labrat.command="{tmp_path}/bin/python"' in command
+    assert 'mcp_servers.labrat.args=["-m","labrat.mcp.server"]' in command
     assert 'mcp_servers.labrat.enabled_tools=["list_tables","run_sql"]' in command
-    assert 'mcp_servers.labrat.env={LABRAT_MCP_PRIMARY="main",QUOTED="a\\"b"}' in command
+    assert any(value.startswith("mcp_servers.labrat.env={") for value in command)
 
 
 def test_build_command_without_mcp_has_no_server_configuration(tmp_path: Path) -> None:
@@ -138,7 +162,13 @@ def test_build_command_emits_parseable_toml_for_unicode_and_injection_text(
                 command=config.mcp.command,
                 args=config.mcp.args,
                 cwd=config.mcp.cwd,
-                env=(("VALUE", hostile),),
+                env=tuple(
+                    (
+                        key,
+                        str(tmp_path / hostile) if key == "LABRAT_MCP_LOG_DIR" else value,
+                    )
+                    for key, value in config.mcp.env
+                ),
                 enabled_tools=config.mcp.enabled_tools,
             ),
         }
@@ -150,6 +180,51 @@ def test_build_command_emits_parseable_toml_for_unicode_and_injection_text(
     assert not any(value == "injected=true" for value in command)
 
 
+def test_build_command_rejects_secret_capable_mcp_environment(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    assert config.mcp is not None
+    unsafe = CodexHostConfig(
+        **{
+            **config.__dict__,
+            "mcp": McpLaunch(
+                command=config.mcp.command,
+                args=config.mcp.args,
+                cwd=config.mcp.cwd,
+                env=(("DATABASE_PASSWORD", "secret"),),
+                enabled_tools=config.mcp.enabled_tools,
+            ),
+        }
+    )
+    with pytest.raises(ValueError, match="safe schema"):
+        build_codex_command(unsafe)
+
+    environment = dict(config.mcp.env)
+    environment["LABRAT_MCP_CONNECTIONS"] = json.dumps(
+        {
+            "main": {
+                "db_type": "duckdb",
+                "db_path": str(tmp_path / "db.duckdb"),
+                "read_only": True,
+                "api_key": "hunter2",
+            }
+        }
+    )
+    unsafe_connection = CodexHostConfig(
+        **{
+            **config.__dict__,
+            "mcp": McpLaunch(
+                command=config.mcp.command,
+                args=config.mcp.args,
+                cwd=config.mcp.cwd,
+                env=tuple(environment.items()),
+                enabled_tools=config.mcp.enabled_tools,
+            ),
+        }
+    )
+    with pytest.raises(ValueError, match="read-only DuckDB"):
+        build_codex_command(unsafe_connection)
+
+
 def test_build_command_requires_pinned_version_and_empty_workspace(tmp_path: Path) -> None:
     config = _config(tmp_path)
     wrong_version = CodexHostConfig(**{**config.__dict__, "expected_version": "0.999.0"})
@@ -158,6 +233,22 @@ def test_build_command_requires_pinned_version_and_empty_workspace(tmp_path: Pat
 
     (config.workspace_dir / "unexpected.txt").write_text("x", encoding="utf-8")
     with pytest.raises(ValueError, match="empty"):
+        build_codex_command(config)
+
+
+def test_build_command_rejects_overlapping_and_symlinked_private_paths(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    nested = CodexHostConfig(
+        **{**config.__dict__, "artifact_dir": config.workspace_dir / "artifacts"}
+    )
+    with pytest.raises(ValueError, match="overlap"):
+        build_codex_command(nested)
+
+    config.codex_home.rmdir()
+    config.codex_home.symlink_to(config.workspace_dir, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
         build_codex_command(config)
 
 
@@ -628,3 +719,413 @@ def test_reconcile_mcp_trace_accepts_empty_and_rejects_mismatch(tmp_path: Path) 
     )
     with pytest.raises(CodexAuditError):
         reconcile_mcp_trace((NativeMcpCall("run_sql", {"query": "SELECT 1"}, "completed"),), trace)
+
+
+class _FakeProcess:
+    def __init__(
+        self,
+        *,
+        returncode: int = 0,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        callback: Any = None,
+        timeout: bool = False,
+        cancelled: bool = False,
+    ) -> None:
+        self.returncode = returncode
+        self.stdout_bytes = stdout
+        self.stderr_bytes = stderr
+        self.callback = callback
+        self.timeout = timeout
+        self.cancelled = cancelled
+        self.input: bytes | None = None
+        self.terminated = False
+        self.killed = False
+
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+        self.input = input
+        if self.timeout:
+            raise TimeoutError
+        if self.cancelled:
+            raise asyncio.CancelledError
+        if self.callback is not None:
+            self.callback()
+        return self.stdout_bytes, self.stderr_bytes
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
+def _runner_events(*, mcp: bool = False, answer: str = "answer") -> bytes:
+    records: list[dict[str, object]] = [
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.started"},
+    ]
+    if mcp:
+        for item_id, tool, arguments in (
+            ("m1", "list_tables", {}),
+            ("m2", "run_sql", {"query": "SELECT 1"}),
+        ):
+            base = {
+                "id": item_id,
+                "type": "mcp_tool_call",
+                "server": "labrat",
+                "tool": tool,
+                "arguments": arguments,
+            }
+            records.extend(
+                (
+                    {"type": "item.started", "item": {**base, "status": "in_progress"}},
+                    {"type": "item.completed", "item": {**base, "status": "completed"}},
+                )
+            )
+    records.extend(
+        (
+            {
+                "type": "item.completed",
+                "item": {"id": "answer", "type": "agent_message", "text": answer},
+            },
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 64,
+                    "output_tokens": 10,
+                    "reasoning_output_tokens": 4,
+                },
+            },
+        )
+    )
+    return b"".join(json.dumps(record).encode() + b"\n" for record in records)
+
+
+def _write_runner_rollouts(
+    config: CodexHostConfig,
+    *,
+    count: int = 1,
+    usage: dict[str, int] | None = None,
+) -> None:
+    sessions = config.codex_home / "sessions" / "2026" / "07"
+    sessions.mkdir(parents=True, exist_ok=True)
+    usage = usage or _usage_values(100, 64, 10, 4)
+    records = [
+        {"type": "session_meta", "payload": {"id": "thread-1"}},
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": usage, "total_token_usage": usage},
+            },
+        },
+    ]
+    for index in range(count):
+        _write_rollout(sessions / f"rollout-thread-1-{index}.jsonl", records)
+
+
+def _install_fake_processes(
+    monkeypatch: pytest.MonkeyPatch,
+    config: CodexHostConfig,
+    *,
+    events: bytes | None = None,
+    answer: str = "answer",
+    rollout_count: int = 1,
+    trace: tuple[dict[str, object], ...] = (),
+    version: bytes = b"codex-cli 0.144.1\n",
+    exec_returncode: int = 0,
+    exec_stderr: bytes = b"",
+    timeout: bool = False,
+    cancelled: bool = False,
+    filename_collision: bool = False,
+    rollout_usage: dict[str, int] | None = None,
+) -> tuple[list[tuple[tuple[str, ...], dict[str, Any]]], list[_FakeProcess]]:
+    calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    processes: list[_FakeProcess] = []
+
+    def finish_exec() -> None:
+        (config.artifact_dir / "final_answer.txt").write_text(answer, encoding="utf-8")
+        if rollout_count:
+            _write_runner_rollouts(config, count=rollout_count, usage=rollout_usage)
+        if filename_collision:
+            collision = config.codex_home / "sessions" / "rollout-thread-1-collision.jsonl"
+            _write_rollout(
+                collision,
+                [{"type": "session_meta", "payload": {"id": "different-thread"}}],
+            )
+        trace_path = config.artifact_dir / "mcp_tool_calls.jsonl"
+        trace_path.write_text(
+            "".join(json.dumps(record) + "\n" for record in trace), encoding="utf-8"
+        )
+
+    async def create(*argv: str, **kwargs: Any) -> _FakeProcess:
+        calls.append((argv, kwargs))
+        if argv[1:] == ("--version",):
+            process = _FakeProcess(stdout=version)
+        else:
+            process = _FakeProcess(
+                returncode=exec_returncode,
+                stdout=_runner_events() if events is None else events,
+                stderr=exec_stderr,
+                callback=finish_exec if exec_returncode == 0 and not timeout else None,
+                timeout=timeout,
+                cancelled=cancelled,
+            )
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    return calls, processes
+
+
+@pytest.mark.asyncio
+async def test_run_codex_success_is_auth_only_scrubbed_and_trace_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, mcp=False)
+    (config.source_codex_home / "config.toml").write_text("secret=true", encoding="utf-8")
+    (config.source_codex_home / "plugins").mkdir()
+    calls, processes = _install_fake_processes(monkeypatch, config)
+    parent = {
+        "PATH": "/safe/bin",
+        "HOME": "/safe/home",
+        "TMPDIR": "/safe/tmp",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "OPENAI_API_KEY": "secret",
+        "CODEX_API_KEY": "secret",
+        "PYTHONPATH": "/unsafe",
+        "OTHER": "drop",
+    }
+
+    result = await run_codex("private prompt", config, parent_env=parent)
+
+    assert result.final_text == "answer"
+    assert result.request_usage == (RequestUsage(1, 100, 64, 36, 10, 4),)
+    assert calls[0][0] == (str(config.executable), "--version")
+    assert calls[1][0][-1] == "-"
+    assert processes[1].input == b"private prompt"
+    assert calls[1][1]["env"] == {
+        "PATH": "/safe/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "HOME": str(config.codex_home),
+        "TMPDIR": str(config.codex_home / "tmp"),
+        "CODEX_HOME": str(config.codex_home),
+    }
+    assert calls[1][1]["cwd"] == str(config.workspace_dir)
+    assert calls[1][1]["start_new_session"] is True
+    assert tuple(config.codex_home.iterdir()) == ()
+    assert stat.S_IMODE(config.artifact_dir.stat().st_mode) == 0o700
+    for artifact in config.artifact_dir.iterdir():
+        assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+    assert (config.artifact_dir / "codex_events.jsonl").read_bytes() == _runner_events()
+    usage_rows = [
+        json.loads(line)
+        for line in (config.artifact_dir / "codex_token_usage.jsonl").read_text().splitlines()
+    ]
+    assert set(usage_rows[0]) == {
+        "request_index",
+        "input_tokens",
+        "cached_input_tokens",
+        "noncached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_codex_reconciles_two_mcp_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    trace = (
+        {"tool": "list_tables", "input": {}, "ok": True},
+        {"tool": "run_sql", "input": {"query": "SELECT 1"}, "ok": True},
+    )
+    _install_fake_processes(monkeypatch, config, events=_runner_events(mcp=True), trace=trace)
+
+    result = await run_codex("prompt", config)
+
+    assert result.tool_calls == 2
+    assert result.latency_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_run_codex_rejects_version_answer_and_rollout_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    _install_fake_processes(monkeypatch, config, version=b"codex-cli 0.143.0\n")
+    with pytest.raises(CodexAuditError, match="version"):
+        await run_codex("prompt", config)
+
+    answer_root = tmp_path / "answer-mismatch"
+    answer_root.mkdir()
+    config = _config(answer_root)
+    _install_fake_processes(monkeypatch, config, answer="different")
+    with pytest.raises(CodexAuditError, match="answer"):
+        await run_codex("prompt", config)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollout_count", [0, 2])
+async def test_run_codex_requires_exactly_one_matching_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rollout_count: int
+) -> None:
+    config = _config(tmp_path)
+    _install_fake_processes(monkeypatch, config, rollout_count=rollout_count)
+    with pytest.raises(CodexAuditError, match="rollout"):
+        await run_codex("prompt", config)
+
+
+@pytest.mark.asyncio
+async def test_run_codex_ignores_filename_only_rollout_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    _install_fake_processes(monkeypatch, config, filename_collision=True)
+    result = await run_codex("prompt", config)
+    assert result.thread_id == "thread-1"
+
+
+@pytest.mark.asyncio
+async def test_run_codex_reconciles_rollout_totals_with_terminal_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    _install_fake_processes(
+        monkeypatch,
+        config,
+        rollout_usage=_usage_values(101, 64, 10, 4),
+    )
+    with pytest.raises(CodexAuditError, match="terminal usage"):
+        await run_codex("prompt", config)
+
+
+@pytest.mark.asyncio
+async def test_run_codex_classifies_structured_zero_exit_rate_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    events = (json.dumps({"type": "error", "message": "HTTP 429 usage limit"}) + "\n").encode()
+    _install_fake_processes(monkeypatch, config, events=events)
+    with pytest.raises(CodexInfrastructureError) as raised:
+        await run_codex("prompt", config)
+    assert raised.value.reason == "rate_limit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["429", "The author count is 12."])
+async def test_run_codex_does_not_misclassify_normal_numeric_or_author_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    config = _config(tmp_path)
+    _install_fake_processes(
+        monkeypatch,
+        config,
+        events=_runner_events(answer=answer),
+        answer=answer,
+    )
+    result = await run_codex("prompt", config)
+    assert result.final_text == answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stderr", "reason"),
+    [
+        (b"HTTP 429 usage limit private-prompt", "rate_limit"),
+        (b"unauthorized login private-prompt", "auth"),
+        (b"connection temporarily unavailable private-prompt", "transport"),
+        (b"unexpected private-prompt", "process"),
+    ],
+)
+async def test_run_codex_classifies_nonzero_without_leaking_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: bytes,
+    reason: str,
+) -> None:
+    config = _config(tmp_path)
+    _install_fake_processes(monkeypatch, config, exec_returncode=7, exec_stderr=stderr)
+    with pytest.raises(CodexInfrastructureError) as raised:
+        await run_codex("private-prompt", config)
+    assert raised.value.reason == reason
+    assert raised.value.meta == {"exit_code": 7}
+    assert "private-prompt" not in str(raised.value)
+    assert "private-prompt" not in repr(raised.value.meta)
+
+
+@pytest.mark.asyncio
+async def test_run_codex_timeout_terminates_process_without_leaking_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    _, processes = _install_fake_processes(monkeypatch, config, timeout=True)
+    with pytest.raises(CodexInfrastructureError) as raised:
+        await run_codex("private prompt", config)
+    assert raised.value.reason == "timeout"
+    assert processes[-1].terminated is True
+    assert "private prompt" not in str(raised.value)
+    assert tuple(config.codex_home.iterdir()) == ()
+
+
+@pytest.mark.asyncio
+async def test_run_codex_cancellation_terminates_process_group_and_scrubs_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    _, processes = _install_fake_processes(monkeypatch, config, cancelled=True)
+    with pytest.raises(asyncio.CancelledError):
+        await run_codex("private prompt", config)
+    assert processes[-1].terminated is True
+    assert tuple(config.codex_home.iterdir()) == ()
+
+
+@pytest.mark.asyncio
+async def test_run_codex_refuses_nonempty_private_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    (config.codex_home / "stale").write_text("x", encoding="utf-8")
+    _install_fake_processes(monkeypatch, config)
+    with pytest.raises(CodexAuditError, match="home"):
+        await run_codex("prompt", config)
+
+
+@pytest.mark.asyncio
+async def test_run_codex_refuses_to_overwrite_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    config.artifact_dir.mkdir()
+    (config.artifact_dir / "stale").write_text("x", encoding="utf-8")
+    _install_fake_processes(monkeypatch, config)
+    with pytest.raises(CodexAuditError, match="artifact"):
+        await run_codex("prompt", config)
+
+
+@pytest.mark.asyncio
+async def test_run_codex_scrubs_auth_after_partial_preparation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    original = codex_host_module._create_private_file  # pyright: ignore[reportPrivateUsage]
+    calls = 0
+
+    def fail_after_auth(path: Path, content: bytes = b"") -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise CodexAuditError("synthetic preparation failure")
+        original(path, content)
+
+    monkeypatch.setattr(codex_host_module, "_create_private_file", fail_after_auth)
+    with pytest.raises(CodexAuditError, match="synthetic"):
+        await run_codex("prompt", config)
+    assert tuple(config.codex_home.iterdir()) == ()

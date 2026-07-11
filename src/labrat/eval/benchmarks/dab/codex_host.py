@@ -7,10 +7,15 @@ token-usage traces.  Process orchestration is added at the suite seam.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
+import shutil
+import signal
+import time
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -52,6 +57,14 @@ _USAGE_KEYS = (
 _TOTAL_USAGE_KEYS = (*_USAGE_KEYS, "total_tokens")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXPECTED_CLI_VERSION = "0.144.1"
+_DIAGNOSTIC_MCP_ENV_KEYS = frozenset(
+    {
+        "LABRAT_MCP_CONNECTIONS",
+        "LABRAT_MCP_PRIMARY",
+        "LABRAT_MCP_LOG_DIR",
+        "LABRAT_MCP_POLICY_PATH",
+    }
+)
 
 
 class CodexAuditError(RuntimeError):
@@ -93,6 +106,7 @@ class CodexHostConfig:
     expected_version: str
     model: str
     reasoning_effort: str
+    source_codex_home: Path
     codex_home: Path
     workspace_dir: Path
     artifact_dir: Path
@@ -200,6 +214,41 @@ def _toml_env(values: tuple[tuple[str, str], ...]) -> str:
     return "{" + ",".join(fields) + "}"
 
 
+def _validate_diagnostic_mcp(mcp: McpLaunch) -> None:
+    if not Path(mcp.command).is_absolute() or mcp.args != ("-m", "labrat.mcp.server"):
+        raise ValueError("Diagnostic MCP launcher must use an absolute Python module command")
+    environment = dict(mcp.env)
+    if len(environment) != len(mcp.env) or set(environment) != set(_DIAGNOSTIC_MCP_ENV_KEYS):
+        raise ValueError("Diagnostic MCP environment must use the exact safe schema")
+    primary = environment["LABRAT_MCP_PRIMARY"]
+    if not _ENV_NAME.fullmatch(primary):
+        raise ValueError("Diagnostic MCP primary must be a plain identifier")
+    for key in ("LABRAT_MCP_LOG_DIR", "LABRAT_MCP_POLICY_PATH"):
+        if not Path(environment[key]).is_absolute():
+            raise ValueError("Diagnostic MCP artifact paths must be absolute")
+    try:
+        raw_connections = json.loads(environment["LABRAT_MCP_CONNECTIONS"])
+    except (json.JSONDecodeError, RecursionError):
+        raise ValueError("Diagnostic MCP connections must be valid JSON") from None
+    if type(raw_connections) is not dict:
+        raise ValueError("Diagnostic MCP must expose exactly one primary connection")
+    connections = cast(dict[str, Any], raw_connections)
+    if set(connections) != {primary}:
+        raise ValueError("Diagnostic MCP must expose exactly one primary connection")
+    raw_spec = connections[primary]
+    if type(raw_spec) is not dict:
+        raise ValueError("Diagnostic MCP connection must be one read-only DuckDB")
+    spec = cast(dict[str, Any], raw_spec)
+    if (
+        set(spec) != {"db_type", "db_path", "read_only"}
+        or spec.get("db_type") != "duckdb"
+        or type(spec.get("db_path")) is not str
+        or not Path(spec["db_path"]).is_absolute()
+        or spec.get("read_only") is not True
+    ):
+        raise ValueError("Diagnostic MCP connection must be one read-only DuckDB")
+
+
 def _validate_config(config: CodexHostConfig) -> None:
     if config.expected_version != _EXPECTED_CLI_VERSION:
         raise ValueError(f"Native Codex CLI must be pinned to {_EXPECTED_CLI_VERSION}")
@@ -210,11 +259,28 @@ def _validate_config(config: CodexHostConfig) -> None:
         raise ValueError(f"Unsupported effort {config.reasoning_effort!r} for {config.model}")
     if config.timeout_seconds <= 0 or isinstance(config.timeout_seconds, bool):
         raise ValueError("Native Codex timeout must be positive")
-    paths = (config.executable, config.codex_home, config.workspace_dir, config.artifact_dir)
+    paths = (
+        config.executable,
+        config.source_codex_home,
+        config.codex_home,
+        config.workspace_dir,
+        config.artifact_dir,
+    )
     if any(not path.is_absolute() for path in paths):
         raise ValueError("Native Codex paths must be absolute")
-    if len({config.codex_home, config.workspace_dir, config.artifact_dir}) != 3:
-        raise ValueError("Codex home, workspace, and artifacts must be distinct")
+    private_paths = (
+        config.source_codex_home,
+        config.codex_home,
+        config.workspace_dir,
+        config.artifact_dir,
+    )
+    if any(path.is_symlink() for path in private_paths if path.exists()):
+        raise ValueError("Native Codex private paths cannot be symlinks")
+    resolved = tuple(path.resolve() for path in private_paths)
+    for index, left in enumerate(resolved):
+        for right in resolved[index + 1 :]:
+            if left == right or left in right.parents or right in left.parents:
+                raise ValueError("Source, Codex home, workspace, and artifacts must not overlap")
     if not config.workspace_dir.is_dir() or any(config.workspace_dir.iterdir()):
         raise ValueError("Native Codex workspace must exist and be empty")
     if config.mcp is not None:
@@ -224,6 +290,7 @@ def _validate_config(config: CodexHostConfig) -> None:
             config.mcp.enabled_tools
         ):
             raise ValueError("MCP enabled tools must be nonempty and unique")
+        _validate_diagnostic_mcp(config.mcp)
 
 
 def build_codex_command(config: CodexHostConfig) -> list[str]:
@@ -518,3 +585,349 @@ def reconcile_mcp_trace(native_calls: tuple[NativeMcpCall, ...], server_trace_pa
         expected_ok = native.status == "completed"
         if native.tool != tool or native.arguments != arguments or ok is not expected_ok:
             raise CodexAuditError("Native and MCP server traces disagree")
+
+
+_SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL")
+_ARTIFACT_NAMES = (
+    "codex_events.jsonl",
+    "final_answer.txt",
+    "codex_token_usage.jsonl",
+    "mcp_tool_calls.jsonl",
+)
+_FINAL_ANSWER_SENTINEL = b"LABRAT_CODEX_FINAL_ANSWER_NOT_WRITTEN"
+
+
+def _minimal_environment(
+    config: CodexHostConfig, parent_env: Mapping[str, str] | None
+) -> dict[str, str]:
+    source = os.environ if parent_env is None else parent_env
+    environment = {key: source[key] for key in _SAFE_ENV_KEYS if key in source}
+    environment["HOME"] = str(config.codex_home)
+    environment["TMPDIR"] = str(config.codex_home / "tmp")
+    environment["CODEX_HOME"] = str(config.codex_home)
+    return environment
+
+
+def _create_private_file(path: Path, content: bytes = b"") -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+    except OSError:
+        raise CodexAuditError("Unable to create native Codex private file") from None
+
+
+def _prepare_private_files(config: CodexHostConfig) -> None:
+    auth_source = config.source_codex_home / "auth.json"
+    if not auth_source.is_file() or auth_source.is_symlink():
+        raise CodexAuditError("Native Codex auth source is unavailable")
+    if not config.codex_home.is_dir() or any(config.codex_home.iterdir()):
+        raise CodexAuditError("Native Codex home must exist and be empty")
+    if config.artifact_dir.exists():
+        if not config.artifact_dir.is_dir() or any(config.artifact_dir.iterdir()):
+            raise CodexAuditError("Native Codex artifact directory must be empty")
+    else:
+        config.artifact_dir.mkdir(parents=True, mode=0o700)
+
+    auth_target = config.codex_home / "auth.json"
+    try:
+        config.codex_home.chmod(0o700)
+        config.artifact_dir.chmod(0o700)
+        (config.codex_home / "tmp").mkdir(mode=0o700)
+        source_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        source_descriptor = os.open(auth_source, source_flags)
+        try:
+            with os.fdopen(source_descriptor, "rb") as source_handle:
+                _create_private_file(auth_target, source_handle.read())
+        except Exception:
+            raise
+        for name in _ARTIFACT_NAMES:
+            content = _FINAL_ANSWER_SENTINEL if name == "final_answer.txt" else b""
+            _create_private_file(config.artifact_dir / name, content)
+    except OSError:
+        raise CodexAuditError("Unable to prepare native Codex private files") from None
+
+
+def _scrub_codex_home(codex_home: Path) -> None:
+    for child in tuple(codex_home.iterdir()):
+        try:
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        except OSError:
+            # The caller owns this already-private temporary directory and removes
+            # it after the diagnostic. Cleanup here is defense in depth.
+            continue
+
+
+def _failure_reason(
+    stderr: bytes,
+) -> Literal["auth", "transport", "process", "rate_limit"]:
+    text = stderr.decode("utf-8", errors="replace")[:4096].lower()
+    if any(marker in text for marker in ("429", "rate limit", "usage limit", "session limit")):
+        return "rate_limit"
+    if any(marker in text for marker in ("login", "auth", "unauthorized")):
+        return "auth"
+    if any(marker in text for marker in ("connection", "transport", "temporarily unavailable")):
+        return "transport"
+    return "process"
+
+
+def _structured_failure_reason(
+    stdout: bytes,
+) -> Literal["auth", "transport", "process", "rate_limit"] | None:
+    try:
+        lines = stdout.decode("utf-8", errors="strict").splitlines()
+    except UnicodeError:
+        return "process"
+    last_agent_text: str | None = None
+    for raw in lines:
+        try:
+            event = json.loads(raw)
+        except (json.JSONDecodeError, RecursionError):
+            continue
+        if type(event) is not dict:
+            continue
+        event = cast(dict[str, Any], event)
+        event_type = event.get("type")
+        encoded = json.dumps(event, ensure_ascii=True).encode("utf-8")[:4096]
+        if event_type in {"error", "turn.failed"}:
+            return _failure_reason(encoded)
+        if event_type == "item.completed":
+            item = event.get("item")
+            if type(item) is dict:
+                item_mapping = cast(dict[str, Any], item)
+            else:
+                continue
+            if item_mapping.get("type") == "agent_message":
+                text = item_mapping.get("text")
+                if isinstance(text, str):
+                    last_agent_text = text
+    if last_agent_text is not None:
+        text = last_agent_text.casefold()[:4096]
+        if any(
+            marker in text
+            for marker in (
+                "rate limit",
+                "usage limit",
+                "session limit",
+                "too many requests",
+                "http 429",
+                "api error: 429",
+            )
+        ):
+            return "rate_limit"
+        if any(
+            marker in text
+            for marker in ("authentication required", "not logged in", "unauthorized")
+        ):
+            return "auth"
+    return None
+
+
+async def _stop_process(process: asyncio.subprocess.Process) -> None:
+    pid = getattr(process, "pid", None)
+    try:
+        if type(pid) is int:
+            os.killpg(pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=1.0)
+    except TimeoutError:
+        try:
+            if type(pid) is int:
+                os.killpg(pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            return
+        await process.wait()
+
+
+async def _invoke(
+    argv: list[str],
+    *,
+    environment: Mapping[str, str],
+    stdin: bytes,
+    timeout_seconds: int,
+    cwd: Path,
+) -> tuple[int, bytes, bytes]:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=dict(environment),
+            cwd=str(cwd),
+            start_new_session=True,
+        )
+    except OSError:
+        raise CodexInfrastructureError("process") from None
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(input=stdin), timeout=timeout_seconds
+        )
+    except TimeoutError:
+        await _stop_process(process)
+        raise CodexInfrastructureError("timeout") from None
+    except asyncio.CancelledError:
+        await asyncio.shield(_stop_process(process))
+        raise
+    returncode = process.returncode
+    if type(returncode) is not int:
+        raise CodexInfrastructureError("process")
+    return returncode, stdout, stderr
+
+
+def _matching_rollout(config: CodexHostConfig, thread_id: str) -> Path:
+    sessions = config.codex_home / "sessions"
+    matches: list[Path] = []
+    paths = sorted(sessions.rglob("*.jsonl")) if sessions.is_dir() else []
+    for path in paths:
+        metadata_match = False
+        for raw in _read_utf8_lines(path, category="native rollout"):
+            if not raw.strip():
+                continue
+            record = _json_line(raw, category="native rollout record")
+            if record.get("type") != "session_meta":
+                continue
+            payload = _mapping(record.get("payload"), category="native session metadata")
+            metadata_match = metadata_match or payload.get("id") == thread_id
+        if metadata_match:
+            matches.append(path)
+    if len(matches) != 1:
+        raise CodexAuditError("Expected exactly one native rollout")
+    return matches[0]
+
+
+def _write_request_usage(path: Path, usage: tuple[RequestUsage, ...]) -> None:
+    rows = (
+        {
+            "request_index": item.request_index,
+            "input_tokens": item.input_tokens,
+            "cached_input_tokens": item.cached_input_tokens,
+            "noncached_input_tokens": item.noncached_input_tokens,
+            "output_tokens": item.output_tokens,
+            "reasoning_output_tokens": item.reasoning_output_tokens,
+        }
+        for item in usage
+    )
+    path.write_text(
+        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _reconcile_request_usage(aggregate: dict[str, int], requests: tuple[RequestUsage, ...]) -> None:
+    totals = {
+        "input_tokens": sum(item.input_tokens for item in requests),
+        "cached_input_tokens": sum(item.cached_input_tokens for item in requests),
+        "output_tokens": sum(item.output_tokens for item in requests),
+        "reasoning_output_tokens": sum(item.reasoning_output_tokens for item in requests),
+    }
+    if totals != aggregate:
+        raise CodexAuditError("Native request usage disagrees with terminal usage")
+
+
+async def run_codex(
+    prompt: str,
+    config: CodexHostConfig,
+    *,
+    parent_env: Mapping[str, str] | None = None,
+) -> NativeRunResult:
+    """Run one isolated, diagnostic-only native Codex turn and audit its evidence."""
+    command = build_codex_command(config)
+    environment = _minimal_environment(config, parent_env)
+    if not config.codex_home.is_dir() or any(config.codex_home.iterdir()):
+        raise CodexAuditError("Native Codex home must exist and be empty")
+    if config.artifact_dir.exists() and (
+        not config.artifact_dir.is_dir() or any(config.artifact_dir.iterdir())
+    ):
+        raise CodexAuditError("Native Codex artifact directory must be empty")
+
+    try:
+        _prepare_private_files(config)
+        if any(config.workspace_dir.iterdir()):
+            raise CodexAuditError("Native Codex workspace changed before launch")
+        version_code, version_stdout, version_stderr = await _invoke(
+            [str(config.executable), "--version"],
+            environment=environment,
+            stdin=b"",
+            timeout_seconds=min(config.timeout_seconds, 10),
+            cwd=config.workspace_dir,
+        )
+        if version_code != 0:
+            raise CodexInfrastructureError(
+                _failure_reason(version_stderr), meta={"exit_code": version_code}
+            )
+        try:
+            version = version_stdout.decode("utf-8", errors="strict").strip()
+        except UnicodeError:
+            raise CodexAuditError("Native Codex CLI version is malformed") from None
+        if version not in {"codex-cli 0.144.1", "codex 0.144.1"}:
+            raise CodexAuditError("Native Codex CLI version mismatch")
+
+        started = time.monotonic()
+        returncode, stdout, stderr = await _invoke(
+            command,
+            environment=environment,
+            stdin=prompt.encode("utf-8"),
+            timeout_seconds=config.timeout_seconds,
+            cwd=config.workspace_dir,
+        )
+        latency = time.monotonic() - started
+        events_path = config.artifact_dir / "codex_events.jsonl"
+        try:
+            events_path.write_bytes(stdout)
+        except OSError:
+            raise CodexAuditError("Unable to persist native Codex events") from None
+        structured_reason = _structured_failure_reason(stdout)
+        if returncode != 0:
+            stderr_reason = _failure_reason(stderr)
+            reason = structured_reason if stderr_reason == "process" else stderr_reason
+            raise CodexInfrastructureError(reason or "process", meta={"exit_code": returncode})
+        if structured_reason is not None:
+            raise CodexInfrastructureError(structured_reason)
+        try:
+            event_lines = stdout.decode("utf-8", errors="strict").splitlines()
+        except UnicodeError:
+            raise CodexAuditError("Malformed native Codex events") from None
+
+        parsed = parse_codex_events(
+            event_lines,
+            enabled_tools=() if config.mcp is None else config.mcp.enabled_tools,
+        )
+        final_path = config.artifact_dir / "final_answer.txt"
+        try:
+            final_text = final_path.read_text(encoding="utf-8", errors="strict")
+        except (OSError, UnicodeError):
+            raise CodexAuditError("Native Codex final answer is malformed") from None
+        if final_text == _FINAL_ANSWER_SENTINEL.decode("ascii") or final_text != parsed.final_text:
+            raise CodexAuditError("Native Codex final answer disagrees with events")
+
+        request_usage = extract_request_usage(
+            _matching_rollout(config, parsed.thread_id), parsed.thread_id
+        )
+        _reconcile_request_usage(parsed.usage, request_usage)
+        reconcile_mcp_trace(parsed.mcp_calls, config.artifact_dir / "mcp_tool_calls.jsonl")
+        try:
+            _write_request_usage(config.artifact_dir / "codex_token_usage.jsonl", request_usage)
+        except OSError:
+            raise CodexAuditError("Unable to persist native Codex usage") from None
+        return NativeRunResult(
+            final_text=parsed.final_text,
+            tool_calls=parsed.tool_calls,
+            latency_seconds=latency,
+            thread_id=parsed.thread_id,
+            usage=parsed.usage,
+            request_usage=request_usage,
+            mcp_calls=parsed.mcp_calls,
+        )
+    finally:
+        _scrub_codex_home(config.codex_home)
