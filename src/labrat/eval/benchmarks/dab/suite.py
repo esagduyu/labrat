@@ -16,9 +16,12 @@ Real DAB repo layout (~/repos/DataAgentBench/):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
+import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Iterable
@@ -28,13 +31,23 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from labrat.agent.verifier import LLMFn
 
+from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.providers import RateLimitError, build_provider
 from labrat.agent.verifier import provider_llm_fn
+from labrat.eval.benchmarks.dab.codex_host import (
+    CodexAuditError,
+    CodexHostConfig,
+    CodexInfrastructureError,
+    McpLaunch,
+    NativeRunResult,
+    run_codex,
+)
 from labrat.eval.benchmarks.dab.env import (
     DabTaskEnv,
     build_profiling_connections,
     introspect_env_catalogs,
 )
+from labrat.eval.benchmarks.dab.tool_profiles import resolve_tool_profile
 from labrat.eval.types import (
     AggregateScore,
     BenchmarkReport,
@@ -43,8 +56,9 @@ from labrat.eval.types import (
 )
 from labrat.maze.cartographer import cartograph_prepass
 from labrat.maze.scent_audit import detect_contamination as _detect_contamination
+from labrat.mcp.policy import McpPolicy, PolicyLimits, canonical_policy_bytes, policy_digest
 
-Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]
+Driver = Literal["raw-bash", "labrat-agent", "claude-mcp", "codex-mcp"]
 
 # Absolute path to the labrat repo root, needed when generating mcp-config files
 # that reference this codebase via `uv --directory <labrat>`.
@@ -418,6 +432,111 @@ def _build_claude_mcp_prompt(
     return "\n".join(prompt_lines)
 
 
+def _build_codex_mcp_prompt(
+    primary_name: str,
+    task: BenchmarkTask,
+    *,
+    max_tool_calls: int | None,
+    include_levers: bool,
+) -> str:
+    """Build the path-free opening prompt for the diagnostic native Codex host."""
+    tools = (
+        "profile_dataset",
+        "list_tables",
+        "describe_table",
+        "search_columns",
+        "link_schema",
+        "sample_rows",
+        "column_stats",
+        "run_sql",
+        "explain_sql",
+        "check_sql",
+        "explain_lineage",
+        "verify_join",
+        "workflow",
+    )
+    lines = [
+        "Use only the connected LabRat MCP server to answer this data-analysis question.",
+        f"The single read-only primary DuckDB database is named '{primary_name}'.",
+        "Available tools (exactly this core profile): " + ", ".join(tools) + ".",
+        "",
+        "Required workflow:",
+        "1. Call profile_dataset first; use link_schema for a wide or unfamiliar schema.",
+        "2. Use list_tables, describe_table, search_columns, sample_rows, and column_stats "
+        "to ground table grain and values.",
+        "3. Before a multi-table join, call verify_join. Use explain_sql, check_sql, and "
+        "explain_lineage when they reduce query risk.",
+        "4. Execute the answer-producing aggregation with run_sql; use workflow only to "
+        "track multi-step analytical progress.",
+    ]
+    if include_levers:
+        lines.extend(_dab_lever_lines())
+    lines.extend(("", "Question:", task.prompt, "", "Return one plain final answer."))
+    if max_tool_calls is not None:
+        lines.append(f"Budget: at most {max_tool_calls} tool calls. Plan accordingly.")
+    return "\n".join(lines)
+
+
+_CODEX_PROMOTED_ARTIFACTS = (
+    "codex_events.jsonl",
+    "final_answer.txt",
+    "codex_token_usage.jsonl",
+    "mcp_tool_calls.jsonl",
+)
+
+
+def _signed_codex_mcp_policy(
+    task: BenchmarkTask,
+    primary_name: str,
+    tools: tuple[str, ...],
+    schema_sha256: str,
+    *,
+    model: str,
+    effort: str,
+    max_tool_calls: int | None,
+    include_levers: bool,
+) -> McpPolicy:
+    manifest = json.dumps(
+        {
+            "task_id": task.id,
+            "prompt_sha256": hashlib.sha256(task.prompt.encode()).hexdigest(),
+            "profile": "dab-core-v1",
+            "schema_sha256": schema_sha256,
+            "model": model,
+            "effort": effort,
+            "max_tool_calls": max_tool_calls,
+            "include_levers": include_levers,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    policy = McpPolicy(
+        schema_version=1,
+        run_manifest_sha256=hashlib.sha256(manifest).hexdigest(),
+        task_id=task.id,
+        trial_num=0,
+        attempt_num=0,
+        primary_database=primary_name,
+        allowed_tools=tools,
+        source_grants=(),
+        mongo_grants=(),
+        limits=PolicyLimits(
+            max_rows=10_000,
+            max_sample_rows=1_000,
+            max_tables=1_000,
+            max_output_chars=2_000_000,
+            max_sql_chars=100_000,
+            max_identifier_chars=256,
+            max_mongo_depth=16,
+            max_mongo_filter_bytes=65_536,
+        ),
+        cartographer_enabled=False,
+        builder_sha256=hashlib.sha256(b"labrat-dab-codex-mcp-diagnostic-v1").hexdigest(),
+        digest="0" * 64,
+    )
+    return policy.model_copy(update={"digest": policy_digest(policy)})
+
+
 async def _run_cartographer(
     env_spec: DabTaskEnv,
     dataset: str,
@@ -653,8 +772,43 @@ class DabSuite:
         self._last_request_usage: list[dict[str, Any]] = []
 
         try:
+            if self._driver == "codex-mcp" and trial_num != 0:
+                raise CodexAuditError("Diagnostic Codex MCP permits only trial zero")
             final_text, tool_calls, latency = await self._run_trial_verified(
                 task, db_config_path, scratch_dir
+            )
+        except CodexAuditError:
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason="audit-error",
+                latency_seconds=0.0,
+                tool_calls=0,
+                artifact={"type": "text", "payload": "Native Codex audit failed"},
+                meta=self._usage_meta(),
+            )
+        except CodexInfrastructureError as exc:
+            meta = self._usage_meta()
+            if exc.meta:
+                meta["infrastructure"] = dict(exc.meta)
+            if exc.reason == "rate_limit":
+                reset = {
+                    key: value
+                    for key, value in exc.meta.items()
+                    if key in {"resets_at", "resets_in_seconds"}
+                }
+                if reset:
+                    meta["rate_limit"] = reset
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason=f"infra:{exc.reason}",
+                latency_seconds=0.0,
+                tool_calls=0,
+                artifact={"type": "text", "payload": "Native Codex infrastructure failed"},
+                meta=meta,
             )
         except Exception as exc:
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
@@ -1067,6 +1221,14 @@ class DabSuite:
         extra_instructions: str = "",
         diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
+        if self._driver == "codex-mcp":
+            return await self._run_trial_codex_mcp(
+                task,
+                db_config_path,
+                scratch_dir,
+                extra_instructions=extra_instructions,
+                diversity_index=diversity_index,
+            )
         if self._driver == "labrat-agent":
             return await self._run_trial_labrat_agent(
                 task,
@@ -1084,6 +1246,162 @@ class DabSuite:
                 diversity_index=diversity_index,
             )
         return await self._run_trial_raw_bash(task, db_config_path)
+
+    # ── diagnostic native Codex MCP driver ─────────────────────────────────
+
+    async def _run_trial_codex_mcp(
+        self,
+        task: BenchmarkTask,
+        db_config_path: Path,
+        scratch_dir: Path,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> tuple[str, int, float]:
+        from labrat.db.duckdb_engine import DuckDBConnection
+        from labrat.eval.benchmarks.dab.env import build_dab_task_env
+
+        restrictions = (
+            self._agent_reasoning is None,
+            self._agent_ledger,
+            self._agent_verify,
+            self._agent_max_turns is not None,
+            self._cartograph,
+            self._cartograph_semantics,
+            self._consensus_k is not None,
+            self._reverify,
+            self._argue_rounds != 0,
+            self._postverify,
+            bool(extra_instructions),
+            diversity_index is not None,
+        )
+        if any(restrictions):
+            raise CodexAuditError("Unsupported diagnostic Codex MCP configuration")
+        effort = self._agent_reasoning
+        if effort is None:  # narrowed by the fail-closed restriction above
+            raise CodexAuditError("Native Codex reasoning effort is required")
+
+        scratch_dir = scratch_dir.resolve()
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        env_spec = build_dab_task_env(db_config_path.resolve())
+        ctx = env_spec.ctx
+        if env_spec.attachable or env_spec.mongo or len(ctx.connections) != 1:
+            raise CodexAuditError("Diagnostic Codex MCP requires one DuckDB database")
+        primary_name = ctx.primary
+        primary_conn = ctx.connections.get(primary_name)
+        if not isinstance(primary_conn, DuckDBConnection):
+            raise CodexAuditError("Diagnostic Codex MCP requires one DuckDB database")
+
+        profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+        policy = _signed_codex_mcp_policy(
+            task,
+            primary_name,
+            profile.tools,
+            profile.schema_sha256,
+            model=self._agent_model,
+            effort=effort,
+            max_tool_calls=self._agent_max_tool_calls,
+            include_levers=self._agent_levers,
+        )
+        policy_path = scratch_dir / "codex_mcp_policy.json"
+        try:
+            policy_path.write_bytes(canonical_policy_bytes(policy, include_digest=True))
+        except OSError:
+            raise CodexAuditError("Unable to emit diagnostic MCP policy") from None
+
+        executable = shutil.which("codex")
+        if executable is None:
+            raise CodexAuditError("Native Codex CLI is unavailable")
+        source_home = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()
+        prompt = _build_codex_mcp_prompt(
+            primary_name,
+            task,
+            max_tool_calls=self._agent_max_tool_calls,
+            include_levers=self._agent_levers,
+        )
+
+        with (
+            tempfile.TemporaryDirectory(prefix="codex-native-", dir=scratch_dir) as native_root,
+            tempfile.TemporaryDirectory(prefix="codex-home-", dir=scratch_dir) as private_home,
+        ):
+            native_root_path = Path(native_root)
+            workspace_dir = native_root_path / "workspace"
+            artifact_dir = native_root_path / "artifacts"
+            workspace_dir.mkdir()
+            artifact_dir.mkdir()
+            launch = McpLaunch(
+                command=sys.executable,
+                args=("-m", "labrat.mcp.server"),
+                cwd=_LABRAT_ROOT,
+                env=(
+                    (
+                        "LABRAT_MCP_CONNECTIONS",
+                        json.dumps(
+                            {
+                                primary_name: {
+                                    "db_type": "duckdb",
+                                    "db_path": primary_conn.path,
+                                    "read_only": True,
+                                }
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                    ("LABRAT_MCP_PRIMARY", primary_name),
+                    ("LABRAT_MCP_LOG_DIR", str(artifact_dir)),
+                    ("LABRAT_MCP_POLICY_PATH", str(policy_path)),
+                ),
+                enabled_tools=profile.tools,
+            )
+            config = CodexHostConfig(
+                executable=Path(executable).resolve(),
+                expected_version="0.144.1",
+                model=self._agent_model,
+                reasoning_effort=effort,
+                source_codex_home=source_home,
+                codex_home=Path(private_home),
+                workspace_dir=workspace_dir,
+                artifact_dir=artifact_dir,
+                timeout_seconds=self._agent_timeout or _DAB_TIMEOUT,
+                mcp=launch,
+            )
+            native = await run_codex(prompt, config)
+            self._capture_native_codex_usage(native, effort=effort)
+            try:
+                for name in _CODEX_PROMOTED_ARTIFACTS:
+                    source = artifact_dir / name
+                    if not source.is_file():
+                        raise OSError
+                    shutil.copy2(source, scratch_dir / name)
+            except OSError:
+                raise CodexAuditError("Native Codex artifacts are incomplete") from None
+
+        return native.final_text, native.tool_calls, native.latency_seconds
+
+    def _capture_native_codex_usage(self, native: NativeRunResult, *, effort: str) -> None:
+        usage = native.usage
+        self._last_usage = {
+            "input_tokens": usage["input_tokens"],
+            "cached_tokens": usage["cached_input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "reasoning_tokens": usage["reasoning_output_tokens"],
+            "requests": len(native.request_usage),
+        }
+        self._last_request_usage = [
+            {
+                "request": item.request_index,
+                "model": self._agent_model,
+                "effort": effort,
+                "request_mode": "native_codex",
+                "input_tokens": item.input_tokens,
+                "cached_tokens": item.cached_input_tokens,
+                "noncached_tokens": item.noncached_input_tokens,
+                "output_tokens": item.output_tokens,
+                "reasoning_tokens": item.reasoning_output_tokens,
+            }
+            for item in native.request_usage
+        ]
 
     # ── raw-bash driver (Phase 1b baseline) ──────────────────────────────────
 
