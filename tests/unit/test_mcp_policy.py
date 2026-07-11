@@ -1,12 +1,16 @@
 import hashlib
 import json
+import os
+import stat
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+import labrat.mcp.policy as mcp_policy
 from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
 from labrat.mcp.policy import (
     MAX_IDENTIFIER_CHARS_CEILING,
@@ -107,6 +111,12 @@ def _assert_load_fails_schema_validation(path: Path, data: dict[str, Any]) -> No
     with pytest.raises(PolicyLoadError, match="schema validation") as exc_info:
         load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
     assert isinstance(exc_info.value.__cause__, ValidationError)
+
+
+def _model_construct_policy(**updates: object) -> McpPolicy:
+    data = _signed_policy().model_dump(mode="python")
+    data.update(updates)
+    return McpPolicy.model_construct(**data)
 
 
 class _Input(BaseModel):
@@ -530,10 +540,10 @@ def test_load_policy_allows_null_for_nullable_schema_name(tmp_path: Path) -> Non
 
 
 def test_load_policy_absent_env_returns_none_without_file_access(monkeypatch: Any) -> None:
-    def unexpected_read(*args: object, **kwargs: object) -> str:
+    def unexpected_open(*args: object, **kwargs: object) -> int:
         raise AssertionError("policy loader touched the filesystem")
 
-    monkeypatch.setattr(Path, "read_text", unexpected_read)
+    monkeypatch.setattr(mcp_policy.os, "open", unexpected_open)
 
     assert load_policy_from_env({}) is None
 
@@ -563,16 +573,136 @@ def test_load_policy_rejects_non_file_path(tmp_path: Path) -> None:
         load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(tmp_path)})
 
 
+def test_load_policy_rejects_final_component_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target-policy.json"
+    link = tmp_path / "policy-link.json"
+    _write_policy(target)
+    link.symlink_to(target)
+
+    with pytest.raises(PolicyLoadError, match="unable to open"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(link)})
+
+
+def test_load_policy_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "policy.fifo"
+    os.mkfifo(fifo)
+
+    with pytest.raises(PolicyLoadError, match="regular file"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(fifo)})
+
+
+def test_load_policy_rejects_real_oversized_regular_file(tmp_path: Path) -> None:
+    path = tmp_path / "oversized-policy.json"
+    path.write_bytes(b"x" * (mcp_policy.MAX_POLICY_BYTES + 1))
+
+    with pytest.raises(PolicyLoadError, match="too large"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+
+
+def test_load_policy_rejects_oversized_file_from_fstat(tmp_path: Path, monkeypatch: Any) -> None:
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+    closed: list[int] = []
+
+    monkeypatch.setattr(mcp_policy.os, "open", lambda path, flags: 41)
+    monkeypatch.setattr(
+        mcp_policy.os,
+        "fstat",
+        lambda fd: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o600,
+            st_size=mcp_policy.MAX_POLICY_BYTES + 1,
+        ),
+    )
+
+    def unexpected_read(fd: int, size: int) -> bytes:
+        raise AssertionError("oversized descriptor must not be read")
+
+    monkeypatch.setattr(mcp_policy.os, "read", unexpected_read)
+    monkeypatch.setattr(mcp_policy.os, "close", closed.append)
+
+    with pytest.raises(PolicyLoadError, match="too large"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+    assert closed == [41]
+
+
+@pytest.mark.parametrize("file_type", [stat.S_IFIFO, stat.S_IFCHR])
+def test_load_policy_rejects_nonregular_descriptor_types(
+    tmp_path: Path, monkeypatch: Any, file_type: int
+) -> None:
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+    closed: list[int] = []
+
+    monkeypatch.setattr(mcp_policy.os, "open", lambda path, flags: 42)
+    monkeypatch.setattr(
+        mcp_policy.os,
+        "fstat",
+        lambda fd: SimpleNamespace(st_mode=file_type | 0o600, st_size=0),
+    )
+    monkeypatch.setattr(mcp_policy.os, "close", closed.append)
+
+    with pytest.raises(PolicyLoadError, match="regular file"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+    assert closed == [42]
+
+
+def test_load_policy_uses_secure_flags_and_rejects_growth_past_ceiling(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+    opened: list[tuple[object, int]] = []
+    closed: list[int] = []
+
+    def fake_open(opened_path: object, flags: int) -> int:
+        opened.append((opened_path, flags))
+        return 43
+
+    monkeypatch.setattr(mcp_policy.os, "open", fake_open)
+    monkeypatch.setattr(
+        mcp_policy.os,
+        "fstat",
+        lambda fd: SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_size=1),
+    )
+    monkeypatch.setattr(
+        mcp_policy.os,
+        "read",
+        lambda fd, size: b"x" * (mcp_policy.MAX_POLICY_BYTES + 1),
+    )
+    monkeypatch.setattr(mcp_policy.os, "close", closed.append)
+
+    with pytest.raises(PolicyLoadError, match="too large"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+
+    assert len(opened) == 1
+    flags = opened[0][1]
+    assert flags & os.O_CLOEXEC
+    assert flags & os.O_NOFOLLOW
+    assert flags & os.O_NONBLOCK
+    assert closed == [43]
+
+
+def test_load_policy_fails_closed_without_no_follow_support(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    path = tmp_path / "policy.json"
+    _write_policy(path)
+    monkeypatch.delattr(mcp_policy.os, "O_NOFOLLOW")
+
+    with pytest.raises(PolicyLoadError, match="unsupported"):
+        load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
+
+
 def test_load_policy_wraps_unreadable_file(tmp_path: Path, monkeypatch: Any) -> None:
     path = tmp_path / "policy.json"
     _write_policy(path)
 
-    def deny_read(self: Path, *args: object, **kwargs: object) -> str:
+    def deny_open(path: object, flags: int) -> int:
         raise PermissionError("secret OS detail")
 
-    monkeypatch.setattr(Path, "read_text", deny_read)
+    monkeypatch.setattr(mcp_policy.os, "open", deny_open)
 
-    with pytest.raises(PolicyLoadError, match="unable to read"):
+    with pytest.raises(PolicyLoadError, match="unable to open"):
         load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
 
 
@@ -633,10 +763,111 @@ def test_load_policy_rejects_digest_mismatch(tmp_path: Path) -> None:
         load_policy_from_env({"LABRAT_MCP_POLICY_PATH": str(path)})
 
 
+def test_policy_session_rejects_placeholder_digest() -> None:
+    with pytest.raises(PolicyLoadError, match="digest mismatch"):
+        PolicySession(_policy())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("allowed_tools", ("run_sql",)),
+        ("source_grants", ()),
+        ("task_id", "changed-task"),
+        ("trial_num", 2),
+    ],
+)
+def test_policy_session_rejects_model_copy_with_stale_digest(field: str, value: object) -> None:
+    bypassed = _signed_policy().model_copy(update={field: value})
+
+    with pytest.raises(PolicyLoadError, match="digest mismatch"):
+        PolicySession(bypassed)
+
+
+def test_policy_session_rejects_model_copy_with_stale_nested_limits() -> None:
+    signed = _signed_policy()
+    changed_limits = signed.limits.model_copy(update={"max_rows": 999})
+    bypassed = signed.model_copy(update={"limits": changed_limits})
+
+    with pytest.raises(PolicyLoadError, match="digest mismatch"):
+        PolicySession(bypassed)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"trial_num": "1"},
+        {"allowed_tools": ["run_sql", "run_sql"]},
+    ],
+)
+def test_policy_session_rejects_model_construct_validation_bypasses(
+    updates: dict[str, object],
+) -> None:
+    bypassed = _model_construct_policy(**updates)
+
+    with pytest.raises(PolicyLoadError, match="validation"):
+        PolicySession(bypassed)
+
+
+def test_policy_session_rejects_model_construct_invalid_complete_limits() -> None:
+    data = _signed_policy().model_dump(mode="python")
+    limits = data["limits"]
+    assert isinstance(limits, dict)
+    limits["max_rows"] = 0
+    bypassed = McpPolicy.model_construct(**data)
+
+    with pytest.raises(PolicyLoadError, match="validation"):
+        PolicySession(bypassed)
+
+
+def test_policy_session_rejects_model_construct_nested_duplicate_grant_data() -> None:
+    data = _signed_policy().model_dump(mode="python")
+    source_grants = data["source_grants"]
+    assert isinstance(source_grants, tuple)
+    source = deepcopy(source_grants[0])
+    assert isinstance(source, dict)
+    relations = source["relations"]
+    assert isinstance(relations, tuple)
+    relation = deepcopy(relations[0])
+    assert isinstance(relation, dict)
+    columns = relation["columns"]
+    assert isinstance(columns, tuple)
+    relation["columns"] = (*columns, columns[0])
+    source["relations"] = (relation,)
+    bypassed = _model_construct_policy(source_grants=(source,))
+
+    with pytest.raises(PolicyLoadError, match="validation"):
+        PolicySession(bypassed)
+
+
+def test_policy_session_revalidates_mutable_constructed_data_into_fresh_frozen_copy() -> None:
+    raw = _signed_policy().model_dump(mode="json")
+    bypassed = McpPolicy.model_construct(**raw)
+
+    session = PolicySession(bypassed)
+
+    assert session.policy is not bypassed
+    assert isinstance(session.policy.allowed_tools, tuple)
+    assert isinstance(session.policy.source_grants, tuple)
+    assert isinstance(session.policy.source_grants[0].relations, tuple)
+    assert isinstance(session.policy.source_grants[0].relations[0].columns, tuple)
+    with pytest.raises(ValidationError):
+        session.policy.limits.max_rows = 2  # type: ignore[misc]
+
+
+def test_policy_session_accepts_correct_freshly_signed_policy() -> None:
+    signed = _signed_policy()
+
+    session = PolicySession(signed)
+
+    assert session.policy == signed
+    assert session.policy is not signed
+
+
 def test_policy_session_revalidates_allowed_tool_uniqueness_on_creation() -> None:
     bypassed = _signed_policy().model_copy(update={"allowed_tools": ("run_sql", "run_sql")})
 
-    with pytest.raises(PolicyLoadError, match="allowed tools"):
+    with pytest.raises(PolicyLoadError, match="integrity validation"):
         PolicySession(bypassed)
 
 

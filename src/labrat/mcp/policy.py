@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self, cast
@@ -32,6 +34,7 @@ MAX_SQL_CHARS_CEILING = 100_000
 MAX_IDENTIFIER_CHARS_CEILING = 256
 MAX_MONGO_DEPTH_CEILING = 16
 MAX_MONGO_FILTER_BYTES_CEILING = 65_536
+MAX_POLICY_BYTES = 1_048_576
 
 _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 _SAFE_TASK_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
@@ -192,8 +195,27 @@ def canonical_policy_bytes(policy: McpPolicy, *, include_digest: bool = False) -
 
 
 def policy_digest(policy: McpPolicy) -> str:
-    """Return the SHA-256 digest of canonical policy bytes excluding ``digest``."""
+    """Return the SHA-256 integrity checksum of canonical policy bytes.
+
+    This checksum detects accidental drift and in-process mutation after the
+    builder emits a policy. It is not authentication: an attacker who can
+    rewrite the policy file can also recompute its digest.
+    """
     return hashlib.sha256(canonical_policy_bytes(policy)).hexdigest()
+
+
+def validate_policy_integrity(policy: McpPolicy) -> McpPolicy:
+    """Return a freshly validated, immutable policy whose digest still matches."""
+    try:
+        complete_data = policy.model_dump(mode="python", warnings=False)
+        validated = McpPolicy.model_validate(complete_data)
+        expected_digest = policy_digest(validated)
+    except Exception as exc:
+        raise PolicyLoadError("MCP policy integrity validation failed") from exc
+
+    if not hmac.compare_digest(validated.digest, expected_digest):
+        raise PolicyLoadError("MCP policy digest mismatch")
+    return validated
 
 
 def load_policy_from_env(env: Mapping[str, str]) -> McpPolicy | None:
@@ -213,16 +235,49 @@ def load_policy_from_env(env: Mapping[str, str]) -> McpPolicy | None:
 
     path = Path(configured_path.strip())
     try:
-        is_file = path.is_file()
-    except OSError as exc:
-        raise PolicyLoadError("unable to inspect MCP policy path") from exc
-    if not is_file:
-        raise PolicyLoadError("MCP policy path does not name a regular file")
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    except AttributeError as exc:
+        raise PolicyLoadError("secure MCP policy file loading is unsupported") from exc
+    if os.O_NOFOLLOW == 0:
+        raise PolicyLoadError("secure MCP policy file loading is unsupported")
 
     try:
-        raw = path.read_text(encoding="utf-8")
+        fd = os.open(path, flags)
     except OSError as exc:
-        raise PolicyLoadError("unable to read MCP policy file") from exc
+        raise PolicyLoadError("unable to open MCP policy file securely") from exc
+
+    try:
+        try:
+            file_stat = os.fstat(fd)
+        except OSError as exc:
+            raise PolicyLoadError("unable to inspect MCP policy file") from exc
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise PolicyLoadError("MCP policy path is not a regular file")
+        if file_stat.st_size > MAX_POLICY_BYTES:
+            raise PolicyLoadError("MCP policy file is too large")
+
+        chunks: list[bytes] = []
+        total = 0
+        while total <= MAX_POLICY_BYTES:
+            try:
+                chunk = os.read(fd, MAX_POLICY_BYTES + 1 - total)
+            except OSError as exc:
+                raise PolicyLoadError("unable to read MCP policy file") from exc
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_POLICY_BYTES:
+                raise PolicyLoadError("MCP policy file is too large")
+        raw_bytes = b"".join(chunks)
+    finally:
+        try:
+            os.close(fd)
+        except OSError as exc:
+            raise PolicyLoadError("unable to close MCP policy file") from exc
+
+    try:
+        raw = raw_bytes.decode("utf-8", errors="strict")
     except UnicodeError as exc:
         raise PolicyLoadError("MCP policy file is not valid UTF-8") from exc
 
@@ -236,22 +291,16 @@ def load_policy_from_env(env: Mapping[str, str]) -> McpPolicy | None:
     except ValidationError as exc:
         raise PolicyLoadError("MCP policy schema validation failed") from exc
 
-    expected_digest = policy_digest(policy)
-    if not hmac.compare_digest(policy.digest, expected_digest):
-        raise PolicyLoadError("MCP policy digest mismatch")
-    return policy
+    return validate_policy_integrity(policy)
 
 
 class PolicySession:
     """Runtime view of a verified policy used by the generic MCP server seam."""
 
     def __init__(self, policy: McpPolicy) -> None:
-        if len(set(policy.allowed_tools)) != len(policy.allowed_tools):
-            # Recheck at the trust boundary even if a caller bypassed normal
-            # Pydantic validation with model_construct/model_copy.
-            raise PolicyLoadError("MCP policy allowed tools must be unique")
-        self.policy = policy
-        self._allowed_tools = frozenset(policy.allowed_tools)
+        validated = validate_policy_integrity(policy)
+        self.policy = validated
+        self._allowed_tools = frozenset(validated.allowed_tools)
 
     def visible_tools(self, registry: ToolRegistry) -> list[Tool[Any]]:
         """Return only allowed tools, in policy order, failing on registry drift."""

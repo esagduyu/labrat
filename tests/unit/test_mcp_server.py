@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, TextContent
 from pydantic import BaseModel
 
 from labrat.agent.tools.base import DispatchResult, Tool, ToolContext, ToolRegistry
-from labrat.mcp.policy import McpPolicy, PolicyDenied, PolicySession
+from labrat.mcp.policy import McpPolicy, PolicyDenied, PolicySession, policy_digest
 from labrat.mcp.server import (
     _build_context_from_env,
+    _build_server,
     _dispatch_tool_call,
     _listed_tools,
     _log_tool_call,
@@ -79,7 +81,7 @@ def _registry(*names: str) -> ToolRegistry:
 
 
 def _policy(*allowed_tools: str) -> McpPolicy:
-    return McpPolicy.model_validate(
+    policy = McpPolicy.model_validate(
         {
             "schema_version": 1,
             "run_manifest_sha256": "a" * 64,
@@ -105,6 +107,7 @@ def _policy(*allowed_tools: str) -> McpPolicy:
             "digest": "d" * 64,
         }
     )
+    return policy.model_copy(update={"digest": policy_digest(policy)})
 
 
 def test_build_context_from_env_allows_in_memory_primary(monkeypatch: Any) -> None:
@@ -315,6 +318,35 @@ def test_dispatch_without_policy_preserves_error_contract_and_log(tmp_path: Path
     assert [item.text for item in content] == ["Error: legacy failure"]
     record = json.loads((tmp_path / "mcp_tool_calls.jsonl").read_text())
     assert record["ok"] is False and record["output"] == "Error: legacy failure"
+
+
+def test_build_server_marks_only_policy_denials_as_mcp_errors() -> None:
+    async def invoke(server: Any, name: str, arguments: dict[str, Any]) -> CallToolResult:
+        response = await server.request_handlers[CallToolRequest](
+            CallToolRequest(params=CallToolRequestParams(name=name, arguments=arguments))
+        )
+        assert isinstance(response.root, CallToolResult)
+        return response.root
+
+    denied_registry = _SpyRegistry(DispatchResult(ok=True, value={"should": "not happen"}))
+    denied_registry.register(_Tool("allowed"))
+    denied_server = _build_server(ToolContext(), denied_registry, PolicySession(_policy("allowed")))
+
+    denied = asyncio.run(invoke(denied_server, "hidden", {"secret": "must not leak"}))
+
+    assert denied.isError is True
+    assert denied.content == [TextContent(type="text", text="MCP policy denied tool call")]
+    assert denied_registry.dispatch_calls == []
+
+    legacy_registry = _SpyRegistry(DispatchResult(ok=False, value=None, error="legacy failure"))
+    legacy_registry.register(_Tool("anything"))
+    legacy_server = _build_server(ToolContext(), legacy_registry)
+
+    legacy = asyncio.run(invoke(legacy_server, "anything", {}))
+
+    assert legacy.isError is False
+    assert legacy.content == [TextContent(type="text", text="Error: legacy failure")]
+    assert len(legacy_registry.dispatch_calls) == 1
 
 
 def test_serve_loads_policy_before_context_and_stdio(monkeypatch: Any) -> None:
