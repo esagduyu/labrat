@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
 from labrat.eval.benchmarks.dab.tool_profiles import (
+    ResolvedToolProfile,
     TaskToolContract,
     ToolProfileName,
     filter_registry,
@@ -89,6 +90,62 @@ class _RenamableWorkflowTool(_WorkflowV2Tool):
     @property
     def name(self) -> str:
         return self.current_name
+
+
+def _canonical_hash(schemas: tuple[dict[str, Any], ...]) -> str:
+    serialized = json.dumps(
+        schemas,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _mutable_schemas(
+    profile: ResolvedToolProfile,
+) -> tuple[dict[str, Any], ...]:
+    return cast(
+        tuple[dict[str, Any], ...],
+        tuple(json.loads(json.dumps(profile.canonical_schemas))),
+    )
+
+
+def _crafted_profile(
+    source: ResolvedToolProfile,
+    schemas: tuple[dict[str, Any], ...],
+) -> ResolvedToolProfile:
+    return ResolvedToolProfile(
+        name=source.name,
+        tools=source.tools,
+        canonical_schemas=schemas,
+        schema_sha256=_canonical_hash(schemas),
+    )
+
+
+def _first_nested_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        nested_values = value.values()
+    elif isinstance(value, tuple):
+        nested_values = value
+    else:
+        raise LookupError("No nested list in canonical schemas")
+    for nested in nested_values:
+        try:
+            return _first_nested_list(nested)
+        except LookupError:
+            continue
+    raise LookupError("No nested list in canonical schemas")
+
+
+def _reverse_dict_insertion_order(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _reverse_dict_insertion_order(value[key]) for key in reversed(tuple(value))}
+    if isinstance(value, list):
+        return [_reverse_dict_insertion_order(nested) for nested in value]
+    return value
 
 
 def test_core_profile_has_exact_versioned_order() -> None:
@@ -201,6 +258,25 @@ def test_schema_hash_changes_when_a_requested_tool_schema_changes() -> None:
     assert changed_profile.schema_sha256 != original_profile.schema_sha256
 
 
+def test_schema_hash_sorts_nested_dict_keys_without_changing_list_order() -> None:
+    source = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    mutable = _mutable_schemas(source)
+    reordered = cast(
+        tuple[dict[str, Any], ...],
+        tuple(_reverse_dict_insertion_order(schema) for schema in mutable),
+    )
+
+    assert json.dumps(reordered) != json.dumps(mutable)
+    assert _canonical_hash(reordered) == source.schema_sha256
+    crafted = _crafted_profile(source, reordered)
+    assert (
+        resolve_task_tool_contract(
+            "nested-order-task", crafted, cartographer=False, mongo=False
+        ).schema_sha256
+        == source.schema_sha256
+    )
+
+
 def test_filtered_registry_is_independent_exact_and_schema_equivalent() -> None:
     registry = build_data_tools_registry()
     original_names = tuple(tool.name for tool in registry.tools)
@@ -269,6 +345,94 @@ def test_filter_registry_rejects_profile_name_tool_list_disagreement() -> None:
 
     with pytest.raises(ValueError, match="disagrees with its name"):
         filter_registry(build_data_tools_registry(), mislabeled)
+
+
+@pytest.mark.parametrize(
+    ("malformation", "message"),
+    [
+        ("missing_input_schema", "exactly name and input_schema"),
+        ("extra_key", "exactly name and input_schema"),
+        ("wrong_input_schema_type", "input_schema must be a JSON object"),
+        ("empty_name", "name must be a nonempty string"),
+        ("wrong_name_type", "name must be a nonempty string"),
+        ("ordered_name_mismatch", "does not match requested tool"),
+    ],
+)
+def test_consumers_reject_malformed_canonical_entries_even_with_matching_hash(
+    malformation: str,
+    message: str,
+) -> None:
+    registry = build_data_tools_registry()
+    source = resolve_tool_profile("dab-core-v1", registry)
+    schemas = list(_mutable_schemas(source))
+    first = schemas[0]
+    if malformation == "missing_input_schema":
+        first.pop("input_schema")
+    elif malformation == "extra_key":
+        first["description"] = "not canonical"
+    elif malformation == "wrong_input_schema_type":
+        first["input_schema"] = []
+    elif malformation == "empty_name":
+        first["name"] = ""
+    elif malformation == "wrong_name_type":
+        first["name"] = 7
+    else:
+        first["name"] = "wrong_ordered_name"
+    crafted_schemas = tuple(schemas)
+    crafted = _crafted_profile(source, crafted_schemas)
+
+    with pytest.raises(ValueError, match=message):
+        filter_registry(registry, crafted)
+    with pytest.raises(ValueError, match=message):
+        resolve_task_tool_contract("malformed-task", crafted, cartographer=False, mongo=False)
+
+
+def test_consumers_accept_a_valid_crafted_profile() -> None:
+    registry = build_data_tools_registry()
+    source = resolve_tool_profile("dab-core-v1", registry)
+    crafted = _crafted_profile(source, _mutable_schemas(source))
+
+    filtered = filter_registry(registry, crafted)
+    contract = resolve_task_tool_contract("crafted-task", crafted, cartographer=False, mongo=False)
+
+    assert tuple(tool.name for tool in filtered.tools) == source.tools
+    assert contract.tools == source.tools
+    assert contract.schema_sha256 == source.schema_sha256
+
+
+def test_canonical_schema_top_level_entries_are_immutable() -> None:
+    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    before = json.dumps(profile.canonical_schemas)
+
+    with pytest.raises(TypeError):
+        profile.canonical_schemas[0]["tampered"] = True
+
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+
+
+def test_canonical_schema_nested_dicts_are_immutable() -> None:
+    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    before = json.dumps(profile.canonical_schemas)
+    input_schema = profile.canonical_schemas[0]["input_schema"]
+
+    with pytest.raises(TypeError):
+        input_schema["tampered"] = True
+
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
+
+
+def test_canonical_schema_nested_lists_are_immutable() -> None:
+    profile = resolve_tool_profile("dab-core-v1", build_data_tools_registry())
+    before = json.dumps(profile.canonical_schemas)
+    nested_list = _first_nested_list(profile.canonical_schemas)
+
+    with pytest.raises(TypeError):
+        nested_list.append("tampered")
+
+    assert json.dumps(profile.canonical_schemas) == before
+    assert _canonical_hash(profile.canonical_schemas) == profile.schema_sha256
 
 
 def test_task_contract_copies_the_already_resolved_profile() -> None:
