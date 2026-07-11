@@ -835,3 +835,76 @@ retrieval-scorer change, since a Decisions section is structurally identical to 
 section (same `Section` model, same store, same trust-tier provenance). Design:
 `docs/superpowers/specs/2026-07-10-decision-trail-harvesting-design.md`; plan (2 tasks, this
 entry covers Task 2): `docs/superpowers/plans/2026-07-10-decision-trail-harvesting.md`.
+
+## 2026-07-10 — Map v1 (domain bundles): the `Scent → Trail → Map` aggregation layer
+
+Ships **Map**, the north-star's *Missing* aggregation tier above Scent (landmarks) and Trail
+(routes) — a curated per-domain bundle (e.g. "Revenue") that scopes the agent's grounding to
+just that domain instead of the whole warehouse. Superseded the working name "Warren"
+mid-design (design doc: `docs/superpowers/specs/2026-07-10-map-domain-bundles-design.md`) —
+"Map" unifies Pillar 3 under the already-shipped **Cartographer** brand: the Cartographer draws
+Maps, Scent marks them, Trails route across them. 4-task build on `feat/map-domain-bundles`
+(plan: `docs/superpowers/plans/2026-07-10-map-domain-bundles.md`); this entry covers Task 4, the
+TUI surface — Tasks 1–3 (`maze/map.py` doc model + `resolve_members` soft-miss resolution, the
+`ToolContext.active_maps` retrieval filter on `search_reference_docs`/`search_trails`, and
+`draft_maps_from_dbt`) landed earlier on the same branch.
+
+**A Map is a bundle of POINTERS, never content** — a `kind="map"` `ScentDoc` whose `## Scent` /
+`## Trails` sections are bullet-list member slugs, resolved live against the store
+(`resolve_members`); a dangling reference (a renamed/deleted target) is a soft-miss, dropped
+from the resolved view, never an error and never stale content, because there is no content to
+go stale. **Activation is a retrieval pre-filter, not a scorer change** — `ToolContext.
+active_maps: list[str] | None` (None/empty on every existing construction site, including every
+benchmark/eval/MCP path) leaves `search_reference_docs`/`search_trails` byte-identical to
+pre-Map master; a non-empty active set narrows the eligible-doc set to the union of active Maps'
+resolved members before the existing lexical scorer runs. **Additive**: activating Revenue +
+Product unions both domains' grounding, matching the north-star's cross-domain analyst case.
+
+Task 4 (this entry) wires the TUI: `MainScreen.__init__` now owns `self._active_maps: list[str]
+= []`, handed to `ToolContext(..., active_maps=self._active_maps)` at the same construction site
+as `llm_fn`/`subagent_runner`/`enable_ledger` — critically, every mutation (`screens/maps.py::
+MapActivateScreen.action_toggle_active`) is an in-place `.append`/`.remove` on that exact list
+object, never a reassignment, so the `ToolContext` the running `AgentLoop` already holds sees
+the change on the very next tool call with zero replumbing. `screens/maps.py` adds two modals
+mirroring the shipped Trail/Harvest review surfaces: `MapActivateScreen` (list existing Maps
+only — a phantom slug can never reach the active set because rows are built strictly from
+`store.docs(kind="map")`; space toggles active/inactive; a status line shows the active union;
+also the entry point to New/Edit a Map and to trigger auto-seed) and `MapEditScreen` (pick Scent
++ Trail members from the domains that already exist via a HarvestReviewScreen-style row-toggle
+table, edit free-text Overview + one-per-line Suggested Prompts, save through a new
+`apply_map()` — `audit_scent_doc` fail-loud then `store.write_doc(kind="map")`, the same
+audit-then-write contract as `trail.py::apply_trail` generalized off Trail's git_sha stamping,
+since a Map's sections are reference-pointer lists rather than SQL-derived content). Bound to
+**Ctrl+Shift+P** (free chord, verified against the full `BINDINGS` list before use; documented
+in `screens/help.py`) — one binding opens the Maps surface; New/Edit/Auto-seed are in-modal keys
+(N/E/S), matching the Trail/Harvest precedent of a single top-level chord per surface.
+
+**Auto-seed is an explicit action, not a silent first-connect hook** (the simpler, safer of the
+brief's two options) — `MainScreen.action_auto_seed_maps` resolves the dbt manifest with the
+*same* path-resolution rule as `_run_semantic_ingest` (`dbt_manifest_override` else
+`<dbt_project_path>/target/manifest.json`), reads existing Scent domains from the store, calls
+the Task-3 `draft_maps_from_dbt` (deterministic, no LLM, contamination-audited internally), and
+writes only the domains that don't already have a Map doc — idempotent, so a curated Map is
+never clobbered by a re-seed. Wrapped in try/except: `ScentContaminationError` and any other
+exception notify (never raise into the TUI), matching every other harvest/trail/decision write
+path in the app. Notify text is the brief's exact wording: "🗺 sketched N domain Maps — curate
+and activate them".
+
+**v1 explicitly does not wire sub-agent activation-scope inheritance** — `dispatch_subagent`/
+`run_program`/`build_agent_session` are untouched, so a dispatched sub-agent's retrieval is
+unscoped even while the parent session has Maps active. Deferred to a later increment (same
+posture as decision-trail's "human gate before compounding loop" — ship the mechanic and the
+authoring surface first, thread the scope through nested dispatch once the single-agent path is
+proven). Benchmark-safety unaffected either way: nothing under `eval/`/`mcp/` ever sets
+`active_maps`, so this deferral has zero bearing on any benchmark path.
+
+Tests: `tests/tui/test_maps_tui.py` (9 cases) — activating a Map mutates `MainScreen.
+_active_maps` in place and the identical object reaches `AgentLoop`'s live `ToolContext`
+(`ctx.active_maps is screen._active_maps`); `search_reference_docs` is scoped after activation
+and fully restored after deactivation; the Maps screen never lists a non-existent slug; the dbt
+auto-seed writes one skeleton per marts folder and is idempotent on a second pass (and a no-op
+with no dbt project configured); `MapEditScreen` creates a new Map with picked members, curates
+an existing one (including adding a member on top of its current set), and blocks + notifies
+(without writing) on a contaminated Overview. `TESTING.md` "Maps (v1)" section documents the
+full manual gate: auto-seed → curate → activate (additive) → scoped retrieval → deactivate
+(byte-identical restore) → dangling-reference soft-miss.

@@ -51,6 +51,7 @@ _SECTIONS = [
             ("Ctrl+Shift+M", "Regenerate scent docs (after schema changes)"),
             ("Ctrl+Shift+D", "Record decision"),
             ("Ctrl+Shift+H", "Review harvested learnings → write approved to Scent"),
+            ("Ctrl+Shift+P", "Maps — curate & activate domain bundles"),
             ("F9", "Re-ingest dbt semantic layer into Scent docs"),
         ],
     ),
