@@ -1275,3 +1275,59 @@ Setup: profile with `harvest_opt_in` ON (Ctrl+, → toggle "Harvesting" → Save
       doc; re-harvesting the same decision is a no-op (already-promoted filter)
 - [ ] A fresh session's matching-topic question retrieves the recorded decision via
       `search_reference_docs`
+
+## Maps (v1) — author/curate + additive activation (manual gate)
+
+**Goal:** scope the agent's grounding to a curated domain (e.g. "Revenue") instead of the
+whole warehouse — a Map is a pure bundle of *pointers* to existing Scent + Trail docs, sketched
+by the Cartographer from your dbt project's folder structure and then hand-curated. Activating
+a Map is an **additive retrieval filter** on `search_reference_docs`/`search_trails`; with no
+Map active (the default, and every benchmark run) retrieval is byte-identical to today.
+
+Setup: a profile with `dbt_project_path` configured and a `target/manifest.json` on disk (run
+`dbt parse`), plus some Scent already mapped (first-connect Cartographer pre-pass or the T1b
+dbt semantic ingest).
+
+1. **Auto-seed:** press **Ctrl+Shift+P** → the Maps screen opens (empty on first use). Press
+   **S** ("Auto-seed from dbt") → toast `🗺 sketched N domain Maps — curate + activate them`;
+   the table now lists one Map per dbt marts folder (e.g. `finance`, `product`) whose Scent
+   members are that folder's models — only for models that already have a Scent doc. Re-pressing
+   **S** is idempotent (a domain that already has a Map skeleton is not re-sketched).
+2. **Curate:** with a Map row selected, press **E** ("Edit") → the curate screen opens showing
+   the Overview, a member table (every existing Scent + Trail domain, space toggles
+   include/exclude — pre-checked for members already on the Map), and Suggested Prompts. Add a
+   Trail (e.g. `compute-mrr`) to the Revenue Map, write an Overview sentence, press **Ctrl+S** →
+   toast `🗺 Map saved: revenue`; back on the Maps screen the Trail-members count goes up by one.
+   Verify `./labrat_maze/map/revenue.md` on disk with `kind: map` frontmatter and `## Scent` /
+   `## Trails` bullet sections.
+3. **New Map:** press **N** ("New Map") → same curate screen but with a slug Input at the top
+   (typed text is slugified — spaces/punctuation become `-`). Pick a couple of members, save →
+   a second `.md` file appears under `labrat_maze/map/`.
+4. **Activate (additive):** with the Maps screen open, move the cursor to the Revenue row and
+   press **space** → the row flips to `✓ active`; the status line at the bottom shows
+   `Active: revenue`. Close the screen (**Esc**) and ask a revenue question in chat — the
+   `search_reference_docs`/`search_trails` traces should surface only Revenue-Map members
+   (Product-domain Scent no longer appears). Reopen Maps, activate the Product Map too — the
+   status line shows `Active: product, revenue` (**additive union** — both domains' grounding
+   is now in scope).
+5. **Deactivate restores full grounding:** press **space** on both active rows to turn them back
+   to `· inactive` — status line shows `Active: none`. Ask the same revenue question again → the
+   agent's retrieval traces are back to full-warehouse grounding, identical to before any Map
+   was ever activated (the benchmark guarantee: `active_maps` empty ⇒ byte-identical retrieval).
+6. **Dangling reference (soft-miss):** manually delete a Trail's `.md` file that a Map still
+   points at, then activate that Map and ask a matching question — the agent should NOT error;
+   the dangling member simply drops out of scope (a Map is pointers, not content, so a stale
+   reference degrades gracefully rather than breaking the bundle).
+
+**Check:**
+- [ ] `Ctrl+Shift+P` opens the Maps screen; empty store shows zero rows (no phantom Maps)
+- [ ] Auto-seed (`S`) sketches one Map per dbt marts folder, Scent-filtered to domains that
+      already have a Scent doc; a second auto-seed pass writes nothing new (idempotent)
+- [ ] Curate (`E`) / New (`N`) → member table lists all existing Scent + Trail domains,
+      space toggles include/exclude, `Ctrl+S` writes an audited `kind: map` doc
+- [ ] Activating a Map (`space`) is additive — multiple Maps can be active together (status
+      line shows the union)
+- [ ] With a Map active, `search_reference_docs`/`search_trails` are scoped to that Map's
+      (resolved) members only
+- [ ] Deactivating every Map restores retrieval byte-identical to no-Map-ever-activated
+- [ ] A dangling member (deleted Scent/Trail doc) is dropped silently, never an error

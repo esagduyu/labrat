@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from labrat.chart.spec import ChartSpec
     from labrat.db.base import Connection
     from labrat.db.catalog import Catalog
+    from labrat.maze.store import MazeStore
     from labrat.profile.model import Profile
     from labrat.thread.model import Finding
 
@@ -160,6 +161,7 @@ class MainScreen(Screen[None]):
         Binding("ctrl+shift+m", "refresh_scent", "Refresh Scent", show=False),
         Binding("ctrl+shift+h", "harvest_review", "Harvest", show=False),
         Binding("ctrl+shift+d", "record_decision", "Record Decision", show=False),
+        Binding("ctrl+shift+p", "manage_maps", "Maps", show=False),
         Binding("f9", "reingest_semantics", "Re-ingest dbt", show=False),
         Binding("f8", "share_answer", "Share", show=True),
     ]
@@ -197,6 +199,11 @@ class MainScreen(Screen[None]):
         self._dbt_manifest_override = dbt_manifest_override
         self._project_root_override = project_root_override
         self._semantic_drifted = False
+        # Map v1 activation set (TUI-only; NEVER set on the benchmark/eval/mcp
+        # paths). This exact list object is handed to ToolContext below — mutate
+        # in place (append/remove), never reassign, or the live link the search
+        # tools read (ctx.active_maps) breaks.
+        self._active_maps: list[str] = []
 
     def compose(self) -> ComposeResult:
         connected = self._connection is not None
@@ -364,6 +371,7 @@ class MainScreen(Screen[None]):
             primary="main",
             profile_name=profile_obj.name,
             read_only=profile_obj.is_read_only,
+            active_maps=self._active_maps,
         )
 
         provider, degraded_warning = resolve_provider(profile_obj)
@@ -567,6 +575,93 @@ class MainScreen(Screen[None]):
             shutil.rmtree(self._scent_dir)  # user-scope Cartographer output only
         self._scent_stale = False
         self._run_scent_prepass()
+
+    # ── Map v1 (domain bundles): author/curate + additive activation ────────
+
+    def _resolve_map_store(self) -> MazeStore:
+        """The MazeStore Map screens read/write. Mirrors ``_run_semantic_ingest``'s
+        ``_project_root_override`` test-isolation branch (same home-dir rule) so
+        tests can point every maze read/write at a tmp_path without env leakage."""
+        from labrat.maze.store import MazeStore
+
+        profile_name = self._profile_obj.name if self._profile_obj is not None else self._profile
+        if self._project_root_override is not None:
+            return MazeStore(
+                project_root=self._project_root_override,
+                home=self._project_root_override / "home",
+                profile=profile_name,
+            )
+        return MazeStore.from_env(profile=profile_name)
+
+    def _resolve_dbt_manifest_for_maps(self) -> Path | None:
+        """Same manifest-path resolution as ``_run_semantic_ingest`` (dbt project
+        configured + override wins), reused here for the Map auto-seed trigger."""
+        if self._profile_obj is None or not self._profile_obj.dbt_project_path:
+            return None
+        manifest = self._dbt_manifest_override or (
+            Path(self._profile_obj.dbt_project_path) / "target" / "manifest.json"
+        )
+        return manifest if manifest.is_file() else None
+
+    def action_manage_maps(self) -> None:
+        from labrat.screens.maps import MapActivateScreen
+
+        store = self._resolve_map_store()
+        self.app.push_screen(
+            MapActivateScreen(store, self._active_maps, on_auto_seed=self.action_auto_seed_maps)
+        )
+
+    def action_auto_seed_maps(self) -> int:
+        """Cartographer dbt-structure auto-seed: sketch Map skeletons from the
+        configured dbt project's folder structure, scent-member-filtered to
+        domains that already have a Scent doc. Deterministic, no LLM; never
+        raises into the TUI (fail-open on a missing/unreadable manifest,
+        fail-loud-but-caught on a contamination hit). Returns the count of newly
+        written Map skeletons (0 if none / on failure — always already notified)."""
+        from datetime import UTC, datetime
+
+        from labrat.maze.map import draft_maps_from_dbt
+        from labrat.maze.scent_audit import ScentContaminationError
+
+        manifest = self._resolve_dbt_manifest_for_maps()
+        if manifest is None:
+            self.notify(
+                "No dbt manifest found — configure a dbt project first (Ctrl+,).",
+                severity="warning",
+            )
+            return 0
+        store = self._resolve_map_store()
+        existing_scent = {d.domain for d in store.docs(kind="scent")}
+        existing_maps = {d.domain for d in store.docs(kind="map")}
+        model_id = self._profile_obj.agent_model if self._profile_obj is not None else None
+        try:
+            drafted = draft_maps_from_dbt(
+                manifest,
+                existing_scent_domains=existing_scent,
+                generated_at=datetime.now(tz=UTC).date().isoformat(),
+                model_id=model_id,
+            )
+        except ScentContaminationError as exc:
+            self.notify(
+                f"dbt Map auto-seed blocked by contamination audit: {exc}",
+                severity="error",
+                timeout=8,
+            )
+            return 0
+        except Exception as exc:  # never raise into the TUI
+            self.notify(f"dbt Map auto-seed failed: {exc}", severity="error", timeout=8)
+            return 0
+        new_docs = [doc for slug, doc in drafted.items() if slug not in existing_maps]
+        for doc in new_docs:
+            store.write_doc(doc, scope="project", kind="map")
+        if new_docs:
+            self.notify(
+                f"\U0001f5fa sketched {len(new_docs)} domain Maps — curate + activate them",
+                timeout=6,
+            )
+        else:
+            self.notify("No new domain Maps to sketch (up to date).", timeout=4)
+        return len(new_docs)
 
     # ── correction capture seams (M5 T2b / TUI-M3) ──────────────────────────
 
