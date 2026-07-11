@@ -598,7 +598,6 @@ def _runner_events(*, mcp: bool = False, answer: str = "answer") -> bytes:
     return b"".join(json.dumps(record).encode() + b"\n" for record in records)
 
 
-
 def _install_fake_processes(
     monkeypatch: pytest.MonkeyPatch,
     config: CodexHostConfig,
@@ -734,7 +733,6 @@ async def test_run_codex_rejects_version_and_answer_mismatches(
     _install_fake_processes(monkeypatch, config, answer="different")
     with pytest.raises(CodexAuditError, match="answer"):
         await run_codex("prompt", config)
-
 
 
 @pytest.mark.asyncio

@@ -226,10 +226,7 @@ def _validate_config(config: CodexHostConfig) -> None:
             raise ValueError("MCP enabled tools must be nonempty and unique")
         _validate_diagnostic_mcp(config.mcp)
         mcp_environment = dict(config.mcp.env)
-        if (
-            Path(mcp_environment["LABRAT_MCP_LOG_DIR"]).resolve()
-            != config.artifact_dir.resolve()
-        ):
+        if Path(mcp_environment["LABRAT_MCP_LOG_DIR"]).resolve() != config.artifact_dir.resolve():
             raise ValueError("Diagnostic MCP trace directory must match native artifacts")
 
 
@@ -297,9 +294,7 @@ def _nonnegative_int(value: object, *, category: str) -> int:
 
 def _usage(value: object, *, category: str) -> dict[str, int]:
     mapping = _mapping(value, category=category)
-    parsed = {
-        key: _nonnegative_int(mapping.get(key), category=category) for key in _USAGE_KEYS
-    }
+    parsed = {key: _nonnegative_int(mapping.get(key), category=category) for key in _USAGE_KEYS}
     if parsed["cached_input_tokens"] > parsed["input_tokens"]:
         raise CodexAuditError(f"Malformed {category}")
     return parsed
