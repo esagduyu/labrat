@@ -39,6 +39,7 @@ _CACHE_KEY = "labrat-codex-host-cache-v1"
 _MODEL = "gpt-5.6-luna"
 _EFFORT = "low"
 _RATE_LIMIT_EXIT_CODE = 4
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 _ANSWER_SQL = (
     "SELECT p.category, SUM(oi.quantity * p.unit_price) AS revenue, "
     "COUNT(DISTINCT o.order_id) AS order_count, COUNT(DISTINCT c.customer_id) AS customer_count "
@@ -83,6 +84,21 @@ _CORE_PROFILE = resolve_tool_profile(_PROFILE, build_data_tools_registry())
 _CORE_TOOLS = _CORE_PROFILE.tools
 Metrics = dict[str, object]
 Trace = list[dict[str, Any]]
+
+
+def _mcp_interpreter(repo_root: Path = _REPO_ROOT) -> Path:
+    """Return the repo venv launcher path without resolving its final symlink."""
+    root = repo_root.expanduser().resolve()
+    interpreter = root / ".venv/bin/python"
+    if not interpreter.is_file():
+        raise FileNotFoundError(
+            f"Native diagnostic requires a repo virtualenv interpreter: {interpreter}"
+        )
+    if not os.access(interpreter, os.X_OK):
+        raise PermissionError(
+            f"Repo virtualenv interpreter is not executable: {interpreter}"
+        )
+    return interpreter
 
 
 def _create_fixture(path: Path) -> None:
@@ -275,6 +291,26 @@ def _policy(path: Path, schema_hash: str) -> None:
     path.chmod(0o600)
 
 
+def _mcp_launch(database: Path, artifacts: Path, policy_path: Path) -> McpLaunch:
+    connections = json.dumps(
+        {"main": {"db_type": "duckdb", "db_path": str(database.resolve()), "read_only": True}},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return McpLaunch(
+        command=str(_mcp_interpreter()),
+        args=("-m", "labrat.mcp.server"),
+        cwd=_REPO_ROOT,
+        env=(
+            ("LABRAT_MCP_CONNECTIONS", connections),
+            ("LABRAT_MCP_PRIMARY", "main"),
+            ("LABRAT_MCP_LOG_DIR", str(artifacts)),
+            ("LABRAT_MCP_POLICY_PATH", str(policy_path.resolve())),
+        ),
+        enabled_tools=_CORE_TOOLS,
+    )
+
+
 async def _run_native(
     database: Path,
     native_dir: Path,
@@ -288,23 +324,7 @@ async def _run_native(
     executable = shutil.which("codex")
     if executable is None:
         raise FileNotFoundError("codex executable was not found on PATH")
-    connections = json.dumps(
-        {"main": {"db_type": "duckdb", "db_path": str(database.resolve()), "read_only": True}},
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    launch = McpLaunch(
-        command=str(Path(sys.executable).resolve()),
-        args=("-m", "labrat.mcp.server"),
-        cwd=Path(__file__).resolve().parents[1],
-        env=(
-            ("LABRAT_MCP_CONNECTIONS", connections),
-            ("LABRAT_MCP_PRIMARY", "main"),
-            ("LABRAT_MCP_LOG_DIR", str(artifacts)),
-            ("LABRAT_MCP_POLICY_PATH", str(policy_path.resolve())),
-        ),
-        enabled_tools=_CORE_TOOLS,
-    )
+    launch = _mcp_launch(database, artifacts, policy_path)
     with tempfile.TemporaryDirectory(prefix="labrat-codex-cache-") as private:
         home, workspace = Path(private) / "home", Path(private) / "workspace"
         home.mkdir(mode=0o700)

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -187,6 +190,8 @@ async def test_native_arm_uses_same_prompt_db_core_policy_and_public_aggregate_o
     config = captured["config"]
     assert config.model == "gpt-5.6-luna"
     assert config.reasoning_effort == "low"
+    expected_interpreter = Path(diagnostic.__file__).resolve().parents[1] / ".venv/bin/python"
+    assert Path(config.mcp.command) == expected_interpreter
     assert (tmp_path / "native") not in config.codex_home.parents
     assert (tmp_path / "native") not in config.workspace_dir.parents
     assert not config.codex_home.exists()
@@ -218,6 +223,98 @@ async def test_native_arm_uses_same_prompt_db_core_policy_and_public_aggregate_o
         "valid": True,
     }
     assert (config.artifact_dir / "codex_events.jsonl").exists()
+
+
+def test_native_mcp_interpreter_is_repo_venv_and_imports_labrat_with_empty_env(
+    tmp_path: Path,
+) -> None:
+    from scripts import diagnose_codex_host_cache as diagnostic
+
+    repo_root = Path(diagnostic.__file__).resolve().parents[1]
+    interpreter = diagnostic._mcp_interpreter(repo_root)
+
+    assert interpreter == repo_root / ".venv/bin/python"
+    assert interpreter.is_file()
+    assert os.access(interpreter, os.X_OK)
+    completed = subprocess.run(
+        [
+            str(interpreter),
+            "-c",
+            "import json, labrat, sys; print(json.dumps([sys.executable, sys.prefix]))",
+        ],
+        cwd=tmp_path,
+        env={},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    executable, prefix = json.loads(completed.stdout)
+    assert Path(executable) == interpreter
+    assert Path(prefix) == repo_root / ".venv"
+
+
+@pytest.mark.asyncio
+async def test_native_mcp_launcher_initializes_with_exact_four_key_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client import stdio as mcp_stdio
+
+    from scripts import diagnose_codex_host_cache as diagnostic
+
+    database = tmp_path / "fixture.duckdb"
+    artifacts = tmp_path / "artifacts"
+    policy_path = tmp_path / "membership-policy.json"
+    diagnostic._create_fixture(database)
+    artifacts.mkdir()
+    diagnostic._policy(policy_path, diagnostic._CORE_PROFILE.schema_sha256)
+    launch = diagnostic._mcp_launch(database, artifacts, policy_path)
+    environment = dict(launch.env)
+
+    assert tuple(environment) == (
+        "LABRAT_MCP_CONNECTIONS",
+        "LABRAT_MCP_PRIMARY",
+        "LABRAT_MCP_LOG_DIR",
+        "LABRAT_MCP_POLICY_PATH",
+    )
+    monkeypatch.setattr(mcp_stdio, "get_default_environment", lambda: {})
+    parameters = StdioServerParameters(
+        command=launch.command,
+        args=list(launch.args),
+        cwd=launch.cwd,
+        env=environment,
+    )
+    async with asyncio.timeout(10):
+        async with mcp_stdio.stdio_client(parameters) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+
+    assert tuple(tool.name for tool in listed.tools) == diagnostic._CORE_TOOLS
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "not-executable"])
+def test_native_mcp_interpreter_fails_closed_without_executable_repo_venv(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    from scripts import diagnose_codex_host_cache as diagnostic
+
+    interpreter = tmp_path / ".venv/bin/python"
+    if kind == "directory":
+        interpreter.mkdir(parents=True)
+    elif kind == "not-executable":
+        interpreter.parent.mkdir(parents=True)
+        interpreter.write_text("not executable")
+        interpreter.chmod(0o600)
+
+    error = PermissionError if kind == "not-executable" else FileNotFoundError
+    with pytest.raises(error):
+        diagnostic._mcp_interpreter(tmp_path)
 
 
 def _ok_metrics(input_tokens: int) -> dict[str, object]:
