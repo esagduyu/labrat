@@ -177,6 +177,25 @@ the native detour if the reduction is below 20%; in the 20–30% band, run at mo
 additional pair before deciding. This diagnostic does not score DAB and cannot make a
 host submission-eligible.
 
+#### Result: do not promote the native host
+
+The valid 2026-07-12 Luna-low pair used the same deterministic DuckDB, prompt,
+13-tool allowlist, and exact nine-call sequence. Both arms made nine successful
+tool calls, returned the correct answer, and completed ten model requests/rounds.
+
+| Host | Input | Cached | Cache rate | Noncached input | Output |
+|---|---:|---:|---:|---:|---:|
+| LabRat Responses adapter | 26,387 | 17,152 | 65.0% | 9,235 | 391 |
+| Native `codex exec` + MCP | 122,445 | 102,656 | 83.8% | 19,789 | 988 |
+
+Native Codex improved the cache percentage by 18.8 points but used 10,554 more
+noncached input tokens, a 114.3% increase (2.14x). Its much larger first-party
+host prefix made the percentage look better while worsening the quota-relevant
+absolute workload. This fails the preregistered 20% removal boundary, so the
+native-host implementation is not promoted and is removed from the campaign.
+The preserved evidence is
+`runs/codex-host-cache/20260712-luna-low-ab-retry3/comparison.json`.
+
 ## DAB grounding controls
 
 The three benchmark-facing grounding/context controls use tri-state CLI parsing so omitted flags inherit an existing run's `config.json` value instead of silently changing it on resume.
