@@ -1,32 +1,51 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **LIVE — BASELINE PAUSED ON SUBSCRIPTION QUOTA; ARM RESULTS PENDING**
+Status: **LIVE — BARE BASELINE COMPLETE; CARTOGRAPHER ARM RUNNING**
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
-Live snapshot: through `stockindex:3` trial 0; `stockindex:1` trial 1 and `stockindex:3` trial 1 await retry after infrastructure-only attempts
+Live snapshot: the Luna-Max bare baseline completed all 45 semantic keys and the
+matched Cartographer-only arm is running from
+`runs/dab/ablation-gpt56-luna-max-cartograph`.
 
 ## Technical summary
 
-Twenty-one GPT-5.6 Luna Max semantic attempts are now complete, with 15 observed passes. The `deps_dev_v1` dataset cut is 3/6 (50.0%); music-brainz is 6/9 (66.7%); and stockindex is 6/6 across the semantic attempts completed so far. Stockindex query 1 still needs a protocol-error retry, query 2 is complete at 3/3, and query 3 has one pass, one rate-limit retry, and trial 2 pending. The four-dataset baseline score remains `PENDING` until stockindex and Yelp complete.
+The GPT-5.6 Luna Max bare baseline is complete: 35/45 semantic trials passed
+(77.8% micro rate), for the benchmark's dataset-stratified score of **74.4%**.
+The dataset cuts are `deps_dev_v1` 3/6 (50.0%), `music_brainz_20k` 6/9
+(66.7%), `stockindex` 9/9 (100%), and Yelp 17/21 (81.0%). The persistent
+0/3 misses are `deps_dev_v1:1`, `music_brainz_20k:3`, and `yelp:2`;
+`yelp:3` passed 2/3. All other queries passed 3/3.
 
-The initial grounding-arm launch reached the ChatGPT-subscription quota on 2026-07-11 before any semantic attempt completed. The baseline artifact now preserves 14 retryable infrastructure rows alongside the 21 semantic rows: 13 HTTP 429 rows (11 before the circuit breaker and two controlled fail-fast checks) plus one incomplete-chunk transport row. The infrastructure rows have no terminal usage and are not score evidence. The latest fail-fast row stopped the circuit pending the reported 2026-07-11 09:53:34 PDT reset.
+The baseline retains 15 retryable infrastructure attempts (12 `agent_error`,
+three `rate_limit`) alongside the 45 selected semantic attempts. No latest
+attempt is infrastructure-only. All 45 selected attempts are marked clean in
+`taint.json`, and all 45 have a nonempty per-attempt tool trace. The completed
+run contains `submission.json` and `report.md` and exited successfully.
+
+Across the selected semantic attempts, the adapter recorded 31,578,005 input
+tokens, 21,846,272 cached tokens (**69.18% cache-read ratio**), and 9,731,733
+noncached input tokens. It made 2,333 completed model requests (51.8 per trial),
+used 1,708 tools, and took 14,720.7 seconds. The high request count is partly
+driven by tool-internal LLM fan-out on some Yelp queries; cache percentage is
+therefore supporting context, while absolute noncached input remains the
+efficiency comparison metric.
 
 The experiment is pre-registered as a cumulative five-arm Luna Max comparison over 15 DAB queries and three trials per query: bare baseline, then Cartographer, prompt levers, benchmark hints, and ContextLedger. Each arm is 45 semantic trials. The winner—not an assumed fully stacked configuration—will become the fixed grounding configuration for a separate four-tier hard-tail comparison: Luna Max, Terra High, Sol High, and Sol Ultra.
 
 All tables below distinguish live status from completed results. `PENDING` means no supported value exists; it must never be replaced with a zero. The experiment is descriptive at `n=3`, not powered for statistical significance. The decision target is whether GPT-5.6 preserves the known Sonnet grounding gains, whether the ledger lowers context cost without losing accuracy, and whether larger tiers clear failures that Luna does not.
 
-## Live status: baseline paused at 21/45 semantic; stockindex is 6/6 semantic so far
+## Live status: baseline complete; Cartographer-only arm running
 
 | Arm | Run directory | Current state | Semantic progress | Supported conclusion |
 |---|---|---|---:|---|
-| B — bare baseline | `runs/dab/ablation-gpt56-luna-max-baseline` | **PAUSED ON QUOTA / PENDING** | 21 / 45 | Deps is 50.0%; music-brainz is 66.7%; stockindex is 6/6 semantic observed. `:1` trial 1 and `:3` trial 1 await retry; `:3` trial 2 is pending. No arm score. Fourteen infrastructure rows remain retryable. |
-| C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | PENDING — not started | 0 / 45 | None. |
+| B — bare baseline | `runs/dab/ablation-gpt56-luna-max-baseline` | **COMPLETE** | 45 / 45 | **74.4% stratified; 35/45 micro; 69.18% cached; 9.73M noncached input.** Fifteen infrastructure rows are preserved and excluded. |
+| C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | **RUNNING** | live | Same Luna Max configuration with only deterministic Cartographer enabled. |
 | L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | PENDING — not started | 0 / 45 | None. |
 | H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | PENDING — not started | 0 / 45 | None. |
 | G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | PENDING — not started | 0 / 45 | None. |
 
-### Completed semantic observations — not an arm result
+### Baseline trial detail
 
 | Field | `deps_dev_v1:1` trial 0 | `deps_dev_v1:1` trial 1 | `deps_dev_v1:1` trial 2 |
 |---|---:|---:|---:|
@@ -180,7 +199,7 @@ The expected fuzzy match was `Zo gaat het leven aan je voor`; the model instead 
 
 Music-brainz shows a split result: two formerly difficult revenue queries were perfect, while the persistent title-ranking failure remained 0/3. The dataset cut is complete and can be compared with later arms; it is not the four-dataset baseline score.
 
-### In-progress `stockindex:1` observations — query result pending
+### Earlier live snapshot: `stockindex:1` (superseded by the completed result)
 
 | Field | `stockindex:1` trial 0 | `stockindex:1` trial 2 |
 |---|---:|---:|
@@ -202,7 +221,9 @@ Music-brainz shows a split result: two formerly difficult revenue queries were p
 | Cache-breakpoint fallbacks | 0 | 0 |
 | Reasoning-passback fallbacks | 0 | 0 |
 
-The current `stockindex:1` trial-1 attempt is **not** a semantic failure. It recorded `infra:agent_error` after `RemoteProtocolError: peer closed connection without sending complete message body (incomplete chunked read)`, with zero completed requests/tokens and one HTTP attempt. It remains retryable and excluded from every denominator. Trial 1 must succeed on retry before this query has a final rate.
+This snapshot captured a retryable `stockindex:1` trial-1 transport failure,
+which remains preserved and excluded. The later semantic retry passed, closing
+the query at 3/3.
 
 ### Completed `stockindex:2` observations
 
@@ -232,9 +253,10 @@ The current `stockindex:1` trial-1 attempt is **not** a semantic failure. It rec
 |---:|---:|---:|---:|---:|---:|---:|
 | **3 / 3** | 1,394,504 | 867,840 | 62.23% | 526,664 | 101 | 813.337s |
 
-Query 2 is complete, but query 1 still needs its retry and query 3 remains incomplete. Do not calculate the stockindex dataset rate yet.
+This was an intermediate snapshot. The completed selected-attempt set is 9/9
+for stockindex; the final aggregate is authoritative.
 
-### In-progress `stockindex:3` observations — query result pending
+### Earlier live snapshot: `stockindex:3` (superseded by the completed result)
 
 | Field | `stockindex:3` trial 0 |
 |---|---:|
@@ -256,9 +278,11 @@ Query 2 is complete, but query 1 still needs its retry and query 3 remains incom
 | Cache-breakpoint fallbacks | 0 |
 | Reasoning-passback fallbacks | 0 |
 
-The current `stockindex:3` trial-1 attempt is **not** a semantic failure. It recorded `infra:rate_limit` with zero completed requests/tokens, one HTTP attempt, and no fallbacks. The fail-fast circuit stopped the queue until its reported reset at 2026-07-11 09:53:34 PDT. Trial 1 remains retryable and excluded from every denominator; trial 2 is still pending. Query 3 has no final rate.
+This snapshot captured a retryable `stockindex:3` trial-1 rate-limit attempt,
+which remains preserved and excluded. Its later retry and trial 2 both passed,
+closing the query at 3/3.
 
-### Current baseline partial aggregate — not an arm result
+### Earlier baseline partial aggregate (superseded)
 
 | Semantic progress | Observed passes | Input tokens | Cached tokens | Cache-read ratio | Noncached input | Tool calls | Wall time | Retryable infrastructure rows |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -327,8 +351,8 @@ There is no clean historical standalone hints estimate in the durable history. T
 
 | Arm | Status | Semantic trials | Stratified Pass@1 | Δ vs prior arm | Raw passes / 45 | Input tokens | Cached tokens | Cache-read ratio | Noncached input | Output tokens | Mean latency | Public-API price equivalent |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| B — bare baseline | PAUSED ON QUOTA / PENDING | 21 / 45 | PENDING | — | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| C — +Cartographer | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+| B — bare baseline | **COMPLETE** | 45 / 45 | **74.4%** | — | **35 / 45** | 31,578,005 | 21,846,272 | 69.18% | 9,731,733 | 489,785 | 327.1s | PENDING |
+| C — +Cartographer | **RUNNING** | live | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | L — +levers | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | H — +hints | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | G — +ledger | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
@@ -337,20 +361,22 @@ There is no clean historical standalone hints estimate in the durable history. T
 
 | Arm | `deps_dev_v1` | `music_brainz_20k` | `stockindex` | `yelp` | Stratified overall |
 |---|---:|---:|---:|---:|---:|
-| B — bare baseline | **50.0%** | **66.7%** | PENDING | PENDING | PENDING |
+| B — bare baseline | **50.0%** | **66.7%** | **100.0%** | **81.0%** | **74.4%** |
 | C — +Cartographer | PENDING | PENDING | PENDING | PENDING | PENDING |
 | L — +levers | PENDING | PENDING | PENDING | PENDING | PENDING |
 | H — +hints | PENDING | PENDING | PENDING | PENDING | PENDING |
 | G — +ledger | PENDING | PENDING | PENDING | PENDING | PENDING |
 
-No result chart is appropriate while every semantic metric is pending. Add one only after all five arms have the same 45-attempt denominator; the exact tables remain the audit surface.
+Add a result chart only after all five arms have the same 45-attempt
+denominator; the exact tables remain the audit surface.
 
 ## Exact runbook for the five grounding arms
 
 Before any scoring or resume operation:
 
 ```bash
-git -C ~/repos/DataAgentBench pull
+git -C ~/repos/DataAgentBench fetch origin --prune
+git -C ~/repos/DataAgentBench rev-list --left-right --count HEAD...origin/main
 uv run python scripts/dab_setup.py --dab-dir ~/repos/DataAgentBench
 ```
 
