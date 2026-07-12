@@ -95,9 +95,7 @@ def _mcp_interpreter(repo_root: Path = _REPO_ROOT) -> Path:
             f"Native diagnostic requires a repo virtualenv interpreter: {interpreter}"
         )
     if not os.access(interpreter, os.X_OK):
-        raise PermissionError(
-            f"Repo virtualenv interpreter is not executable: {interpreter}"
-        )
+        raise PermissionError(f"Repo virtualenv interpreter is not executable: {interpreter}")
     return interpreter
 
 
