@@ -106,7 +106,7 @@ def test_build_command_is_locked_down_and_injects_exact_mcp_config(tmp_path: Pat
     command = build_codex_command(_config(tmp_path))
     joined = " ".join(command)
 
-    assert command[:2] == [str(tmp_path / "bin" / "codex"), "exec"]
+    assert command[:4] == [str(tmp_path / "bin" / "codex"), "-a", "never", "exec"]
     for required in (
         "--ignore-user-config",
         "--ignore-rules",

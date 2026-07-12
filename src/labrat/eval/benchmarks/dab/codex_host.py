@@ -235,6 +235,8 @@ def build_codex_command(config: CodexHostConfig) -> list[str]:
     _validate_config(config)
     command = [
         str(config.executable),
+        "-a",
+        "never",
         "exec",
         "--ignore-user-config",
         "--ignore-rules",
