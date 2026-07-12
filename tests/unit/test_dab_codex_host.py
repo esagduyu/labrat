@@ -142,6 +142,7 @@ def test_build_command_is_locked_down_and_injects_exact_mcp_config(tmp_path: Pat
     assert f'mcp_servers.labrat.command="{tmp_path}/bin/python"' in command
     assert 'mcp_servers.labrat.args=["-m","labrat.mcp.server"]' in command
     assert 'mcp_servers.labrat.enabled_tools=["list_tables","run_sql"]' in command
+    assert 'mcp_servers.labrat.default_tools_approval_mode="approve"' in command
     assert any(value.startswith("mcp_servers.labrat.env={") for value in command)
 
 

@@ -267,6 +267,7 @@ def build_codex_command(config: CodexHostConfig) -> list[str]:
         command.extend(("-c", f"mcp_servers.labrat.cwd={_toml_string(str(mcp.cwd))}"))
         command.extend(("-c", f"mcp_servers.labrat.env={_toml_env(mcp.env)}"))
         command.extend(("-c", "mcp_servers.labrat.required=true"))
+        command.extend(("-c", 'mcp_servers.labrat.default_tools_approval_mode="approve"'))
         command.extend(("-c", f"mcp_servers.labrat.enabled_tools={_toml_array(mcp.enabled_tools)}"))
 
     command.extend(
