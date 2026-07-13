@@ -1,12 +1,14 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **LIVE — BASELINE AND CARTOGRAPHER COMPLETE; LEVERS ARM RUNNING**
+Status: **LIVE — BASELINE, CARTOGRAPHER, AND LEVERS COMPLETE; HINTS RUNNING**
 
 Last updated: 2026-07-12
 
-Live snapshot: the Luna-Max bare baseline and Cartographer-only arm completed
-all 45 semantic keys. The matched Cartographer-plus-levers arm is running as
-isolated dataset shards with two concurrent workers.
+Live snapshot: the Luna-Max bare baseline, Cartographer-only arm, and matched
+Cartographer-plus-levers arm have each completed all 45 semantic keys. The
+levers shards were canonically merged only after complete coverage and clean
+trace audits. The benchmark-hints arm is now running as isolated dataset
+shards with at most two disjoint-task workers.
 
 ## Technical summary
 
@@ -38,18 +40,31 @@ input from 9,731,733 to 10,057,480 (+3.3%). Its gains on Yelp queries 2 and 3
 did not offset regressions on MusicBrainz query 1 and Stockindex query 1.
 Cartographer is therefore not promoted on its own.
 
+The canonical Cartographer-plus-levers arm also completed at 33/45 semantic
+passes and **65.6746% stratified**: `deps_dev_v1` 50.0%,
+`music_brainz_20k` 44.4%, `stockindex` 77.8%, and Yelp 90.5%. Across semantic
+attempts it recorded 34,949,221 input tokens, 24,438,528 cached tokens
+(**69.9258%**), 10,510,693 noncached input tokens, 518,943 output tokens,
+2,315 completed requests, and 17,002.1 seconds of latency. Versus matched
+Cartographer, levers produced no accuracy gain while increasing noncached
+input by 453,213 (+4.51%), requests by 124 (+5.66%), and latency by 2,728.8
+seconds (+19.12%), with cache ratio down 0.43pp. Versus the bare baseline, it
+was down 8.73pp stratified and two passes while increasing noncached input by
+778,960 (+8.00%). Three retryable infrastructure rows are preserved and
+excluded; all 45 selected semantic attempts have clean, nonempty traces.
+
 The experiment is pre-registered as a cumulative five-arm Luna Max comparison over 15 DAB queries and three trials per query: bare baseline, then Cartographer, prompt levers, benchmark hints, and ContextLedger. Each arm is 45 semantic trials. The winner—not an assumed fully stacked configuration—will become the fixed grounding configuration for a separate four-tier hard-tail comparison: Luna Max, Terra High, Sol High, and Sol Ultra.
 
 All tables below distinguish live status from completed results. `PENDING` means no supported value exists; it must never be replaced with a zero. The experiment is descriptive at `n=3`, not powered for statistical significance. The decision target is whether GPT-5.6 preserves the known Sonnet grounding gains, whether the ledger lowers context cost without losing accuracy, and whether larger tiers clear failures that Luna does not.
 
-## Live status: baseline and Cartographer complete; levers arm running
+## Live status: baseline, Cartographer, and levers complete; hints running
 
 | Arm | Run directory | Current state | Semantic progress | Supported conclusion |
 |---|---|---|---:|---|
 | B — bare baseline | `runs/dab/ablation-gpt56-luna-max-baseline` | **COMPLETE** | 45 / 45 | **74.4% stratified; 35/45 micro; 69.18% cached; 9.73M noncached input.** Fifteen infrastructure rows are preserved and excluded. |
 | C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | **COMPLETE** | 45 / 45 | **65.7% stratified; 33/45 micro; 70.35% cached; 10.06M noncached input.** Accuracy and absolute noncached input both regressed. |
-| L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | **RUNNING — SHARDED** | live | Two workers own disjoint dataset/task cache keys; canonical merge is gated on complete shard audits. |
-| H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | PENDING — not started | 0 / 45 | None. |
+| L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | **COMPLETE** | 45 / 45 | **65.6746% stratified; 33/45 micro; 69.9258% cached; 10.51M noncached input.** No accuracy gain over Cartographer, with higher noncached input, requests, and latency; three infrastructure rows are preserved and excluded. |
+| H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | **RUNNING — SHARDED** | 15 / 45 complete before the live StockIndex and Yelp shards | Dependencies completed 3/6 and MusicBrainz completed 9/9; no arm-level conclusion until exact coverage, merge, and audit. |
 | G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | PENDING — not started | 0 / 45 | None. |
 
 ### Baseline trial detail
@@ -360,7 +375,7 @@ There is no clean historical standalone hints estimate in the durable history. T
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | B — bare baseline | **COMPLETE** | 45 / 45 | **74.4%** | — | **35 / 45** | 31,578,005 | 21,846,272 | 69.18% | 9,731,733 | 489,785 | 327.1s | PENDING |
 | C — +Cartographer | **COMPLETE** | 45 / 45 | **65.7%** | **-8.7pp** | **33 / 45** | 33,922,824 | 23,865,344 | 70.35% | 10,057,480 | 492,760 | 317.2s | PENDING |
-| L — +levers | **RUNNING — SHARDED** | live | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+| L — +levers | **COMPLETE** | 45 / 45 | **65.6746%** | **0.0pp** | **33 / 45** | 34,949,221 | 24,438,528 | 69.9258% | 10,510,693 | 518,943 | 377.8s | PENDING |
 | H — +hints | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | G — +ledger | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 
@@ -370,7 +385,7 @@ There is no clean historical standalone hints estimate in the durable history. T
 |---|---:|---:|---:|---:|---:|
 | B — bare baseline | **50.0%** | **66.7%** | **100.0%** | **81.0%** | **74.4%** |
 | C — +Cartographer | **50.0%** | **44.4%** | **77.8%** | **90.5%** | **65.7%** |
-| L — +levers | PENDING | PENDING | PENDING | PENDING | PENDING |
+| L — +levers | **50.0%** | **44.4%** | **77.8%** | **90.5%** | **65.6746%** |
 | H — +hints | PENDING | PENDING | PENDING | PENDING | PENDING |
 | G — +ledger | PENDING | PENDING | PENDING | PENDING | PENDING |
 
@@ -623,7 +638,7 @@ For each grounding or tier arm:
 Run metadata:
 
 - DAB checkout SHA at the paused launch: `ca45478a102792c8acbe5d19c8bcb2fb58827557` (includes the LabRat submission branch; synced `origin/main` at `5dd866b7f403007a15a79060233a5d98562d1ca9`)
-- Grounding arms completed: **0 / 5**
+- Grounding arms completed: **3 / 5**
 - Tier arms completed: **0 / 4**
 - Full Luna Max submission launched: **PENDING**
 - Full trace bundle completed: **PENDING**
