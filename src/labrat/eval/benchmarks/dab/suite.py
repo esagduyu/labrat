@@ -482,6 +482,45 @@ _DATASET_DIR_RE = re.compile(r"^query_(.+)$", re.IGNORECASE)
 _QUERY_DIR_RE = re.compile(r"^query(\d+)$")
 
 
+def aggregate_dab_results(results: list[TrialResult]) -> AggregateScore:
+    """Compute DAB's dataset-stratified score from trial results."""
+    if not results:
+        return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
+
+    # Drop infra failures so they don't depress the pass rate on queries that
+    # never got a fair shot (Max-plan session limit, API credit, timeout), and
+    # contaminated trials (data-leakage backstop) which are withdrawn entirely.
+    withdrawn = ("infra:", "contaminated:")
+    semantic_results = [r for r in results if not (r.reason or "").startswith(withdrawn)]
+    if not semantic_results:
+        return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
+
+    per_task: dict[str, list[bool]] = {}
+    for result in semantic_results:
+        per_task.setdefault(result.task_id, []).append(result.passed)
+    per_task_pass_rate = {
+        task_id: sum(passes) / len(passes) for task_id, passes in per_task.items()
+    }
+
+    by_dataset: dict[str, list[float]] = {}
+    for task_id, pass_rate in per_task_pass_rate.items():
+        dataset = task_id.split(":", 1)[0]
+        by_dataset.setdefault(dataset, []).append(pass_rate)
+    dataset_means = {
+        dataset: sum(pass_rates) / len(pass_rates)
+        for dataset, pass_rates in by_dataset.items()
+    }
+
+    return AggregateScore(
+        overall=sum(dataset_means.values()) / len(dataset_means),
+        per_task=per_task_pass_rate,
+        by_dimension={"dataset": dataset_means},
+        n_tasks=len(per_task),
+        n_trials=len(results),
+        n_passes=sum(1 for result in results if result.passed),
+    )
+
+
 class DabSuite:
     """Reads DAB queries from a DataAgentBench checkout."""
 
@@ -1512,36 +1551,7 @@ class DabSuite:
         return result.final_text, result.tool_calls, result.latency_seconds
 
     def aggregate(self, results: list[TrialResult]) -> AggregateScore:
-        if not results:
-            return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
-
-        # Drop infra failures so they don't depress the pass rate on queries that
-        # never got a fair shot (Max-plan session limit, API credit, timeout), and
-        # contaminated trials (data-leakage backstop) which are withdrawn entirely.
-        _withdrawn = ("infra:", "contaminated:")
-        semantic_results = [r for r in results if not (r.reason or "").startswith(_withdrawn)]
-        if not semantic_results:
-            return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
-
-        per_task: dict[str, list[bool]] = {}
-        for r in semantic_results:
-            per_task.setdefault(r.task_id, []).append(r.passed)
-        per_task_pass_rate = {tid: sum(passes) / len(passes) for tid, passes in per_task.items()}
-
-        by_dataset: dict[str, list[float]] = {}
-        for tid, pr in per_task_pass_rate.items():
-            dataset = tid.split(":", 1)[0]
-            by_dataset.setdefault(dataset, []).append(pr)
-        dataset_means = {ds: sum(prs) / len(prs) for ds, prs in by_dataset.items()}
-
-        return AggregateScore(
-            overall=sum(dataset_means.values()) / len(dataset_means),
-            per_task=per_task_pass_rate,
-            by_dimension={"dataset": dataset_means},
-            n_tasks=len(per_task),
-            n_trials=len(results),
-            n_passes=sum(1 for r in results if r.passed),
-        )
+        return aggregate_dab_results(results)
 
     def write_submission(self, report: BenchmarkReport, output_dir: Path) -> None:
         from labrat.eval.benchmarks.dab.reporter import write_submission_json
