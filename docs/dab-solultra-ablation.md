@@ -1,12 +1,12 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **LIVE — BARE BASELINE COMPLETE; CARTOGRAPHER ARM RUNNING**
+Status: **LIVE — BASELINE AND CARTOGRAPHER COMPLETE; LEVERS ARM RUNNING**
 
 Last updated: 2026-07-12
 
-Live snapshot: the Luna-Max bare baseline completed all 45 semantic keys and the
-matched Cartographer-only arm is running from
-`runs/dab/ablation-gpt56-luna-max-cartograph`.
+Live snapshot: the Luna-Max bare baseline and Cartographer-only arm completed
+all 45 semantic keys. The matched Cartographer-plus-levers arm is running as
+isolated dataset shards with two concurrent workers.
 
 ## Technical summary
 
@@ -31,17 +31,24 @@ driven by tool-internal LLM fan-out on some Yelp queries; cache percentage is
 therefore supporting context, while absolute noncached input remains the
 efficiency comparison metric.
 
+The matched Cartographer-only arm completed at 33/45 semantic passes and 65.7%
+stratified, below the baseline's 35/45 and 74.4%. It raised the aggregate
+cache-read ratio from 69.18% to 70.35% while increasing absolute noncached
+input from 9,731,733 to 10,057,480 (+3.3%). Its gains on Yelp queries 2 and 3
+did not offset regressions on MusicBrainz query 1 and Stockindex query 1.
+Cartographer is therefore not promoted on its own.
+
 The experiment is pre-registered as a cumulative five-arm Luna Max comparison over 15 DAB queries and three trials per query: bare baseline, then Cartographer, prompt levers, benchmark hints, and ContextLedger. Each arm is 45 semantic trials. The winner—not an assumed fully stacked configuration—will become the fixed grounding configuration for a separate four-tier hard-tail comparison: Luna Max, Terra High, Sol High, and Sol Ultra.
 
 All tables below distinguish live status from completed results. `PENDING` means no supported value exists; it must never be replaced with a zero. The experiment is descriptive at `n=3`, not powered for statistical significance. The decision target is whether GPT-5.6 preserves the known Sonnet grounding gains, whether the ledger lowers context cost without losing accuracy, and whether larger tiers clear failures that Luna does not.
 
-## Live status: baseline complete; Cartographer-only arm running
+## Live status: baseline and Cartographer complete; levers arm running
 
 | Arm | Run directory | Current state | Semantic progress | Supported conclusion |
 |---|---|---|---:|---|
 | B — bare baseline | `runs/dab/ablation-gpt56-luna-max-baseline` | **COMPLETE** | 45 / 45 | **74.4% stratified; 35/45 micro; 69.18% cached; 9.73M noncached input.** Fifteen infrastructure rows are preserved and excluded. |
-| C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | **RUNNING** | live | Same Luna Max configuration with only deterministic Cartographer enabled. |
-| L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | PENDING — not started | 0 / 45 | None. |
+| C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | **COMPLETE** | 45 / 45 | **65.7% stratified; 33/45 micro; 70.35% cached; 10.06M noncached input.** Accuracy and absolute noncached input both regressed. |
+| L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | **RUNNING — SHARDED** | live | Two workers own disjoint dataset/task cache keys; canonical merge is gated on complete shard audits. |
 | H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | PENDING — not started | 0 / 45 | None. |
 | G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | PENDING — not started | 0 / 45 | None. |
 
@@ -352,8 +359,8 @@ There is no clean historical standalone hints estimate in the durable history. T
 | Arm | Status | Semantic trials | Stratified Pass@1 | Δ vs prior arm | Raw passes / 45 | Input tokens | Cached tokens | Cache-read ratio | Noncached input | Output tokens | Mean latency | Public-API price equivalent |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | B — bare baseline | **COMPLETE** | 45 / 45 | **74.4%** | — | **35 / 45** | 31,578,005 | 21,846,272 | 69.18% | 9,731,733 | 489,785 | 327.1s | PENDING |
-| C — +Cartographer | **RUNNING** | live | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| L — +levers | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+| C — +Cartographer | **COMPLETE** | 45 / 45 | **65.7%** | **-8.7pp** | **33 / 45** | 33,922,824 | 23,865,344 | 70.35% | 10,057,480 | 492,760 | 317.2s | PENDING |
+| L — +levers | **RUNNING — SHARDED** | live | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | H — +hints | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | G — +ledger | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 
@@ -362,7 +369,7 @@ There is no clean historical standalone hints estimate in the durable history. T
 | Arm | `deps_dev_v1` | `music_brainz_20k` | `stockindex` | `yelp` | Stratified overall |
 |---|---:|---:|---:|---:|---:|
 | B — bare baseline | **50.0%** | **66.7%** | **100.0%** | **81.0%** | **74.4%** |
-| C — +Cartographer | PENDING | PENDING | PENDING | PENDING | PENDING |
+| C — +Cartographer | **50.0%** | **44.4%** | **77.8%** | **90.5%** | **65.7%** |
 | L — +levers | PENDING | PENDING | PENDING | PENDING | PENDING |
 | H — +hints | PENDING | PENDING | PENDING | PENDING | PENDING |
 | G — +ledger | PENDING | PENDING | PENDING | PENDING | PENDING |
@@ -380,7 +387,17 @@ git -C ~/repos/DataAgentBench rev-list --left-right --count HEAD...origin/main
 uv run python scripts/dab_setup.py --dab-dir ~/repos/DataAgentBench
 ```
 
-Run `~/repos/DataAgentBench/download.sh` first if required large benchmark files are missing, and ensure MongoDB is running for Yelp. Record the DAB checkout SHA in this document when the first semantic trial begins. Continue to pull before every scoring run as required; if the benchmark SHA changes mid-study, treat earlier arms as version-mismatched and rerun them on the new checkout before making a causal comparison.
+Run `~/repos/DataAgentBench/download.sh` first if required large benchmark files
+are missing, and ensure MongoDB is running for Yelp. Record the DAB checkout SHA
+when the first semantic trial begins. Fetch and recheck the upstream-behind
+count before every scoring session; preserve local benchmark data changes.
+
+For new arms, `scripts/dab_shards.py` may split the fixed arm config into one
+isolated directory per dataset. Run at most two dataset owners concurrently,
+stagger starts by ten seconds, and never run the same task in two workers. Stop
+all workers on the first exit 4 or `infra:rate_limit`. Merge only after every
+shard is complete; the merger rejects config drift, duplicate semantic rows,
+trace collisions, incomplete coverage, or a failed taint audit.
 
 ### B — bare baseline (resume this existing directory)
 
