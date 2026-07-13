@@ -1,6 +1,6 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **LIVE — BASELINE THROUGH HINTS COMPLETE; LEDGER RUNNING**
+Status: **LIVE — BASELINE THROUGH HINTS COMPLETE; LEDGER PAUSED FOR SUBSCRIPTION RESET**
 
 Last updated: 2026-07-13
 
@@ -8,8 +8,9 @@ Live snapshot: the Luna-Max bare baseline, Cartographer-only,
 Cartographer-plus-levers, and benchmark-hints arms have each completed all 45
 semantic keys. The sharded arms were canonically merged only after complete
 coverage and clean trace audits. Hints is the current quality winner and is
-therefore the parent configuration for the ContextLedger arm, which is running
-as isolated dataset shards with at most two disjoint-task workers.
+therefore the parent configuration for the ContextLedger arm. Ledger reached
+16/45 semantic keys before both live workers hit the same fail-fast subscription
+limit; preserved shards will resume after the July 19, 2026 12:06:55 PDT reset.
 
 ## Technical summary
 
@@ -79,7 +80,7 @@ The experiment is pre-registered as a cumulative five-arm Luna Max comparison ov
 
 All tables below distinguish live status from completed results. `PENDING` means no supported value exists; it must never be replaced with a zero. The experiment is descriptive at `n=3`, not powered for statistical significance. The decision target is whether GPT-5.6 preserves the known Sonnet grounding gains, whether the ledger lowers context cost without losing accuracy, and whether larger tiers clear failures that Luna does not.
 
-## Live status: baseline through hints complete; ledger running
+## Live status: baseline through hints complete; ledger paused until reset
 
 | Arm | Run directory | Current state | Semantic progress | Supported conclusion |
 |---|---|---|---:|---|
@@ -87,7 +88,7 @@ All tables below distinguish live status from completed results. `PENDING` means
 | C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | **COMPLETE** | 45 / 45 | **65.7% stratified; 33/45 micro; 70.35% cached; 10.06M noncached input.** Accuracy and absolute noncached input both regressed. |
 | L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | **COMPLETE** | 45 / 45 | **65.6746% stratified; 33/45 micro; 69.9258% cached; 10.51M noncached input.** No accuracy gain over Cartographer, with higher noncached input, requests, and latency; three infrastructure rows are preserved and excluded. |
 | H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | **COMPLETE** | 45 / 45 | **83.5317% stratified; 40/45 micro; 70.3966% cached; 11.46M noncached input.** Current quality winner and Ledger parent, though not an absolute noncached-efficiency win; twenty infrastructure rows are preserved and excluded. |
-| G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | **RUNNING — SHARDED** | live | Same Luna Max + Cartographer + levers + hints configuration as H, changing only ContextLedger from off to on; no arm-level conclusion until exact coverage, merge, and audit. |
+| G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | **PAUSED — SUBSCRIPTION RESET** | 16 / 45 | MusicBrainz is complete 9/9; dependencies is 5/6 and StockIndex 2/9. Two workers exited 4 on preserved rate-limit rows with a shared July 19, 2026 12:06:55 PDT reset. No arm-level conclusion until exact coverage, merge, and audit. |
 
 ### Baseline trial detail
 
