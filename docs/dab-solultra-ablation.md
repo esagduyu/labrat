@@ -1,16 +1,19 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **LIVE — BASELINE THROUGH HINTS COMPLETE; LEDGER PAUSED FOR SUBSCRIPTION RESET**
+Status: **LIVE — GROUNDING 5/5 COMPLETE; LEDGER PROMOTED; LUNA-MAX TIER ARM RUNNING**
 
 Last updated: 2026-07-13
 
-Live snapshot: the Luna-Max bare baseline, Cartographer-only,
-Cartographer-plus-levers, and benchmark-hints arms have each completed all 45
-semantic keys. The sharded arms were canonically merged only after complete
-coverage and clean trace audits. Hints is the current quality winner and is
-therefore the parent configuration for the ContextLedger arm. Ledger reached
-16/45 semantic keys before both live workers hit the same fail-fast subscription
-limit; preserved shards will resume after the July 19, 2026 12:06:55 PDT reset.
+Live snapshot: all five Luna-Max grounding arms have completed all 45 semantic
+keys. The sharded arms were canonically merged only after complete coverage and
+clean trace audits. ContextLedger is the official grounding winner: it improved
+the headline stratified score by 0.3968pp versus Hints while reducing absolute
+noncached input by 750,581 tokens (-6.5503%). It lost one raw pass and used more
+requests, tools, and latency, so the promotion is a stratified-quality plus
+noncached-efficiency decision rather than a claim of dominance on every metric.
+The exact winning flags are frozen below for the matched hard-tail tier study.
+The Luna-Max tier arm is running as disjoint task shards; CRM Arena Pro has
+completed 0/3 while the dependencies shard remains active.
 
 ## Technical summary
 
@@ -55,8 +58,9 @@ was down 8.73pp stratified and two passes while increasing noncached input by
 778,960 (+8.00%). Three retryable infrastructure rows are preserved and
 excluded; all 45 selected semantic attempts have clean, nonempty traces.
 
-The canonical Cartographer-plus-levers-plus-hints arm is the current quality
-winner: 40/45 semantic trials passed (**88.8889% micro**) for **83.5317%
+The canonical Cartographer-plus-levers-plus-hints arm was the quality leader
+before the matched Ledger comparison: 40/45 semantic trials passed (**88.8889%
+micro**) for **83.5317%
 stratified**. Its dataset cuts are `deps_dev_v1` 3/6 (50.0%),
 `music_brainz_20k` 9/9 (100%), `stockindex` 8/9 (88.8889%), and Yelp 20/21
 (95.2381%). Across semantic attempts it recorded 38,707,688 input tokens,
@@ -73,22 +77,42 @@ increasing noncached input by 948,099 (+9.0202%). Cache-read ratio rose
 **9.1270pp stratified** and five passes while increasing noncached input by
 1,727,059 (+17.747%); cache-read ratio rose 1.2147pp, requests fell by 247
 (-10.588%), and latency increased by 1,693.37 seconds (+11.503%). Hints is the
-quality winner and the correct Ledger parent, but it is not an absolute
+pre-Ledger quality leader and the correct Ledger parent, but it is not an absolute
 noncached-efficiency win.
 
-The experiment is pre-registered as a cumulative five-arm Luna Max comparison over 15 DAB queries and three trials per query: bare baseline, then Cartographer, prompt levers, benchmark hints, and ContextLedger. Each arm is 45 semantic trials. The winner—not an assumed fully stacked configuration—will become the fixed grounding configuration for a separate four-tier hard-tail comparison: Luna Max, Terra High, Sol High, and Sol Ultra.
+The canonical ContextLedger arm completed 45/45 semantic trials with 39 passes
+(**86.6667% micro**) and **83.9286% stratified**. Its dataset cuts are
+`deps_dev_v1` 3/6 (50.0%), `music_brainz_20k` 9/9 (100%), `stockindex` 9/9
+(100%), and Yelp 18/21 (85.7143%). Across semantic attempts it recorded
+37,680,115 input tokens, 26,971,904 cached tokens (**71.5813%**), 10,708,211
+noncached input tokens, 559,647 output tokens, 2,192 completed requests,
+18,280.2 seconds of latency (406.227 seconds mean), and 1,730 tool calls. Nine
+retryable infrastructure rows are preserved and excluded; all 45 selected
+semantic attempts have clean, nonempty traces.
+
+Versus Hints, Ledger gained **0.3968pp stratified** and improved StockIndex by
+one pass, while losing one raw pass overall because Yelp lost two; dependencies
+and MusicBrainz were unchanged. It reduced noncached input by 750,581
+(-6.5503%) and raised cache-read ratio by 1.1847pp, but increased requests by
+106 (+5.0815%), latency by 1,866.19 seconds (+11.3695%), and tool calls by 113
+(+6.9883%). The official stratified-plus-noncached promotion rule therefore
+selects Ledger for the tier-study grounding configuration, with the explicit
+caveat that it is slower, makes more requests, and loses one raw pass at this
+descriptive `n=3` denominator.
+
+The experiment is pre-registered as a cumulative five-arm Luna Max comparison over 15 DAB queries and three trials per query: bare baseline, then Cartographer, prompt levers, benchmark hints, and ContextLedger. Each arm is 45 semantic trials. The completed winner, ContextLedger, is now the fixed grounding configuration for a separate four-tier hard-tail comparison: Luna Max, Terra High, Sol High, and Sol Ultra.
 
 All tables below distinguish live status from completed results. `PENDING` means no supported value exists; it must never be replaced with a zero. The experiment is descriptive at `n=3`, not powered for statistical significance. The decision target is whether GPT-5.6 preserves the known Sonnet grounding gains, whether the ledger lowers context cost without losing accuracy, and whether larger tiers clear failures that Luna does not.
 
-## Live status: baseline through hints complete; ledger paused until reset
+## Live status: all five grounding arms complete; Ledger promoted
 
 | Arm | Run directory | Current state | Semantic progress | Supported conclusion |
 |---|---|---|---:|---|
 | B — bare baseline | `runs/dab/ablation-gpt56-luna-max-baseline` | **COMPLETE** | 45 / 45 | **74.4% stratified; 35/45 micro; 69.18% cached; 9.73M noncached input.** Fifteen infrastructure rows are preserved and excluded. |
 | C — +Cartographer | `runs/dab/ablation-gpt56-luna-max-cartograph` | **COMPLETE** | 45 / 45 | **65.7% stratified; 33/45 micro; 70.35% cached; 10.06M noncached input.** Accuracy and absolute noncached input both regressed. |
 | L — +levers | `runs/dab/ablation-gpt56-luna-max-levers` | **COMPLETE** | 45 / 45 | **65.6746% stratified; 33/45 micro; 69.9258% cached; 10.51M noncached input.** No accuracy gain over Cartographer, with higher noncached input, requests, and latency; three infrastructure rows are preserved and excluded. |
-| H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | **COMPLETE** | 45 / 45 | **83.5317% stratified; 40/45 micro; 70.3966% cached; 11.46M noncached input.** Current quality winner and Ledger parent, though not an absolute noncached-efficiency win; twenty infrastructure rows are preserved and excluded. |
-| G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | **PAUSED — SUBSCRIPTION RESET** | 16 / 45 | MusicBrainz is complete 9/9; dependencies is 5/6 and StockIndex 2/9. Two workers exited 4 on preserved rate-limit rows with a shared July 19, 2026 12:06:55 PDT reset. No arm-level conclusion until exact coverage, merge, and audit. |
+| H — +hints | `runs/dab/ablation-gpt56-luna-max-hints` | **COMPLETE** | 45 / 45 | **83.5317% stratified; 40/45 micro; 70.3966% cached; 11.46M noncached input.** Pre-Ledger quality leader and canonical Ledger parent; twenty infrastructure rows are preserved and excluded. |
+| G — +ledger | `runs/dab/ablation-gpt56-luna-max-ledger` | **COMPLETE — PROMOTED** | 45 / 45 | **83.9286% stratified; 39/45 micro; 71.5813% cached; 10.71M noncached input.** Official tier-study grounding winner: +0.3968pp stratified and -6.5503% noncached input versus Hints, with one fewer raw pass and higher requests and latency. Nine infrastructure rows are preserved and excluded. |
 
 ### Baseline trial detail
 
@@ -400,7 +424,7 @@ There is no clean historical standalone hints estimate in the durable history. T
 | C — +Cartographer | **COMPLETE** | 45 / 45 | **65.7%** | **-8.7pp** | **33 / 45** | 33,922,824 | 23,865,344 | 70.35% | 10,057,480 | 492,760 | 317.2s | PENDING |
 | L — +levers | **COMPLETE** | 45 / 45 | **65.6746%** | **0.0pp** | **33 / 45** | 34,949,221 | 24,438,528 | 69.9258% | 10,510,693 | 518,943 | 377.8s | PENDING |
 | H — +hints | **COMPLETE** | 45 / 45 | **83.5317%** | **+17.8571pp** | **40 / 45** | 38,707,688 | 27,248,896 | 70.3966% | 11,458,792 | 533,380 | 364.76s | PENDING |
-| G — +ledger | PENDING | 0 / 45 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+| G — +ledger | **COMPLETE — PROMOTED** | 45 / 45 | **83.9286%** | **+0.3968pp** | **39 / 45** | 37,680,115 | 26,971,904 | 71.5813% | 10,708,211 | 559,647 | 406.227s | PENDING |
 
 ### Dataset score table
 
@@ -410,10 +434,10 @@ There is no clean historical standalone hints estimate in the durable history. T
 | C — +Cartographer | **50.0%** | **44.4%** | **77.8%** | **90.5%** | **65.7%** |
 | L — +levers | **50.0%** | **44.4%** | **77.8%** | **90.5%** | **65.6746%** |
 | H — +hints | **50.0%** | **100.0%** | **88.8889%** | **95.2381%** | **83.5317%** |
-| G — +ledger | PENDING | PENDING | PENDING | PENDING | PENDING |
+| G — +ledger | **50.0%** | **100.0%** | **100.0%** | **85.7143%** | **83.9286%** |
 
-Add a result chart only after all five arms have the same 45-attempt
-denominator; the exact tables remain the audit surface.
+All five arms now share the same 45-attempt denominator. The exact tables remain
+the audit surface; any later summary chart must reproduce these completed values.
 
 ## Exact runbook for the five grounding arms
 
@@ -512,12 +536,19 @@ Select the arm with the highest completed stratified Pass@1. Because `n=3` is no
 
 For the ledger specifically, a score tie with H plus a meaningful reduction in noncached input or API-price equivalent is a positive result; an accuracy loss is a guardrail failure unless the magnitude is clearly attributable to one retryable infrastructure artifact, which must be rerun rather than scored.
 
+G did not tie or lose the preregistered headline score: stratified Pass@1 rose
+0.3968pp while noncached input fell 6.5503%. The one-pass raw decline is retained
+as a limitation rather than silently overriding the stratified decision rule.
+
 Once selected, write the winning arm and its exact flags here before launching the full run or tier study:
 
-- Winning arm: **PENDING**
-- Frozen grounding flags: **PENDING**
-- Decision date: **PENDING**
-- Evidence: **PENDING**
+- Winning arm: **G — +ledger** (`runs/dab/ablation-gpt56-luna-max-ledger`)
+- Frozen grounding flags: `--agent-cartograph --hints --agent-levers --agent-ledger`
+- Decision date: **2026-07-13**
+- Evidence: **83.9286% stratified and 10,708,211 noncached input**, versus
+  Hints at 83.5317% and 11,458,792. This is +0.3968pp stratified and -750,581
+  noncached input (-6.5503%), despite one fewer raw pass, +106 requests, and
+  +1,866.19 seconds latency.
 
 ## Hard-tail tier study: six fixed queries, four model/effort arms
 
@@ -535,21 +566,23 @@ These are historical hard-tail failures spanning exact-ID/precision, dependency 
 
 | Tier arm | Model | Requested effort | Wire/delegation behavior | Run directory | Status |
 |---|---|---|---|---|---|
-| Luna Max | `gpt-5.6-luna` | `max` | wire `max`; no Ultra delegation policy | `runs/dab/tier-gpt-5.6-luna-max` | PENDING |
+| Luna Max | `gpt-5.6-luna` | `max` | wire `max`; no Ultra delegation policy | `runs/dab/tier-gpt-5.6-luna-max` | **RUNNING — SHARDED** |
 | Terra High | `gpt-5.6-terra` | `high` | wire `high` | `runs/dab/tier-gpt-5.6-terra-high` | PENDING |
 | Sol High | `gpt-5.6-sol` | `high` | wire `high` | `runs/dab/tier-gpt-5.6-sol-high` | PENDING |
 | Sol Ultra | `gpt-5.6-sol` | `ultra` | wire `max` + proactive multi-agent delegation | `runs/dab/tier-gpt-5.6-sol-ultra` | PENDING |
 
-### Tier command templates are intentionally gated on the grounding winner
+### Tier command templates use the frozen Ledger grounding winner
 
-Replace `__WINNING_GROUNDING_FLAGS__` in all four commands with the exact frozen flags above. The placeholder is intentionally invalid so the tier study cannot accidentally launch with an assumed feature stack.
+All four commands use the exact promoted flags above. Keep this grounding
+configuration identical across tiers so the model/effort comparison remains
+matched.
 
 ```bash
 uv run python scripts/eval_dab.py \
   --dab-dir ~/repos/DataAgentBench \
   --driver labrat-agent --agent-provider codex \
   --agent-model gpt-5.6-luna --agent-reasoning max \
-  __WINNING_GROUNDING_FLAGS__ \
+  --agent-cartograph --hints --agent-levers --agent-ledger \
   --tasks crmarenapro:12,deps_dev_v1:1,music_brainz_20k:1,music_brainz_20k:3,pancancer_atlas:1,patents:2 \
   --n-trials 3 --output-dir runs/dab/tier-gpt-5.6-luna-max
 
@@ -557,7 +590,7 @@ uv run python scripts/eval_dab.py \
   --dab-dir ~/repos/DataAgentBench \
   --driver labrat-agent --agent-provider codex \
   --agent-model gpt-5.6-terra --agent-reasoning high \
-  __WINNING_GROUNDING_FLAGS__ \
+  --agent-cartograph --hints --agent-levers --agent-ledger \
   --tasks crmarenapro:12,deps_dev_v1:1,music_brainz_20k:1,music_brainz_20k:3,pancancer_atlas:1,patents:2 \
   --n-trials 3 --output-dir runs/dab/tier-gpt-5.6-terra-high
 
@@ -565,7 +598,7 @@ uv run python scripts/eval_dab.py \
   --dab-dir ~/repos/DataAgentBench \
   --driver labrat-agent --agent-provider codex \
   --agent-model gpt-5.6-sol --agent-reasoning high \
-  __WINNING_GROUNDING_FLAGS__ \
+  --agent-cartograph --hints --agent-levers --agent-ledger \
   --tasks crmarenapro:12,deps_dev_v1:1,music_brainz_20k:1,music_brainz_20k:3,pancancer_atlas:1,patents:2 \
   --n-trials 3 --output-dir runs/dab/tier-gpt-5.6-sol-high
 
@@ -573,7 +606,7 @@ uv run python scripts/eval_dab.py \
   --dab-dir ~/repos/DataAgentBench \
   --driver labrat-agent --agent-provider codex \
   --agent-model gpt-5.6-sol --agent-reasoning ultra \
-  __WINNING_GROUNDING_FLAGS__ \
+  --agent-cartograph --hints --agent-levers --agent-ledger \
   --tasks crmarenapro:12,deps_dev_v1:1,music_brainz_20k:1,music_brainz_20k:3,pancancer_atlas:1,patents:2 \
   --n-trials 3 --output-dir runs/dab/tier-gpt-5.6-sol-ultra
 ```
@@ -661,10 +694,34 @@ For each grounding or tier arm:
 Run metadata:
 
 - DAB checkout SHA at the paused launch: `ca45478a102792c8acbe5d19c8bcb2fb58827557` (includes the LabRat submission branch; synced `origin/main` at `5dd866b7f403007a15a79060233a5d98562d1ca9`)
-- Grounding arms completed: **4 / 5**
+- Grounding arms completed: **5 / 5**
 - Tier arms completed: **0 / 4**
 - Full Luna Max submission launched: **PENDING**
 - Full trace bundle completed: **PENDING**
+
+## Mandatory post-run integrity and official-submission gates
+
+These are required deliverables after the grounding and tier arms finish and
+before final campaign handoff or promotion into the full 270-trial run.
+
+### Trace-integrity and cheating audit
+
+Inspect every selected model/tool trace used in the reported findings. Check
+for web or browser search, external result lookup, access to validators,
+ground-truth or answer-key files, prohibited filesystem paths, direct answer
+leakage, suspicious parametric recall, and any other benchmark contamination.
+Report every questionable trial with its exact task/trial key and trace
+evidence; do not silently exclude, relabel, or average away questionable rows.
+Separate legitimate data-derived SQL evidence from leaked benchmark answers.
+
+### Comparison with the last official traced submission
+
+Use [`ucbepic/DataAgentBench#65`](https://github.com/ucbepic/DataAgentBench/pull/65)
+and its full traces. Intersect by exact task ID with the tasks covered in this
+campaign. Report per-task passes, aggregate pass counts and rates, differing
+trial denominators, gains, regressions, and any DAB checkout or ground-truth
+version caveats. Keep infrastructure failures separate from semantic outcomes
+in both runs and make the comparison reproducible from cited artifacts.
 
 ## Questions the completed experiment must answer
 
