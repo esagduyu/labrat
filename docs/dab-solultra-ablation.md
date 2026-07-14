@@ -1,6 +1,6 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **FINAL EVIDENCE — LEDGER PROMOTED; LUNA MAX ONLY RELIABLE TIER; 270 LAUNCH BLOCKED UNTIL RESET**
+Status: **FINAL ABLATION EVIDENCE — LEDGER PROMOTED; FULL 270-TRIAL LUNA-MAX SUBMISSION RUNNING**
 
 Last updated: 2026-07-14
 
@@ -16,9 +16,12 @@ Luna Max completed the hard-tail tier cohort at 18/18 semantic keys and 9/18
 passes. Terra High and Sol High reached their retry ceilings with only 14/18
 and 9/18 semantic keys, respectively. Sol Ultra reached 6/18 before the
 fail-fast `infra:rate_limit` path stopped all workers with exit 4; its reported
-reset is `2026-07-20T18:40:46Z`. The full 270-trial launch is blocked until that
-reset. The mandatory trace-integrity and PR #65 overlap audits are complete and
-linked below.
+reset was `2026-07-20T18:40:46Z`, but the user manually reset the subscription
+on 2026-07-14. A one-request Luna-low probe then succeeded, and the full
+270-trial Luna-Max submission launched at `2026-07-14T16:07:23Z` as two visible,
+disjoint dataset-worker groups under
+`runs/dab/submission-gpt56-luna-max-ledger-shards`. The mandatory
+trace-integrity and PR #65 overlap audits are complete and linked below.
 
 ## Technical summary
 
@@ -773,7 +776,7 @@ Run metadata:
 - Grounding arms completed: **5 / 5**
 - Tier arms completed and reliable: **1 / 4 — Luna Max only**
 - Higher-tier terminal state: **Terra High and Sol High incomplete at retry ceilings; Sol Ultra stopped on `infra:rate_limit` / exit 4**
-- Full 270-trial Luna Max submission launched: **BLOCKED until reset `2026-07-20T18:40:46Z`**
+- Full 270-trial Luna Max submission launched: **RUNNING since `2026-07-14T16:07:23Z`; two disjoint visible workers, frozen Ledger flags, five trials across 54 official tasks**
 - Mandatory trace-integrity audit: **COMPLETE — conditional no-confirmed-cheating verdict**
 - Mandatory PR #65 exact-overlap comparison: **COMPLETE**
 - Full immutable attempt-trace bundle: **NOT CLAIMED — 110 earlier infra-attempt traces were overwritten by `reset_on_attempt`**
@@ -880,10 +883,21 @@ used Claude Sonnet 4.6 with Cartographer and Hints and five trials per task;
 current uses GPT-5.6 Luna Max with Cartographer, Hints, Levers, Ledger, and three
 trials per task. Model, features, host/runtime, and denominator all changed.
 
+The downloaded PR archive covers all 270 submitted answer keys with nonempty,
+valid tool-call JSONL, including all 90 runs in the exact overlap, and its prompt
+artifact covers all 54 query keys. It contains **3,395** tool-call events rather
+than the **2,884** stated in the PR prose. The archive is tool-call-only: model
+messages and final answers are absent, prompts are stored once per query, and
+the stock system prompt is described rather than captured verbatim. Therefore
+answer-to-final-event equality cannot be reconstructed byte-for-byte even
+though official regrading, trace-key coverage, and maintainer acceptance all
+validate the submission-level comparison.
+
 Full evidence: [`ucbepic/DataAgentBench#65`](https://github.com/ucbepic/DataAgentBench/pull/65),
 [overlap report](../runs/dab/audits/pr65-overlap-comparison.md),
 [machine-readable comparison](../runs/dab/audits/pr65-overlap-comparison.json),
-and [per-task CSV](../runs/dab/audits/pr65-overlap-comparison.csv).
+[independent revalidation](../runs/dab/audits/pr65-source/pr65-revalidation.json),
+and [per-task CSV](../runs/dab/audits/pr65-source/pr65-revalidation.csv).
 
 ## Answers supported by the completed evidence
 
