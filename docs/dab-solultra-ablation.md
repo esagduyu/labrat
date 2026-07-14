@@ -1,8 +1,8 @@
 # GPT-5.6 DAB grounding and model-tier ablation
 
-Status: **LIVE — GROUNDING 5/5 COMPLETE; LEDGER PROMOTED; LUNA-MAX TIER ARM RUNNING**
+Status: **FINAL EVIDENCE — LEDGER PROMOTED; LUNA MAX ONLY RELIABLE TIER; 270 LAUNCH BLOCKED UNTIL RESET**
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 Live snapshot: all five Luna-Max grounding arms have completed all 45 semantic
 keys. The sharded arms were canonically merged only after complete coverage and
@@ -12,8 +12,13 @@ noncached input by 750,581 tokens (-6.5503%). It lost one raw pass and used more
 requests, tools, and latency, so the promotion is a stratified-quality plus
 noncached-efficiency decision rather than a claim of dominance on every metric.
 The exact winning flags are frozen below for the matched hard-tail tier study.
-The Luna-Max tier arm is running as disjoint task shards; CRM Arena Pro has
-completed 0/3 while the dependencies shard remains active.
+Luna Max completed the hard-tail tier cohort at 18/18 semantic keys and 9/18
+passes. Terra High and Sol High reached their retry ceilings with only 14/18
+and 9/18 semantic keys, respectively. Sol Ultra reached 6/18 before the
+fail-fast `infra:rate_limit` path stopped all workers with exit 4; its reported
+reset is `2026-07-20T18:40:46Z`. The full 270-trial launch is blocked until that
+reset. The mandatory trace-integrity and PR #65 overlap audits are complete and
+linked below.
 
 ## Technical summary
 
@@ -100,9 +105,48 @@ selects Ledger for the tier-study grounding configuration, with the explicit
 caveat that it is slower, makes more requests, and loses one raw pass at this
 descriptive `n=3` denominator.
 
+The hard-tail tier evidence supports only one complete model result. Luna Max
+covered all 18 planned keys and passed 9/18; its DAB-style five-dataset
+stratified score is **40.0%**, while the unweighted six-query/raw rate is
+**50.0%**. It passed both MusicBrainz queries and Patents 3/3 each, and missed
+CRM Arena Pro, dependencies, and PanCancer 0/3 each. Terra High's 7/14, Sol
+High's 5/9, and Sol Ultra's 3/6 are survivor-only semantic rates, not matched
+model-tier accuracy estimates. Their planned-key pass rates are 38.8889%,
+27.7778%, and 16.6667%, respectively, versus Luna's complete 50.0%.
+
+The integrity audit found no confirmed cheating, external-result lookup, or
+unsupported passing answer in the persisted evidence. That verdict is
+conditional: `reset_on_attempt` overwrote 110 earlier infrastructure-attempt
+traces, model message bodies are not persisted, and four StockIndex rows have
+validator-validity concerns. The exact-task PR #65 comparison nevertheless
+shows the canonical current slice at 42/54 passes (77.8%) versus 36/90 (40.0%)
+under reproduced official validators, with 10 task-rate gains, no regressions,
+and eight ties. This is descriptive historical evidence, not a model-only
+causal estimate.
+
 The experiment is pre-registered as a cumulative five-arm Luna Max comparison over 15 DAB queries and three trials per query: bare baseline, then Cartographer, prompt levers, benchmark hints, and ContextLedger. Each arm is 45 semantic trials. The completed winner, ContextLedger, is now the fixed grounding configuration for a separate four-tier hard-tail comparison: Luna Max, Terra High, Sol High, and Sol Ultra.
 
 All tables below distinguish live status from completed results. `PENDING` means no supported value exists; it must never be replaced with a zero. The experiment is descriptive at `n=3`, not powered for statistical significance. The decision target is whether GPT-5.6 preserves the known Sonnet grounding gains, whether the ledger lowers context cost without losing accuracy, and whether larger tiers clear failures that Luna does not.
+
+## Caching worked; Hints wins raw accuracy and Ledger wins the registered promotion rule
+
+Prompt caching is operationally successful but is not a quota-safety guarantee.
+Every campaign arm reports cached tokens and 100% cache-write-presence coverage.
+The five complete Luna feature arms achieved semantic cache-read ratios from
+69.1819% to 71.5813%, and the complete Luna hard-tail arm reached 78.1201%.
+Caching therefore removed substantial repeated input from billing-equivalent
+accounting. It did not prevent infrastructure exhaustion: the prompt-caching
+guide states that caching does not change rate limits, and Sol Ultra still
+stopped on `infra:rate_limit` after substantial retry overhead.
+
+Hints has the highest raw feature-arm accuracy at **40/45 (88.8889%)**. Ledger
+has one fewer raw pass, but it has the highest preregistered stratified score at
+**83.9286%** and reduces semantic noncached input from 11,458,792 to 10,708,211
+(-750,581; -6.5503%). Its semantic public-API price equivalent is also lower
+($16.7633 versus $17.3840), and its all-attempt equivalent is lower after
+including retry usage ($18.9869 versus $22.2528). The registered
+stratified-plus-noncached promotion rule therefore selects Ledger with the
+already-recorded raw-pass, request, and latency caveats.
 
 ## Live status: all five grounding arms complete; Ledger promoted
 
@@ -418,13 +462,13 @@ There is no clean historical standalone hints estimate in the durable history. T
 
 ### Arm-level decision table
 
-| Arm | Status | Semantic trials | Stratified Pass@1 | Δ vs prior arm | Raw passes / 45 | Input tokens | Cached tokens | Cache-read ratio | Noncached input | Output tokens | Mean latency | Public-API price equivalent |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| B — bare baseline | **COMPLETE** | 45 / 45 | **74.4%** | — | **35 / 45** | 31,578,005 | 21,846,272 | 69.18% | 9,731,733 | 489,785 | 327.1s | PENDING |
-| C — +Cartographer | **COMPLETE** | 45 / 45 | **65.7%** | **-8.7pp** | **33 / 45** | 33,922,824 | 23,865,344 | 70.35% | 10,057,480 | 492,760 | 317.2s | PENDING |
-| L — +levers | **COMPLETE** | 45 / 45 | **65.6746%** | **0.0pp** | **33 / 45** | 34,949,221 | 24,438,528 | 69.9258% | 10,510,693 | 518,943 | 377.8s | PENDING |
-| H — +hints | **COMPLETE** | 45 / 45 | **83.5317%** | **+17.8571pp** | **40 / 45** | 38,707,688 | 27,248,896 | 70.3966% | 11,458,792 | 533,380 | 364.76s | PENDING |
-| G — +ledger | **COMPLETE — PROMOTED** | 45 / 45 | **83.9286%** | **+0.3968pp** | **39 / 45** | 37,680,115 | 26,971,904 | 71.5813% | 10,708,211 | 559,647 | 406.227s | PENDING |
+| Arm | Status | Semantic trials | Stratified Pass@1 | Δ vs prior arm | Raw passes / 45 | Input tokens | Cached tokens | Cache-read ratio | Noncached input | Output tokens | Mean latency | Semantic API equivalent | All-attempt API equivalent |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| B — bare baseline | **COMPLETE** | 45 / 45 | **74.4%** | — | **35 / 45** | 31,578,005 | 21,846,272 | 69.18% | 9,731,733 | 489,785 | 327.1s | $14.8551 | $14.8551 |
+| C — +Cartographer | **COMPLETE** | 45 / 45 | **65.7%** | **-8.7pp** | **33 / 45** | 33,922,824 | 23,865,344 | 70.35% | 10,057,480 | 492,760 | 317.2s | $15.4006 | $15.4006 |
+| L — +levers | **COMPLETE** | 45 / 45 | **65.6746%** | **0.0pp** | **33 / 45** | 34,949,221 | 24,438,528 | 69.9258% | 10,510,693 | 518,943 | 377.8s | $16.0682 | $16.7028 |
+| H — +hints | **COMPLETE** | 45 / 45 | **83.5317%** | **+17.8571pp** | **40 / 45** | 38,707,688 | 27,248,896 | 70.3966% | 11,458,792 | 533,380 | 364.76s | $17.3840 | $22.2528 |
+| G — +ledger | **COMPLETE — PROMOTED** | 45 / 45 | **83.9286%** | **+0.3968pp** | **39 / 45** | 37,680,115 | 26,971,904 | 71.5813% | 10,708,211 | 559,647 | 406.227s | $16.7633 | $18.9869 |
 
 ### Dataset score table
 
@@ -566,10 +610,10 @@ These are historical hard-tail failures spanning exact-ID/precision, dependency 
 
 | Tier arm | Model | Requested effort | Wire/delegation behavior | Run directory | Status |
 |---|---|---|---|---|---|
-| Luna Max | `gpt-5.6-luna` | `max` | wire `max`; no Ultra delegation policy | `runs/dab/tier-gpt-5.6-luna-max` | **RUNNING — SHARDED** |
-| Terra High | `gpt-5.6-terra` | `high` | wire `high` | `runs/dab/tier-gpt-5.6-terra-high` | PENDING |
-| Sol High | `gpt-5.6-sol` | `high` | wire `high` | `runs/dab/tier-gpt-5.6-sol-high` | PENDING |
-| Sol Ultra | `gpt-5.6-sol` | `ultra` | wire `max` + proactive multi-agent delegation | `runs/dab/tier-gpt-5.6-sol-ultra` | PENDING |
+| Luna Max | `gpt-5.6-luna` | `max` | wire `max`; no Ultra delegation policy | `runs/dab/tier-gpt-5.6-luna-max` | **COMPLETE — ONLY RELIABLE TIER RESULT (18/18)** |
+| Terra High | `gpt-5.6-terra` | `high` | wire `high` | `runs/dab/tier-gpt-5.6-terra-high-shards` | **INCOMPLETE — RETRY CEILINGS (14/18)** |
+| Sol High | `gpt-5.6-sol` | `high` | wire `high` | `runs/dab/tier-gpt-5.6-sol-high-shards` | **INCOMPLETE — RETRY CEILINGS (9/18)** |
+| Sol Ultra | `gpt-5.6-sol` | `ultra` | wire `max` + proactive multi-agent delegation | `runs/dab/tier-gpt-5.6-sol-ultra-shards` | **STOPPED — `infra:rate_limit` / EXIT 4 (6/18); RESET `2026-07-20T18:40:46Z`** |
 
 ### Tier command templates use the frozen Ledger grounding winner
 
@@ -613,25 +657,57 @@ uv run python scripts/eval_dab.py \
 
 ### Tier result table
 
-The headline is DAB-style stratified Pass@1 over the five included datasets; `music_brainz_20k`'s two queries share one-fifth of that score. Also report the unweighted six-query mean and raw passes out of 18 so the weighting is transparent.
+The headline is DAB-style stratified Pass@1 over the five included datasets;
+`music_brainz_20k`'s two queries share one-fifth of that score. Only Luna has the
+full 18-key denominator required for that metric. For incomplete arms,
+`passes / semantic` describes only surviving semantic rows, while planned-key
+rate is the conservative `passes / 18`; neither repairs the missing matched
+trials.
 
-| Tier | Semantic trials | Stratified hard-tail Pass@1 | Six-query mean | Raw passes / 18 | Δ vs Luna | Tasks with ≥1 pass that Luna missed 0/3 | Mean API-price equivalent / trial | Incremental equivalent cost / incremental pass |
-|---|---:|---:|---:|---:|---:|---|---:|---:|
-| Luna Max | PENDING | PENDING | PENDING | PENDING | — | — | PENDING | — |
-| Terra High | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Sol High | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Sol Ultra | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+| Tier | Reliability status | Semantic coverage | Passes / semantic | Planned-key pass rate | Stratified hard-tail Pass@1 | New task with a pass that Luna missed 0/3 |
+|---|---|---:|---:|---:|---:|---|
+| Luna Max | **Complete / reliable** | **18 / 18 (100%)** | **9 / 18 (50.0%)** | **9 / 18 (50.0%)** | **40.0%** | — |
+| Terra High | **Incomplete — retry ceilings** | **14 / 18 (77.7778%)** | **7 / 14 (50.0%)** | **7 / 18 (38.8889%)** | Not comparable | `crmarenapro:12` (2/3) |
+| Sol High | **Incomplete — retry ceilings** | **9 / 18 (50.0%)** | **5 / 9 (55.5556%)** | **5 / 18 (27.7778%)** | Not comparable | `crmarenapro:12` (2/2 observed) |
+| Sol Ultra | **Incomplete — rate-limit stop** | **6 / 18 (33.3333%)** | **3 / 6 (50.0%)** | **3 / 18 (16.6667%)** | Not comparable | `crmarenapro:12` (1/1 observed) |
+
+The incomplete arms' higher or equal survivor rates do not establish a tier
+gain. Luna Max is the only complete and reliable tier result; no incremental
+cost-per-pass or model-tier promotion is supportable from the partial rows.
+
+### Tier efficiency and infrastructure accounting
+
+| Tier | Semantic cache ratio | Semantic noncached input | All-attempt cache ratio | All-attempt noncached input | Semantic API equivalent | All-attempt API equivalent | Infra rows |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Luna Max | **78.1201%** | 5,165,580 | **78.1201%** | 5,165,580 | $8.6977 | $8.6977 | 0 |
+| Terra High | 53.5671% | 2,756,511 | 54.2186% | 4,111,853 | $8.9323 | $13.4020 | 18 `agent_error` |
+| Sol High | 29.9635% | 3,089,406 | 30.2919% | 5,331,452 | $17.6502 | $30.5596 | 31 `agent_error` |
+| Sol Ultra | 28.4093% | 3,664,243 | 29.5828% | 11,854,053 | $21.0406 | $69.4165 | 27 `agent_error`; 11 `timeout`; 1 `rate_limit` |
+
+All-attempt cost includes the persisted request usage on retryable
+infrastructure rows. It is the relevant reliability cost, but still understates
+wall-clock overhead because terminal infra rows report zero latency and tool
+calls. Sol Ultra spent more than three times its semantic equivalent after
+including failed attempts, then stopped under the preregistered global
+rate-limit circuit. Its one `infra:rate_limit` row reports reset epoch
+`1784572846`, exactly `2026-07-20T18:40:46Z`; the worker exited 4 and no sibling
+work may resume before that reset.
+
+The task table reports `passes / semantic rows / infra rows`. A zero semantic
+denominator is shown explicitly rather than converted to a failure rate.
 
 | Hard query | Luna Max | Terra High | Sol High | Sol Ultra |
 |---|---:|---:|---:|---:|
-| `crmarenapro:12` | PENDING | PENDING | PENDING | PENDING |
-| `deps_dev_v1:1` | PENDING | PENDING | PENDING | PENDING |
-| `music_brainz_20k:1` | PENDING | PENDING | PENDING | PENDING |
-| `music_brainz_20k:3` | PENDING | PENDING | PENDING | PENDING |
-| `pancancer_atlas:1` | PENDING | PENDING | PENDING | PENDING |
-| `patents:2` | PENDING | PENDING | PENDING | PENDING |
+| `crmarenapro:12` | 0 / 3 / 0 | 2 / 3 / 0 | 2 / 2 / 3 | 1 / 1 / 8 |
+| `deps_dev_v1:1` | 0 / 3 / 0 | 0 / 3 / 1 | 0 / 1 / 6 | 0 / 1 / 6 |
+| `music_brainz_20k:1` | 3 / 3 / 0 | 2 / 2 / 3 | 2 / 2 / 3 | 2 / 2 / 5 |
+| `music_brainz_20k:3` | 3 / 3 / 0 | 2 / 2 / 6 | 1 / 1 / 7 | 0 / 0 / 8 |
+| `pancancer_atlas:1` | 0 / 3 / 0 | 0 / 3 / 1 | 0 / 3 / 3 | 0 / 2 / 6 |
+| `patents:2` | 3 / 3 / 0 | 1 / 1 / 7 | 0 / 0 / 9 | 0 / 0 / 6 |
 
-A larger tier earns its cost only if it improves the hard-tail score and clears at least one query on which Luna is 0/3. If it merely changes which stochastic attempts pass at the same aggregate, retain Luna. Sol Ultra must show incremental clears beyond Sol High to justify Max reasoning plus delegation overhead.
+The tier metrics and arithmetic above come from the generated
+[`campaign-summary.json`](../runs/dab/audits/campaign-summary.json), with the
+saved tier configs and reports as the run-level sources.
 
 ## Token and public-API price-equivalent methodology
 
@@ -695,9 +771,12 @@ Run metadata:
 
 - DAB checkout SHA at the paused launch: `ca45478a102792c8acbe5d19c8bcb2fb58827557` (includes the LabRat submission branch; synced `origin/main` at `5dd866b7f403007a15a79060233a5d98562d1ca9`)
 - Grounding arms completed: **5 / 5**
-- Tier arms completed: **0 / 4**
-- Full Luna Max submission launched: **PENDING**
-- Full trace bundle completed: **PENDING**
+- Tier arms completed and reliable: **1 / 4 — Luna Max only**
+- Higher-tier terminal state: **Terra High and Sol High incomplete at retry ceilings; Sol Ultra stopped on `infra:rate_limit` / exit 4**
+- Full 270-trial Luna Max submission launched: **BLOCKED until reset `2026-07-20T18:40:46Z`**
+- Mandatory trace-integrity audit: **COMPLETE — conditional no-confirmed-cheating verdict**
+- Mandatory PR #65 exact-overlap comparison: **COMPLETE**
+- Full immutable attempt-trace bundle: **NOT CLAIMED — 110 earlier infra-attempt traces were overwritten by `reset_on_attempt`**
 
 ## Mandatory post-run integrity and official-submission gates
 
@@ -706,27 +785,120 @@ before final campaign handoff or promotion into the full 270-trial run.
 
 ### Trace-integrity and cheating audit
 
-Inspect every selected model/tool trace used in the reported findings. Check
-for web or browser search, external result lookup, access to validators,
-ground-truth or answer-key files, prohibited filesystem paths, direct answer
-leakage, suspicious parametric recall, and any other benchmark contamination.
-Report every questionable trial with its exact task/trial key and trace
-evidence; do not silently exclude, relabel, or average away questionable rows.
-Separate legitimate data-derived SQL evidence from leaked benchmark answers.
+**Verdict: no confirmed cheating or external-result access in the persisted
+evidence; safe to use only with explicit coverage and validator caveats.** The
+audit covered 21 run directories, 407 terminal rows, 272 semantic rows, all 204
+passes, 135 infrastructure rows, 297 latest trace files with 10,688 tool events,
+and 15,981 model-request metadata records. It found zero browser/web/network
+fetch events, zero prohibited answer/run-file access, zero arbitrary shell or
+filesystem reads, and zero nonempty results among 55 `search_trails` calls.
+Every passing row has at least three legitimate local data-access events and a
+distinctive final-answer token or name in persisted local tool output.
+
+The verdict is conditional because 110 earlier terminal infrastructure-attempt
+traces were overwritten by `reset_on_attempt`, prompt/response bodies are not
+persisted for the 15,981 requests, one terminated Sol-Ultra Patents attempt has
+a clean 26-event partial trace but no terminal row, and the final Sol-Ultra
+MusicBrainz/Patents taint files are stale relative to later rows or traces. All
+297 available taint entries are `clean`, but they cannot restore missing attempt
+history.
+
+Eight benchmark-referential trials were manually reviewed. None accessed a
+secret answer source, but all remain visible rather than being averaged away:
+
+| Run / task-trial | Exact trace evidence | Disposition |
+|---|---|---|
+| Baseline / `stockindex:2` trial 2 | `scratch/stockindex_2__trial2/agent_tool_calls.jsonl:40` asks which interpretation is “most likely expected.” | No answer source; passed with all three indices. Medium concern and validator-fragile. |
+| Cartographer / `stockindex:1` trial 0 | `scratch/stockindex_1__trial0/agent_tool_calls.jsonl:38` asks for the benchmark's “expected metric.” | Docs returned schema/ranges only; likely format-sensitive false negative. |
+| Cartographer / `stockindex:2` trial 1 | Trace lines 31 and 37 ask for the “likely expected answer” and “typical benchmark” intent. | Generic guidance only; possible validator false positive. Medium concern. |
+| Cartographer / `stockindex:2` trial 2 | `scratch/stockindex_2__trial2/agent_tool_calls.jsonl:23` asks how similar benchmark questions define up/down days. | Schema/ranges only; local calculations support the answer. Low concern. |
+| Levers / `deps_dev_v1:1` trial 2 | `scratch/deps_dev_v1_1__trial2/agent_tool_calls.jsonl:41` includes “SQL benchmark.” | Schema/examples only; trial failed. Low concern. |
+| Levers / `yelp:3` trial 2 | `scratch/yelp_3__trial2/agent_tool_calls.jsonl:31` asks for a canonical query and “expected count.” | No count returned; local SQL already supported 35. Low-to-medium concern. |
+| Ledger / `yelp:3` trial 1 | `scratch/yelp_3__trial1/agent_tool_calls.jsonl:47` asks a subagent to choose the “most likely expected answer.” | Dispatch used zero turns/tools; local SQL supported 35. Medium concern, no causal effect. |
+| Ledger / `stockindex:3` trial 0 | `scratch/stockindex_3__trial0/agent_tool_calls.jsonl:23` asks which convention is “expected.” | Schema/ranges only; local SQL supports the result. Low concern. |
+
+Separately, three StockIndex rows may be false positives because they list
+`IXIC`, `NYA`, and `GSPTSE` while the validator only requires primary `IXIC`;
+Cartographer `stockindex:1` trial 0 may be a false negative because `399001.SZ`
+appears after the validator's first-200-character window. These are accuracy
+validity issues, not cheating findings, and should be semantically regraded
+before treating one-trial StockIndex deltas as causal evidence.
+
+Full evidence: [trace-integrity report](../runs/dab/audits/gpt56-trace-integrity.md)
+and [machine-readable audit](../runs/dab/audits/gpt56-trace-integrity.json).
 
 ### Comparison with the last official traced submission
 
-Use [`ucbepic/DataAgentBench#65`](https://github.com/ucbepic/DataAgentBench/pull/65)
-and its full traces. Intersect by exact task ID with the tasks covered in this
-campaign. Report per-task passes, aggregate pass counts and rates, differing
-trial denominators, gains, regressions, and any DAB checkout or ground-truth
-version caveats. Keep infrastructure failures separate from semantic outcomes
-in both runs and make the comparison reproducible from cited artifacts.
+The canonical current Luna-Max union is **42/54 semantic passes (77.7778%)** on
+18 exact task IDs, versus **36/90 (40.0%)** when the corresponding PR #65
+answers are regraded with the official validators: **+37.7778pp**. Task-level
+semantic rates show **10 gains, 0 regressions, and 8 ties**. On the coarser
+any-pass metric, current passes 14/18 tasks versus PR #65's 10/18: four newly
+passing tasks, no lost tasks, and 14 ties. The current denominator also retains
+nine retryable infra rows separately; all 54 planned semantic keys were
+eventually covered.
 
-## Questions the completed experiment must answer
+| Exact task ID | Current semantic result | PR #65 reproduced result | Rate delta |
+|---|---:|---:|---:|
+| `crmarenapro:12` | 0/3 | 0/5 | 0pp |
+| `deps_dev_v1:1` | 0/3 | 0/5 | 0pp |
+| `deps_dev_v1:2` | 3/3 | 2/5 | +60pp |
+| `music_brainz_20k:1` | 3/3 | 0/5 | +100pp |
+| `music_brainz_20k:2` | 3/3 | 4/5 | +20pp |
+| `music_brainz_20k:3` | 3/3 | 0/5 | +100pp |
+| `pancancer_atlas:1` | 0/3 | 0/5 | 0pp |
+| `patents:2` | 3/3 | 0/5 | +100pp |
+| `stockindex:1` | 3/3 | 5/5 | 0pp |
+| `stockindex:2` | 3/3 | 5/5 | 0pp |
+| `stockindex:3` | 3/3 | 4/5 | +20pp |
+| `yelp:1` | 3/3 | 5/5 | 0pp |
+| `yelp:2` | 0/3 | 0/5 | 0pp |
+| `yelp:3` | 3/3 | 1/5 | +80pp |
+| `yelp:4` | 3/3 | 0/5 | +100pp |
+| `yelp:5` | 3/3 | 4/5 | +20pp |
+| `yelp:6` | 3/3 | 5/5 | 0pp |
+| `yelp:7` | 3/3 | 1/5 | +80pp |
 
-1. Does GPT-5.6 Luna behave like Sonnet, where Cartographer added +8pp, or like GPT-5.5, where it was neutral because the model self-grounded exhaustively?
-2. Are the prompt levers still net-positive after GPT-5.6's stronger native reasoning, especially on music-brainz force-query failures?
-3. Do declared DAB hints add accuracy beyond Cartographer plus general process rules, or merely duplicate them?
-4. Does ContextLedger lower noncached input and API-price equivalent without hiding evidence the model needs to answer correctly?
-5. Which larger tier, if any, clears hard queries Luna misses—and what is the equivalent cost per incremental pass?
+The four newly passing tasks are `music_brainz_20k:1`,
+`music_brainz_20k:3`, `patents:2`, and `yelp:4`; all move from PR #65's 0/5 to
+current 3/3. The four persistent current failures are `crmarenapro:12`,
+`deps_dev_v1:1`, `pancancer_atlas:1`, and `yelp:2`, each also 0/5 in PR #65.
+The canonical union uses Ledger for its 15 tasks and adds only the three
+hard-tail-only tasks, preventing duplicate counting of the three overlapping
+Ledger/tier IDs.
+
+PR #65 does not store pass booleans, so all 270 answers were passed through the
+official validators. This exactly reproduced **176/270 passes** and stratified
+Pass@1 **0.6088217338**, matching the published 0.6088 with zero validator
+errors. Validator and ground-truth blobs for all 18 overlap IDs are byte-identical
+between the PR base and the current checkout. Two locally modified Yelp BSON
+files remain a current-data-state caveat, although Yelp validators and ground
+truth are unchanged.
+
+This is a descriptive historical comparison, not a model-only ablation: PR #65
+used Claude Sonnet 4.6 with Cartographer and Hints and five trials per task;
+current uses GPT-5.6 Luna Max with Cartographer, Hints, Levers, Ledger, and three
+trials per task. Model, features, host/runtime, and denominator all changed.
+
+Full evidence: [`ucbepic/DataAgentBench#65`](https://github.com/ucbepic/DataAgentBench/pull/65),
+[overlap report](../runs/dab/audits/pr65-overlap-comparison.md),
+[machine-readable comparison](../runs/dab/audits/pr65-overlap-comparison.json),
+and [per-task CSV](../runs/dab/audits/pr65-overlap-comparison.csv).
+
+## Answers supported by the completed evidence
+
+1. Luna resembles the GPT-5.5 result more than the older Sonnet result on
+   Cartographer: Cartographer alone regressed from 74.4% to 65.7% stratified.
+2. Prompt levers were not net-positive in this Luna cohort: they left accuracy
+   unchanged from Cartographer while increasing noncached input, requests, and
+   latency.
+3. Hints produced the largest raw-accuracy gain, reaching 40/45 and 83.5317%
+   stratified after the 33/45 Levers arm.
+4. Ledger reduced semantic noncached input and public-API equivalent while
+   slightly improving stratified score, but lost one raw pass and increased
+   requests and latency. The integrity audit found no confirmed evidence that
+   Ledger hid or replaced local data evidence on passing rows.
+5. No larger tier has reliable matched evidence. Luna Max is the only complete
+   tier arm. Terra High and Sol High stopped at retry ceilings; Sol Ultra hit
+   the global rate-limit circuit. The observed CRM clears are survivor-only and
+   do not justify an incremental cost-per-pass or tier promotion.
