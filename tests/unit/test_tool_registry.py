@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
+from labrat.agent.providers.base import RateLimitError
 from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
 
 # ── test fixtures ─────────────────────────────────────────────────────────────
@@ -49,11 +50,35 @@ class _BoomTool(Tool[_EchoInput]):
         raise RuntimeError("kaboom")
 
 
+class _RateLimitedTool(Tool[_EchoInput]):
+    @property
+    def name(self) -> str:
+        return "limited"
+
+    @property
+    def description(self) -> str:
+        return "Always hits the provider rate limit."
+
+    @property
+    def input_model(self) -> type[_EchoInput]:
+        return _EchoInput
+
+    async def execute(self, ctx: ToolContext, args: _EchoInput) -> object:
+        raise RateLimitError()
+
+
 @pytest.fixture()
 def registry() -> ToolRegistry:
     r = ToolRegistry()
     r.register(_EchoTool())
     r.register(_BoomTool())
+    return r
+
+
+@pytest.fixture()
+def limited_registry() -> ToolRegistry:
+    r = ToolRegistry()
+    r.register(_RateLimitedTool())
     return r
 
 
@@ -158,6 +183,24 @@ async def test_dispatch_tool_raises(registry: ToolRegistry, ctx: ToolContext) ->
     result = await registry.dispatch("boom", {"message": "x"}, ctx)
     assert result.ok is False
     assert "kaboom" in (result.error or "")
+
+
+async def test_dispatch_rate_limit_degrades_to_tool_error_by_default(
+    limited_registry: ToolRegistry, ctx: ToolContext
+) -> None:
+    """Default (product) contexts keep the always-returns-DispatchResult contract."""
+    result = await limited_registry.dispatch("limited", {"message": "x"}, ctx)
+    assert result.ok is False
+    assert "rate limit" in (result.error or "").lower()
+
+
+async def test_dispatch_rate_limit_reraises_when_ctx_opts_in(
+    limited_registry: ToolRegistry,
+) -> None:
+    """raise_rate_limits=True (benchmark fail-fast) re-raises the provider signal."""
+    ctx = ToolContext(connection=object(), catalog=object(), raise_rate_limits=True)
+    with pytest.raises(RateLimitError):
+        await limited_registry.dispatch("limited", {"message": "x"}, ctx)
 
 
 # ── registration ──────────────────────────────────────────────────────────────

@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+import pytest
 from pydantic import BaseModel
 
 from labrat.agent.loop import ContentBlock, TextBlock, ToolUseBlock
-from labrat.agent.providers.base import ModelProvider
+from labrat.agent.providers.base import ModelProvider, RateLimitError
 from labrat.agent.runner import run_agent_task
 from labrat.agent.tools.base import Tool, ToolContext, ToolRegistry
 
@@ -97,6 +98,7 @@ async def test_runner_handles_no_tool_calls() -> None:
     )
     assert result.final_text == "Direct answer."
     assert result.tool_calls == 0
+    assert result.turn_budget_exhausted is False
 
 
 async def test_runner_respects_max_turns_cap() -> None:
@@ -156,6 +158,57 @@ async def test_runner_respects_max_tool_calls_cap() -> None:
         max_tool_calls=2,
     )
     assert result.tool_calls == 2
+
+
+async def test_runner_tool_rate_limit_degrades_by_default(limited_tool: Tool[Any]) -> None:
+    """Product callers: a 429 inside a tool never escapes run_agent_task."""
+    ctx = ToolContext(connections={"primary": object()}, catalogs={"primary": object()})
+    registry = ToolRegistry()
+    registry.register(limited_tool)
+    provider = _FakeProvider(
+        [
+            [ToolUseBlock(id="t1", name="limited", input={})],
+            [TextBlock(text="degraded gracefully")],
+        ]
+    )
+
+    result = await run_agent_task(
+        prompt="try it",
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="test",
+    )
+    assert result.final_text == "degraded gracefully"
+    assert ctx.raise_rate_limits is False
+
+
+async def test_runner_ctx_rate_limit_flag_enables_fail_fast(limited_tool: Tool[Any]) -> None:
+    """A ctx constructed with raise_rate_limits=True (the DAB labrat-agent driver
+    sets it on the ctx it owns): the 429 escapes the run. There is no runner kwarg."""
+    ctx = ToolContext(
+        connections={"primary": object()},
+        catalogs={"primary": object()},
+        raise_rate_limits=True,
+    )
+    registry = ToolRegistry()
+    registry.register(limited_tool)
+    provider = _FakeProvider(
+        [
+            [ToolUseBlock(id="t1", name="limited", input={})],
+            [TextBlock(text="unreached")],
+        ]
+    )
+
+    with pytest.raises(RateLimitError):
+        await run_agent_task(
+            prompt="try it",
+            ctx=ctx,
+            registry=registry,
+            provider=provider,
+            system_prompt="test",
+        )
+    assert ctx.raise_rate_limits is True
 
 
 async def test_runner_counts_multiple_tool_calls_across_turns() -> None:

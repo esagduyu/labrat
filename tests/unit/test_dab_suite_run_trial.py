@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from labrat.agent.loop import TextBlock
-from labrat.eval.benchmarks.dab.suite import DabSuite
+from labrat.eval.benchmarks.dab.suite import DabSuite, DriverOutcome
 
 
 class _UsageJudgeProvider:
@@ -208,6 +208,27 @@ async def test_labrat_agent_driver_threads_verify_flag(
     assert captured.get("verify") is False
 
 
+@patch("labrat.agent.providers.build_provider", return_value=MagicMock())
+async def test_labrat_agent_driver_opts_into_rate_limit_fail_fast(
+    _provider: MagicMock, tmp_path: Path
+) -> None:
+    """The benchmark driver keeps fail-fast: it sets raise_rate_limits on the ctx it owns."""
+    _make_real_duckdb_fixture(tmp_path)
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="ok", tool_calls=0, latency_seconds=0.0)
+
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_rl")
+    assert "raise_rate_limits" not in captured  # the runner kwarg is gone
+    ctx = captured.get("ctx")
+    assert ctx is not None and ctx.raise_rate_limits is True
+
+
 @patch("labrat.agent.providers.build_provider")
 async def test_labrat_agent_driver_records_provider_token_usage(
     mock_build: MagicMock, tmp_path: Path
@@ -342,6 +363,7 @@ async def test_labrat_agent_terminalizes_turn_budget_with_trace(
     assert result.passed is False
     assert result.reason == "terminal:turn_budget"
     assert result.artifact == {"type": "text", "payload": expected}
+    assert result.tool_calls == 10
     trace = [
         json.loads(line) for line in (scratch / "agent_tool_calls.jsonl").read_text().splitlines()
     ]
@@ -352,6 +374,72 @@ async def test_labrat_agent_terminalizes_turn_budget_with_trace(
         "output": expected,
         "latency_ms": 0.0,
     }
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_agent_authored_exhausted_prefix_is_a_normal_answer(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    """An agent-AUTHORED answer starting with the turn-budget sentinel literal must
+    NOT be classified terminal when the loop did not exhaust its budget — terminal
+    classification is driven by the structured flag, never by string matching."""
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {}
+    provider.request_usage = []
+    mock_build.return_value = provider
+
+    authored = "[trial exhausted 10-turn budget without a final answer] — kidding; the answer is 7"
+
+    async def fake_run_agent_task(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            final_text=authored,
+            tool_calls=3,
+            latency_seconds=1.0,
+            turn_budget_exhausted=False,
+        )
+
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", agent_max_turns=10)
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "authored")
+
+    # The fixture validator passes everything, so a normal semantic answer scores.
+    assert result.reason != "terminal:turn_budget"
+    assert result.passed is True
+    assert result.artifact == {"type": "text", "payload": authored}
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_agent_authored_exhausted_prefix_still_hits_contamination_backstop(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    """The old string short-circuit ran BEFORE the contamination backstop; an
+    agent-authored '[trial exhausted ...' answer with a leakage marker must be
+    withdrawn as contaminated, not laundered into a terminal row."""
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {}
+    provider.request_usage = []
+    mock_build.return_value = provider
+
+    authored = "[trial exhausted 10-turn budget without a final answer] matches the ground truth"
+
+    async def fake_run_agent_task(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            final_text=authored,
+            tool_calls=3,
+            latency_seconds=1.0,
+            turn_budget_exhausted=False,
+        )
+
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", agent_max_turns=10)
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "contaminated")
+
+    assert result.passed is False
+    assert (result.reason or "").startswith("contaminated:")
 
 
 @patch("labrat.agent.providers.build_provider")
@@ -587,11 +675,11 @@ async def test_consensus_promotes_trace_from_actual_retained_subrun(tmp_path: Pa
         _db_config_path: Path,
         subrun: Path,
         **_kwargs: Any,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         if subrun.name == "subrun0":
             raise RuntimeError("infra failure")
         (subrun / "agent_tool_calls.jsonl").write_text(winning_trace)
-        return ("winner", 1, 0.1)
+        return DriverOutcome("winner", 1, 0.1)
 
     with (
         patch.object(suite, "_dispatch_driver_once", new=dispatch),
@@ -634,17 +722,17 @@ async def test_failed_argumentation_round_retains_prior_answer_and_trace(
         _db_config_path: Path,
         subrun: Path,
         **_kwargs: Any,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         calls[subrun.name] = calls.get(subrun.name, 0) + 1
         if subrun.name == "subrun0" and calls[subrun.name] == 1:
             (subrun / "agent_tool_calls.jsonl").write_text(prior_trace)
-            return ("primary-old", 1, 0.1)
+            return DriverOutcome("primary-old", 1, 0.1)
         if subrun.name == "subrun1" and calls[subrun.name] == 1:
             (subrun / "agent_tool_calls.jsonl").write_text("")
-            return ("other-old", 0, 0.1)
+            return DriverOutcome("other-old", 0, 0.1)
         if subrun.name in {"subrun0", "argue-round1-subrun0"}:
             (subrun / "agent_tool_calls.jsonl").write_text(tentative_trace)
-            return ("primary-tentative", 1, 0.1)
+            return DriverOutcome("primary-tentative", 1, 0.1)
         raise RuntimeError("later tentative rerun failed")
 
     with (
@@ -677,9 +765,9 @@ async def test_consensus_judge_usage_is_included_in_trial_telemetry(tmp_path: Pa
         _db_config_path: Path,
         subrun: Path,
         **_kwargs: Any,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         (subrun / "agent_tool_calls.jsonl").write_text("")
-        return ("3", 0, 0.1)
+        return DriverOutcome("3", 0, 0.1)
 
     async def choose_modal(_answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
         await llm_fn(question)
@@ -716,9 +804,9 @@ async def test_reverify_judge_usage_is_included_in_trial_telemetry(tmp_path: Pat
         _db_config_path: Path,
         subrun: Path,
         **_kwargs: Any,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         (subrun / "agent_tool_calls.jsonl").write_text("")
-        return ("3", 0, 0.1)
+        return DriverOutcome("3", 0, 0.1)
 
     async def answers_agree(_first: str, _second: str, *, question: str, llm_fn: Any) -> bool:
         await llm_fn(question)
@@ -804,7 +892,7 @@ async def test_run_trial_classifies_cli_api_error_429_as_rate_limit(tmp_path: Pa
     with patch.object(
         DabSuite,
         "_run_trial_raw_bash",
-        new=AsyncMock(return_value=("API Error: 429 Too Many Requests", 0, 0.1)),
+        new=AsyncMock(return_value=DriverOutcome("API Error: 429 Too Many Requests", 0, 0.1)),
     ):
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
 

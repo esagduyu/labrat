@@ -14,8 +14,7 @@ from __future__ import annotations
 import polars as pl
 from pydantic import BaseModel, Field, PrivateAttr
 
-from labrat.agent.providers.base import is_rate_limit_error
-from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.base import Tool, ToolContext, reraise_if_rate_limited
 from labrat.agent.tools.llm_primitives import (
     MAX_BATCHED_CLASSIFY_ROWS,
     MAX_CLASSIFY_BATCH_SIZE,
@@ -197,8 +196,7 @@ class LlmClassifyTool(Tool[_Input]):
             ctx.llm_classify_rows_used += result.rows_processed
             conn.materialize_table(result_table, result.df.to_arrow())  # type: ignore[arg-type]
         except Exception as exc:
-            if is_rate_limit_error(exc):
-                raise
+            reraise_if_rate_limited(ctx, exc)
             return _Output(ok=False, error=str(exc))
         out = _Output(
             ok=True,

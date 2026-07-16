@@ -86,6 +86,8 @@ async def _main(args: argparse.Namespace) -> int:
         for name, conn in connections.items()
     }
     ctx = ToolContext(connections=connections, catalogs=catalogs, primary=primary)
+    # Standalone scripting path: crash loudly on a provider 429 instead of degrading.
+    ctx.raise_rate_limits = True
 
     registry = build_data_tools_registry()
     provider = build_provider(args.provider, args.model)

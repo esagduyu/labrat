@@ -975,3 +975,33 @@ Sonnet-favoring lever); hints+ledger carried the GPT-5.6 lift; a full subscripti
 2026-06 "benchmark-impractical" verdict). Post-PR P2 follow-ups tracked in memory
 `project_gpt56_dab_campaign`: dispatch 429 re-raise leaking into TUI, taint-gate hardening,
 structured terminal flag, base-shard compat-key gate, drop the two campaign stashes.
+
+## 2026-07-16 — ToolRegistry.dispatch contract: rate-limit re-raise becomes opt-in (`ctx.raise_rate_limits`)
+
+**Context:** the GPT-5.6 campaign made `ToolRegistry.dispatch` (and the nested
+`llm_extract`/`llm_classify`) re-raise provider rate limits unconditionally so DAB
+runs fail fast (429 → durable `infra:rate_limit` row → exit 4). That silently broke
+the product contract — a 429 inside a TUI tool call aborted the whole chat turn
+instead of degrading to a structured tool error (audit P2).
+
+**Decision:** the "always returns a DispatchResult" contract is the DEFAULT again;
+fail-fast is an explicit benchmark opt-in via `ToolContext.raise_rate_limits`
+(single source of truth on the ctx — a proposed `run_agent_task` kwarg was rejected
+in review because it permanently mutated caller-owned contexts). The DAB
+labrat-agent driver and `scripts/run_task.py` set the flag on the contexts they
+own; `_sub_ctx` propagates it to `dispatch_subagent` sub-loops. One shared
+`reraise_if_rate_limited(ctx, exc)` helper owns the policy at every seam
+(dispatch, both llm primitives, dispatch_subagent — the last was a review-caught
+swallow that defeated fail-fast on delegated work).
+
+**Same wave (adversarial review of the P2 fixes, 8 finder angles → 3 fix agents):**
+`_run_trial_verified` now returns `DriverOutcome` directly (turn-budget exhaustion
+rides the return value — the string-sentinel classification and an instance-state
+relay are both gone); the verification paths (consensus/argue/reverify/postverify)
+re-raise rate limits instead of swallowing them; the all-sub-runs-failed consensus
+fallback now flows through trace promotion + verification.json (was: root-trace-less
+terminal rows that broke bounded-recovery merges); `_sub_ctx` enforces the parent's
+cumulative `llm_classify` row budget across delegation and propagates `active_maps`;
+`dab_shards` compat checks share one `_require_compat` helper with honest
+absent-key diagnostics. Real-package rebuild verified byte-identical after every
+change (config fea3b353…, trials 540999c5…).

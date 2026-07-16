@@ -295,6 +295,29 @@ def _config_delta(config: dict[str, Any], base: dict[str, Any]) -> dict[str, Any
     return {key: config.get(key) for key in keys if config.get(key) != base.get(key)}
 
 
+def _require_compat(config: dict[str, Any], base: dict[str, Any], label: str) -> None:
+    """Fail closed unless every ``_RECOVERY_COMPAT_KEYS`` entry matches the base config.
+
+    Other keys may differ; callers record those deltas separately.
+    """
+    for key in _RECOVERY_COMPAT_KEYS:
+        if config.get(key) == base.get(key):
+            continue
+        if key not in config:
+            raise ShardError(
+                f"{label} config missing required key {key!r} (base: {base.get(key)!r}); "
+                "the run predates this key -- re-run it or hand-align its config"
+            )
+        if key not in base:
+            raise ShardError(
+                f"{label} config sets {key!r}={config.get(key)!r} but the base config "
+                "has no such key; hand-align the configs before merging"
+            )
+        raise ShardError(
+            f"{label} config mismatch for {key}: {config.get(key)!r} != {base.get(key)!r}"
+        )
+
+
 def _validate_terminal_recovery_trace(run: Path, row: TrialResult) -> None:
     if not (row.reason or "").startswith("terminal:"):
         return
@@ -355,6 +378,7 @@ def merge_bounded_recovery(
             raise ShardError(
                 f"{shard_config_path} task_filter does not exactly match dataset {name!r}"
             )
+        _require_compat(shard_config, base_config, f"base shard {name!r}")
         delta = _config_delta(shard_config, base_config)
         if delta:
             shard_deltas[name] = delta
@@ -372,12 +396,7 @@ def merge_bounded_recovery(
         recovery_config_path = run / _CONFIG
         recovery_config = _read_object(recovery_config_path)
         tasks = _task_filter(recovery_config, source=recovery_config_path)
-        for key in _RECOVERY_COMPAT_KEYS:
-            if recovery_config.get(key) != base_config.get(key):
-                raise ShardError(
-                    f"recovery config mismatch for {key}: "
-                    f"{recovery_config.get(key)!r} != {base_config.get(key)!r}"
-                )
+        _require_compat(recovery_config, base_config, f"recovery run {run}")
         if recovery_config.get("terminalize_timeouts") is not True:
             raise ShardError(f"{recovery_config_path} must enable terminalize_timeouts")
         row_budget = recovery_config.get("llm_classify_row_budget")
