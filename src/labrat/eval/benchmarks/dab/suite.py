@@ -23,7 +23,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 if TYPE_CHECKING:
     from labrat.agent.verifier import LLMFn
@@ -45,6 +45,24 @@ from labrat.maze.cartographer import cartograph_prepass
 from labrat.maze.scent_audit import detect_contamination as _detect_contamination
 
 Driver = Literal["raw-bash", "labrat-agent", "claude-mcp"]
+
+
+class DriverOutcome(NamedTuple):
+    """One driver invocation's outcome, threaded through consensus/reverify selection.
+
+    ``turn_budget_exhausted`` is the STRUCTURED terminal signal: True only when the
+    agent loop itself reported exhausting its turn budget. ``run_trial`` classifies
+    ``terminal:turn_budget`` from this flag — never from the artifact text — so an
+    agent-authored answer that happens to start with the "[trial exhausted ..."
+    sentinel literal is scored as a normal semantic answer (infra detection,
+    contamination backstop, validator all still apply).
+    """
+
+    final_text: str
+    tool_calls: int
+    latency_seconds: float
+    turn_budget_exhausted: bool = False
+
 
 # Absolute path to the labrat repo root, needed when generating mcp-config files
 # that reference this codebase via `uv --directory <labrat>`.
@@ -711,9 +729,7 @@ class DabSuite:
         started = time.monotonic()
 
         try:
-            final_text, tool_calls, latency = await self._run_trial_verified(
-                task, db_config_path, scratch_dir
-            )
+            outcome = await self._run_trial_verified(task, db_config_path, scratch_dir)
         except Exception as exc:
             if isinstance(exc, TimeoutError) and self._terminalize_timeouts:
                 from labrat.agent.tool_trace import append_tool_trace
@@ -765,11 +781,17 @@ class DabSuite:
                 meta=meta,
             )
 
-        # Infra failures (Max-plan session limit, API credit, wall-clock timeout)
-        # don't reflect the agent's ability and shouldn't pollute aggregate scoring.
-        # Mark them with reason="infra:<tag>" so aggregate() can skip them and
-        # eval_dab.py can print INFRA instead of FAIL.
-        if final_text.startswith("[trial exhausted "):
+        final_text = outcome.final_text
+        tool_calls = outcome.tool_calls
+        latency = outcome.latency_seconds
+
+        # Terminal turn-budget exhaustion is signalled STRUCTURALLY by the driver
+        # (DriverOutcome.turn_budget_exhausted, relayed for the SELECTED answer by
+        # _run_trial_verified), never inferred from the artifact text: an
+        # agent-AUTHORED answer that merely starts with the "[trial exhausted ..."
+        # sentinel literal must flow through the normal infra/contamination/
+        # validator pipeline below.
+        if outcome.turn_budget_exhausted:
             return TrialResult(
                 task_id=task.id,
                 trial_num=trial_num,
@@ -781,6 +803,10 @@ class DabSuite:
                 meta=self._usage_meta(),
             )
 
+        # Infra failures (Max-plan session limit, API credit, wall-clock timeout)
+        # don't reflect the agent's ability and shouldn't pollute aggregate scoring.
+        # Mark them with reason="infra:<tag>" so aggregate() can skip them and
+        # eval_dab.py can print INFRA instead of FAIL.
         infra_tag = _detect_infra_failure(final_text)
         if infra_tag is not None:
             if infra_tag == "timeout" and self._terminalize_timeouts:
@@ -953,7 +979,7 @@ class DabSuite:
         task: BenchmarkTask,
         db_config_path: Path,
         scratch_dir: Path,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         from labrat.agent.verification.agreement import answers_agree
         from labrat.agent.verification.consensus import choose_modal
 
@@ -969,7 +995,7 @@ class DabSuite:
             extra: str = "",
             diversity_index: int | None = None,
             subdir_name: str | None = None,
-        ) -> tuple[str, int, float]:
+        ) -> DriverOutcome:
             sub = (
                 scratch_dir / (subdir_name or f"subrun{i}") if verification_active else scratch_dir
             )
@@ -990,30 +1016,53 @@ class DabSuite:
         consensus_answers: list[str] | None = None
         chosen_subrun_id: int | None = None
         chosen_subdir_name: str | None = None
-        results: list[tuple[int, str, tuple[str, int, float]]] = []
+        consensus_fallback = False
+        results: list[tuple[int, str, DriverOutcome]] = []
 
         if k > 1:
             for i in range(k):
+                attempt_started = time.monotonic()
                 try:
                     r = await _run_once(
                         i, diversity_index=(i if self._consensus_diversity else None)
                     )
                     results.append((i, f"subrun{i}", r))
                     total_latency += r[2]
-                except Exception:
-                    continue  # a failed sub-run is excluded from the vote
-            if not results:
-                return await _run_once(0)  # all failed → let run_trial's handler see it
-            llm_fn = self._verify_llm_fn()
-            idx, low = await choose_modal(
-                [result[0] for _, _, result in results],
-                question=question,
-                llm_fn=llm_fn,
-            )
-            modal_index = idx
-            low_confidence = low
-            consensus_answers = [result[0] for _, _, result in results]
-            chosen_subrun_id, chosen_subdir_name, primary = results[idx]
+                except Exception as exc:
+                    # Fail-fast on quota exhaustion: swallowing a 429 here would
+                    # burn the remaining sub-runs against a closed gate; escaping
+                    # lets run_trial record a durable infra:rate_limit row.
+                    if is_rate_limit_error(exc):
+                        raise
+                    # A failed sub-run is excluded from the vote, but its wall
+                    # time is real trial cost — keep it in the latency total.
+                    total_latency += time.monotonic() - attempt_started
+                    continue
+            if results:
+                llm_fn = self._verify_llm_fn()
+                idx, low = await choose_modal(
+                    [result[0] for _, _, result in results],
+                    question=question,
+                    llm_fn=llm_fn,
+                )
+                modal_index = idx
+                low_confidence = low
+                consensus_answers = [result[0] for _, _, result in results]
+                chosen_subrun_id, chosen_subdir_name, primary = results[idx]
+            else:
+                # All K sub-runs failed → one bounded fallback dispatch. A raise
+                # here propagates to run_trial's infra classifier (as before); a
+                # success flows through the SAME verification.json + trace-
+                # promotion exit path as a normal selection, so the scratch root
+                # keeps a submission-valid trace and the failed sub-runs' wall
+                # time stays in the reported latency.
+                consensus_fallback = True
+                primary = await _run_once(0)
+                total_latency += primary.latency_seconds
+                results.append((0, "subrun0", primary))
+                consensus_answers = [primary.final_text]
+                chosen_subrun_id = 0
+                chosen_subdir_name = "subrun0"
         else:
             primary = await _run_once(0)
             total_latency += primary[2]
@@ -1032,7 +1081,7 @@ class DabSuite:
         if k > 1 and low_confidence and self._argue_rounds > 0:
             for round_num in range(self._argue_rounds):
                 try:
-                    argued: list[tuple[int, str, tuple[str, int, float]]] = []
+                    argued: list[tuple[int, str, DriverOutcome]] = []
                     for result_index, (subrun_id, _prior_subdir, _current) in enumerate(results):
                         block_lines = ["Other analysts concluded:"]
                         for other_index, (_other_id, _other_subdir, other) in enumerate(results):
@@ -1076,7 +1125,9 @@ class DabSuite:
                     chosen_subrun_id, chosen_subdir_name, primary = results[idx]
                     if not low_confidence:
                         break
-                except Exception:
+                except Exception as exc:
+                    if is_rate_limit_error(exc):
+                        raise  # fail-fast: quota exhaustion must escape to run_trial
                     break  # fail-open: keep the current best (modal) answer
 
         # Track re-derive metadata for persistence
@@ -1110,8 +1161,10 @@ class DabSuite:
                     final_answer = reconcile
                     chosen_subrun_id = 901
                     chosen_subdir_name = "subrun901"
-            except Exception:
-                pass  # fail-open: keep the primary answer
+            except Exception as exc:
+                if is_rate_limit_error(exc):
+                    raise  # fail-fast: quota exhaustion must escape to run_trial
+                # fail-open: keep the primary answer
 
         # ── Post-verify: deterministic constraint check + one bounded revise ─
         # Runs on the FINAL answer (post-consensus, post-argue, post-reverify).
@@ -1138,8 +1191,10 @@ class DabSuite:
                     postverify_revised = True
                     chosen_subrun_id = 902
                     chosen_subdir_name = "subrun902"
-            except Exception:
-                pass  # fail-open: keep the original final answer
+            except Exception as exc:
+                if is_rate_limit_error(exc):
+                    raise  # fail-fast: quota exhaustion must escape to run_trial
+                # fail-open: keep the original final answer
 
         # ── Persist verification traces (spec §6) ───────────────────────
         if verification_active:
@@ -1149,6 +1204,7 @@ class DabSuite:
                     "reverify": self._reverify,
                     "consensus_diversity": self._consensus_diversity,
                     "consensus_answers": consensus_answers,
+                    "consensus_fallback": consensus_fallback,
                     "modal_index": modal_index,
                     "low_confidence": low_confidence,
                     "argue_rounds": self._argue_rounds,
@@ -1182,7 +1238,10 @@ class DabSuite:
                 except Exception:
                     pass  # fail-open
 
-        return (final_answer[0], final_answer[1], total_latency)
+        # Rebuild the SELECTED answer's outcome with the latency accumulated
+        # across every sub-run; its structured terminal signal
+        # (turn_budget_exhausted) rides along for run_trial's classification.
+        return final_answer._replace(latency_seconds=total_latency)
 
     async def _dispatch_driver_once(
         self,
@@ -1192,7 +1251,7 @@ class DabSuite:
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         if self._driver == "labrat-agent":
             return await self._run_trial_labrat_agent(
                 task,
@@ -1213,9 +1272,7 @@ class DabSuite:
 
     # ── raw-bash driver (Phase 1b baseline) ──────────────────────────────────
 
-    async def _run_trial_raw_bash(
-        self, task: BenchmarkTask, db_config_path: Path
-    ) -> tuple[str, int, float]:
+    async def _run_trial_raw_bash(self, task: BenchmarkTask, db_config_path: Path) -> DriverOutcome:
         import yaml
 
         dataset_dir = db_config_path.parent
@@ -1273,7 +1330,7 @@ class DabSuite:
             prompt=enriched_prompt, ctx=None, max_turns=raw_bash_max_turns
         )
         latency = time.monotonic() - t0
-        return agent_out["final_text"], int(agent_out["tool_calls"]), latency
+        return DriverOutcome(agent_out["final_text"], int(agent_out["tool_calls"]), latency)
 
     # ── claude-mcp driver (Phase 4 on Max-plan billing) ──────────────────────
 
@@ -1285,7 +1342,7 @@ class DabSuite:
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         """Phase 4 driver that uses the LabRat MCP server inside `claude --print`.
 
         Generates a per-trial mcp-config.json pointing at ``labrat.mcp.server``
@@ -1459,7 +1516,7 @@ class DabSuite:
             # Record the timeout as a trial-level failure (the validator will mark
             # passed=False) rather than crashing the whole run.
             latency = time.monotonic() - t0
-            return f"[trial exceeded {effective_timeout}s timeout]", 0, latency
+            return DriverOutcome(f"[trial exceeded {effective_timeout}s timeout]", 0, latency)
         latency = time.monotonic() - t0
 
         raw = result.stdout.decode(errors="replace").strip()
@@ -1485,7 +1542,7 @@ class DabSuite:
 
         # num_turns counts assistant rounds; tool calls = rounds beyond the final answer.
         tool_calls = max(0, num_turns - 1)
-        return final_text, tool_calls, latency
+        return DriverOutcome(final_text, tool_calls, latency)
 
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
@@ -1497,7 +1554,7 @@ class DabSuite:
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         # A trace file is a per-trial submission artifact even when the model
         # makes zero tool calls. Reset it on an infra retry so attempts cannot be
         # merged into one misleading semantic trace.
@@ -1536,6 +1593,10 @@ class DabSuite:
         env.ctx.llm_classify_concurrency = self._llm_classify_concurrency
         env.ctx.llm_classify_row_budget = self._llm_classify_row_budget
         env.ctx.llm_classify_rows_used = 0
+        # Benchmark fail-fast: a 429 inside a tool must escape the loop so
+        # run_trial records a durable infra:rate_limit row instead of a
+        # garbage semantic answer. Product hosts keep the default (False).
+        env.ctx.raise_rate_limits = True
 
         cartograph_root: Path | None = None
         if self._cartograph:
@@ -1670,6 +1731,8 @@ class DabSuite:
             from labrat.agent.tool_trace import append_tool_trace
 
             max_turns = self._agent_max_turns
+            # The sentinel artifact text is a stable submission-package contract —
+            # keep it byte-identical; classification rides on the structured flag.
             final_text = f"[trial exhausted {max_turns}-turn budget without a final answer]"
             append_tool_trace(
                 scratch_dir,
@@ -1680,8 +1743,13 @@ class DabSuite:
                 output=final_text,
                 latency_ms=0.0,
             )
-            return final_text, result.tool_calls, result.latency_seconds
-        return result.final_text, result.tool_calls, result.latency_seconds
+            return DriverOutcome(
+                final_text,
+                result.tool_calls,
+                result.latency_seconds,
+                turn_budget_exhausted=True,
+            )
+        return DriverOutcome(result.final_text, result.tool_calls, result.latency_seconds)
 
     def aggregate(self, results: list[TrialResult]) -> AggregateScore:
         return aggregate_dab_results(results)

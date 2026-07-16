@@ -163,10 +163,11 @@ def build_agent_session(
                     + "\n\n## Provided artifacts\n\n"
                     + "\n\n".join(f"[unresolvable ref: {ref}]" for ref in artifact_refs)
                 )
+            sub_ctx = _sub_ctx(ctx)
             sub_loop = AgentLoop(
                 provider=provider,
                 registry=_sub_registry(parent_registry),
-                ctx=_sub_ctx(ctx),
+                ctx=sub_ctx,
                 system=system_prompt,
                 dialect=dialect,
                 max_turns=max_turns,
@@ -174,7 +175,12 @@ def build_agent_session(
                 ledger=parent_ledger,
             )
             chunks: list[str] = []
-            await sub_loop.run(seed, on_text=chunks.append, on_tool_call=_forward_tool_call)
+            try:
+                await sub_loop.run(seed, on_text=chunks.append, on_tool_call=_forward_tool_call)
+            finally:
+                # Budget conservation: rows the sub-agent classified came out of
+                # the parent's cumulative budget — even when the sub-run raised.
+                ctx.llm_classify_rows_used += sub_ctx.llm_classify_rows_used
             return ("".join(chunks), sub_loop.turns_used, sub_loop.tool_calls_used)
 
         ctx.subagent_runner = _run_subagent
@@ -197,8 +203,13 @@ def _sub_registry(hosting: ToolRegistry) -> ToolRegistry:
 
 
 def _sub_ctx(parent: ToolContext) -> ToolContext:
-    """Shared execution substrate, fresh guard: subagent_runner stays None."""
-    return ToolContext(
+    """Shared execution substrate, fresh guard: subagent_runner stays None.
+
+    The parent's cumulative llm_classify row budget spans delegation: the sub-ctx
+    gets only what the parent has left (its own counter starting at 0), and
+    ``_run_subagent`` adds the sub-run's usage back into the parent counter.
+    """
+    sub = ToolContext(
         connections=parent.connections,
         catalogs=parent.catalogs,
         primary=parent.primary,
@@ -208,4 +219,13 @@ def _sub_ctx(parent: ToolContext) -> ToolContext:
         llm_classify_fn=parent.llm_classify_fn,
         llm_classify_concurrency=parent.llm_classify_concurrency,
         subagent_runner=None,
+        active_maps=parent.active_maps,
+        raise_rate_limits=parent.raise_rate_limits,
     )
+    if parent.llm_classify_row_budget is not None:
+        # Assigned post-construction: the constructor rejects budgets < 1, but an
+        # exhausted parent legitimately leaves 0 (llm_classify then self-errors).
+        sub.llm_classify_row_budget = max(
+            0, parent.llm_classify_row_budget - parent.llm_classify_rows_used
+        )
+    return sub

@@ -57,6 +57,13 @@ class ToolContext:
     non-empty list of Map slugs narrows retrieval to those Maps' member domains;
     None or an empty list (every existing/benchmark construction site) leaves
     retrieval byte-identical to today.
+
+    ``raise_rate_limits`` (default False) is the benchmark fail-fast opt-in:
+    when True, provider rate-limit errors (429) escape ``ToolRegistry.dispatch``
+    and the llm_extract/llm_classify tools instead of degrading to a structured
+    tool error, so eval runners can persist a retryable infra row and stop.
+    Product hosts (TUI, MCP server) leave it False and keep the historical
+    "dispatch always returns a DispatchResult" contract.
     """
 
     def __init__(
@@ -75,6 +82,7 @@ class ToolContext:
         active_maps: list[str] | None = None,
         llm_classify_concurrency: int = 1,
         llm_classify_row_budget: int | None = None,
+        raise_rate_limits: bool = False,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -102,6 +110,7 @@ class ToolContext:
         self.llm_classify_concurrency = llm_classify_concurrency
         self.llm_classify_row_budget = llm_classify_row_budget
         self.llm_classify_rows_used = 0
+        self.raise_rate_limits = raise_rate_limits
 
     @property
     def connection(self) -> object:
@@ -110,6 +119,23 @@ class ToolContext:
     @property
     def catalog(self) -> object:
         return self.catalogs[self.primary]
+
+
+def reraise_if_rate_limited(ctx: ToolContext, exc: Exception) -> None:
+    """Re-raise ``exc`` when the context opted into rate-limit fail-fast.
+
+    The single seam behind ``ctx.raise_rate_limits``: call it first in any
+    ``except Exception`` block that would otherwise degrade a provider 429 to a
+    structured tool error. Default (product) contexts return without effect;
+    opted-in contexts (benchmark runners) get the original exception re-raised
+    with its traceback intact so the harness can fail fast.
+    """
+    if not ctx.raise_rate_limits:
+        return
+    from labrat.agent.providers.base import is_rate_limit_error
+
+    if is_rate_limit_error(exc):
+        raise exc
 
 
 @dataclass
@@ -228,8 +254,10 @@ class ToolRegistry:
     ) -> DispatchResult:
         """Validate args and call the named tool.
 
-        Returns a DispatchResult for ordinary failures. Provider rate limits are
-        deliberately re-raised so benchmark runners can fail fast and preserve a
+        Always returns a DispatchResult — failures degrade to a structured tool
+        error the model can see and react to. The one opt-in exception:
+        contexts with ``raise_rate_limits=True`` (benchmark runners) re-raise
+        provider rate-limit errors so the harness can fail fast and preserve a
         retryable infrastructure row.
         """
         if name not in self._tools:
@@ -249,8 +277,5 @@ class ToolRegistry:
             result = await tool.execute(ctx, parsed)  # pyright: ignore[reportArgumentType]
             return DispatchResult(ok=True, value=result)
         except Exception as exc:
-            from labrat.agent.providers.base import is_rate_limit_error
-
-            if is_rate_limit_error(exc):
-                raise
+            reraise_if_rate_limited(ctx, exc)
             return DispatchResult(ok=False, value=None, error=str(exc))

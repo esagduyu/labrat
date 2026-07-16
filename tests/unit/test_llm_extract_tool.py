@@ -7,7 +7,9 @@ from pathlib import Path
 
 import duckdb
 import polars as pl
+import pytest
 
+from labrat.agent.providers.base import RateLimitError
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.llm_extract import LlmExtractTool
 from labrat.agent.tools.serialization import LedgerPayloadProvider
@@ -199,3 +201,44 @@ async def test_extract_tool_requires_duckdb_primary() -> None:
     assert not out.ok
     assert out.error is not None
     assert "DuckDB" in out.error
+
+
+async def test_extract_tool_rate_limit_degrades_to_structured_error_by_default(
+    tmp_path: Path,
+) -> None:
+    """Default (product) contexts get a structured tool error instead of a raise."""
+
+    async def limited(_prompt: str) -> str:
+        raise RateLimitError()
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited)
+    tool = LlmExtractTool()
+    out = await tool.execute(
+        ctx,
+        tool.input_model(
+            table="reviews", text_column="body", json_schema=_SCHEMA, key_columns=["id"]
+        ),
+    )
+    assert not out.ok
+    assert out.error is not None and "rate limit" in out.error.lower()
+    conn.disconnect()
+
+
+async def test_extract_tool_rate_limit_reraises_when_opted_in(tmp_path: Path) -> None:
+    """raise_rate_limits=True (benchmark fail-fast): the 429 escapes execute()."""
+
+    async def limited(_prompt: str) -> str:
+        raise RateLimitError()
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited, raise_rate_limits=True)
+    tool = LlmExtractTool()
+    with pytest.raises(RateLimitError):
+        await tool.execute(
+            ctx,
+            tool.input_model(
+                table="reviews", text_column="body", json_schema=_SCHEMA, key_columns=["id"]
+            ),
+        )
+    conn.disconnect()

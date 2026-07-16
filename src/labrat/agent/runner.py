@@ -71,6 +71,10 @@ async def run_agent_task(
     ``llm_classify_provider`` optionally isolates classification calls onto a
     dedicated model without redirecting ``llm_extract``; when omitted both keep
     using ``provider`` exactly as before.
+
+    Rate-limit fail-fast is a ctx concern, not a runner kwarg: callers that
+    want provider 429s to escape tool dispatch (benchmark runners) set
+    ``ctx.raise_rate_limits = True`` on the ctx they own before calling.
     """
     text_parts: list[str] = []
 

@@ -213,12 +213,16 @@ async def test_classify_tool_enforces_cumulative_context_row_budget(tmp_path: Pa
     conn.disconnect()
 
 
-async def test_classify_tool_registry_propagates_rate_limit(tmp_path: Path) -> None:
+async def test_classify_tool_registry_propagates_rate_limit_when_opted_in(
+    tmp_path: Path,
+) -> None:
+    """raise_rate_limits=True (benchmark fail-fast): the 429 escapes dispatch."""
+
     async def limited(_prompt: str) -> str:
         raise RateLimitError()
 
     conn = _make_conn(tmp_path)
-    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited, raise_rate_limits=True)
     tool = LlmClassifyTool()
     from labrat.agent.tools.base import ToolRegistry
 
@@ -235,4 +239,26 @@ async def test_classify_tool_registry_propagates_rate_limit(tmp_path: Path) -> N
             },
             ctx,
         )
+    conn.disconnect()
+
+
+async def test_classify_tool_rate_limit_degrades_to_structured_error_by_default(
+    tmp_path: Path,
+) -> None:
+    """Default (product) contexts get a structured tool error instead of a raise."""
+
+    async def limited(_prompt: str) -> str:
+        raise RateLimitError()
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited)
+    tool = LlmClassifyTool()
+    out = await tool.execute(
+        ctx,
+        tool.input_model(
+            table="articles", text_column="headline", labels=_LABELS, key_columns=["id"]
+        ),
+    )
+    assert not out.ok
+    assert out.error is not None and "rate limit" in out.error.lower()
     conn.disconnect()

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.base import Tool, ToolContext, reraise_if_rate_limited
 from labrat.agent.tools.serialization import LedgerPayloadKind
 
 _MAX_TURNS_CEILING = 8
@@ -95,7 +95,10 @@ class DispatchSubagentTool(Tool[_Input]):
                 max_turns=args.max_turns,
                 max_tool_calls=args.max_tool_calls,
             )
-        except Exception as exc:  # sub-loop failure must not kill the parent turn
+        except Exception as exc:  # sub-loop failure must not kill the parent turn...
+            # ...except a provider 429 under benchmark fail-fast, which must
+            # propagate (not degrade) so the harness records an infra row.
+            reraise_if_rate_limited(ctx, exc)
             return _Output(ok=False, final_text="", error=str(exc))
         return _Output(ok=True, final_text=final_text, turns_used=turns, tool_calls_used=calls)
 

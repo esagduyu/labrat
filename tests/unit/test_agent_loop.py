@@ -141,6 +141,35 @@ async def test_loop_tool_result_in_history(registry: ToolRegistry, ctx: ToolCont
     assert tool_result_present
 
 
+async def test_loop_survives_tool_rate_limit_by_default(
+    ctx: ToolContext, limited_tool: Tool[Any]
+) -> None:
+    """A 429 inside a tool degrades to a structured tool error; the turn completes."""
+    registry = ToolRegistry()
+    registry.register(limited_tool)
+    tool_use = ToolUseBlock(id="call_1", name="limited", input={"message": "x"})
+    provider = _MockProvider([[tool_use], [TextBlock(text="recovered")]])
+
+    received: list[str] = []
+    loop = AgentLoop(provider=provider, registry=registry, ctx=ctx)
+    await loop.run("try the tool", on_text=lambda t: received.append(t))
+
+    assert "recovered" in "".join(received)
+    # The rate-limit error reached the model as a tool_result, not an exception.
+    error_result_present = any(
+        m["role"] == "user"
+        and isinstance(m.get("content"), list)
+        and any(
+            isinstance(b, dict)
+            and b.get("type") == "tool_result"
+            and "rate limit" in str(b.get("content", "")).lower()
+            for b in m["content"]
+        )
+        for m in loop.history
+    )
+    assert error_result_present
+
+
 # ── dialect prompt loading ────────────────────────────────────────────────────
 
 

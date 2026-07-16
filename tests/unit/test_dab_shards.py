@@ -212,6 +212,97 @@ def test_bounded_recovery_fills_only_missing_semantic_keys(tmp_path: Path) -> No
     }
 
 
+def _recovery_scenario(tmp_path: Path) -> tuple[Path, Path]:
+    """Base shards with one infra-only gap plus a bounded recovery run for it."""
+    shards_dir = _prepare(tmp_path)
+    _write_rows(shards_dir / "alpha", [_trial("alpha:1")])
+    _write_rows(shards_dir / "beta", [_trial("beta:1", reason="infra:timeout", passed=False)])
+    _write_trace(shards_dir / "alpha", "alpha:1")
+    _write_trace(shards_dir / "beta", "beta:1")
+    return shards_dir, _bounded_beta_recovery(tmp_path)
+
+
+def _rewrite_config(path: Path, mutate: dict[str, object], *, drop: str | None = None) -> None:
+    config = json.loads(path.read_text())
+    config.update(mutate)
+    if drop is not None:
+        del config[drop]
+    path.write_text(json.dumps(config))
+
+
+def test_bounded_recovery_rejects_disallowed_base_shard_delta(tmp_path: Path) -> None:
+    shards_dir, recovery = _recovery_scenario(tmp_path)
+    _rewrite_config(shards_dir / "alpha" / "config.json", {"agent_model": "gpt-5.6-other"})
+
+    with pytest.raises(ShardError, match=r"base shard 'alpha'.*agent_model"):
+        merge_bounded_recovery(shards_dir, [recovery], tmp_path / "recovered")
+
+
+@pytest.mark.parametrize(
+    ("target", "label_pattern"),
+    [
+        ("base_shard", r"base shard 'alpha'"),
+        ("recovery_run", r"recovery run .*beta-recovery"),
+    ],
+)
+def test_compat_mismatch_raises_identically_shaped_error(
+    tmp_path: Path, target: str, label_pattern: str
+) -> None:
+    shards_dir, recovery = _recovery_scenario(tmp_path)
+    config_path = (
+        shards_dir / "alpha" / "config.json" if target == "base_shard" else recovery / "config.json"
+    )
+    _rewrite_config(config_path, {"agent_model": "gpt-5.6-other"})
+
+    expected = (
+        label_pattern + r" config mismatch for agent_model: 'gpt-5\.6-other' != 'gpt-5\.6-luna'"
+    )
+    with pytest.raises(ShardError, match=expected):
+        merge_bounded_recovery(shards_dir, [recovery], tmp_path / "recovered")
+
+
+@pytest.mark.parametrize(
+    ("target", "label_pattern"),
+    [
+        ("base_shard", r"base shard 'alpha'"),
+        ("recovery_run", r"recovery run .*beta-recovery"),
+    ],
+)
+def test_compat_missing_key_reports_absence_distinctly(
+    tmp_path: Path, target: str, label_pattern: str
+) -> None:
+    shards_dir, recovery = _recovery_scenario(tmp_path)
+    config_path = (
+        shards_dir / "alpha" / "config.json" if target == "base_shard" else recovery / "config.json"
+    )
+    _rewrite_config(config_path, {}, drop="agent_reasoning")
+
+    expected = label_pattern + r" config missing required key 'agent_reasoning' \(base: 'max'\)"
+    with pytest.raises(ShardError, match=expected):
+        merge_bounded_recovery(shards_dir, [recovery], tmp_path / "recovered")
+
+
+def test_bounded_recovery_records_allowed_base_shard_delta(tmp_path: Path) -> None:
+    shards_dir = _prepare(tmp_path)
+    _write_rows(shards_dir / "alpha", [_trial("alpha:1")])
+    _write_rows(shards_dir / "beta", [_trial("beta:1", reason="infra:timeout", passed=False)])
+    _write_trace(shards_dir / "alpha", "alpha:1")
+    _write_trace(shards_dir / "beta", "beta:1")
+    alpha_config_path = shards_dir / "alpha" / "config.json"
+    alpha_config = json.loads(alpha_config_path.read_text())
+    alpha_config["agent_timeout"] = 2400
+    alpha_config_path.write_text(json.dumps(alpha_config))
+    recovery = _bounded_beta_recovery(tmp_path)
+
+    output = tmp_path / "recovered"
+    merge_bounded_recovery(shards_dir, [recovery], output)
+
+    config = json.loads((output / "config.json").read_text())
+    assert config["bounded_recovery"]["base_shard_config_deltas"] == {
+        "alpha": {"agent_timeout": 2400}
+    }
+
+
 def test_bounded_recovery_refuses_to_replace_semantic_result(tmp_path: Path) -> None:
     shards_dir = _prepare(tmp_path)
     _complete(shards_dir)

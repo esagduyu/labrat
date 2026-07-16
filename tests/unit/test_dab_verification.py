@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from labrat.eval.benchmarks.dab.suite import DabSuite
+from labrat.agent.providers import RateLimitError
+from labrat.eval.benchmarks.dab.suite import DabSuite, DriverOutcome
 from labrat.eval.types import AggregateScore, BenchmarkReport, BenchmarkTask
 
 
@@ -23,7 +24,9 @@ def _task() -> BenchmarkTask:
 
 async def test_consensus_returns_modal(tmp_path: Path, monkeypatch) -> None:
     suite = DabSuite(driver="claude-mcp", consensus_k=3)
-    answers = iter([("A", 5, 1.0), ("B", 5, 1.0), ("A", 5, 1.0)])  # modal = A
+    answers = iter(
+        [DriverOutcome("A", 5, 1.0), DriverOutcome("B", 5, 1.0), DriverOutcome("A", 5, 1.0)]
+    )  # modal = A
 
     async def _disp(self, task, dbp, sd, *, extra_instructions="", diversity_index=None):
         return next(answers)
@@ -31,19 +34,21 @@ async def test_consensus_returns_modal(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     # judge: only exact-equal answers agree (answers_agree short-circuits those)
     monkeypatch.setattr(suite, "_verify_llm_fn", lambda: lambda p: _never_same(p))
-    text, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    text, _tc, _lat, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
     assert text == "A"
 
 
 async def test_reverify_keeps_primary_when_agree(tmp_path: Path, monkeypatch) -> None:
     suite = DabSuite(driver="claude-mcp", reverify=True)
-    runs = iter([("42", 5, 1.0), ("42", 5, 1.0)])  # primary, re-derive — identical → agree
+    runs = iter(
+        [DriverOutcome("42", 5, 1.0), DriverOutcome("42", 5, 1.0)]
+    )  # primary, re-derive — identical → agree
 
     async def _disp(self, task, dbp, sd, *, extra_instructions="", diversity_index=None):
         return next(runs)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
-    text, _, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    text, _, _, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
     assert text == "42"  # agreement → primary unchanged, no reconcile run consumed
 
 
@@ -53,10 +58,10 @@ async def test_off_path_single_dispatch(tmp_path: Path, monkeypatch) -> None:
 
     async def _disp(self, task, dbp, sd, *, extra_instructions="", diversity_index=None):
         calls["n"] += 1
-        return ("once", 1, 0.5)
+        return DriverOutcome("once", 1, 0.5)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
-    text, _, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    text, _, _, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
     assert text == "once" and calls["n"] == 1  # exactly one dispatch when verification off
 
 
@@ -112,7 +117,7 @@ async def test_verify_judge_uses_agent_provider_on_labrat(monkeypatch: Any) -> N
 async def test_verification_json_written(tmp_path: Path, monkeypatch: Any) -> None:
     """With consensus_k=2, verification.json must appear in the trial scratch dir."""
     suite = DabSuite(driver="claude-mcp", consensus_k=2)
-    answers = iter([("A", 5, 1.0), ("B", 5, 1.0)])
+    answers = iter([DriverOutcome("A", 5, 1.0), DriverOutcome("B", 5, 1.0)])
 
     async def _disp(
         self: Any,
@@ -122,7 +127,7 @@ async def test_verification_json_written(tmp_path: Path, monkeypatch: Any) -> No
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         return next(answers)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
@@ -149,8 +154,8 @@ async def test_no_verification_json_on_off_path(tmp_path: Path, monkeypatch: Any
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
-        return ("once", 1, 0.5)
+    ) -> DriverOutcome:
+        return DriverOutcome("once", 1, 0.5)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     await suite._run_trial_verified(_task(), Path("x"), tmp_path)
@@ -163,7 +168,9 @@ async def test_no_verification_json_on_off_path(tmp_path: Path, monkeypatch: Any
 async def test_summed_latency_across_sub_runs(tmp_path: Path, monkeypatch: Any) -> None:
     """Returned latency for consensus_k=2 must equal the sum of both sub-run latencies."""
     suite = DabSuite(driver="claude-mcp", consensus_k=2)
-    answers = iter([("A", 5, 1.5), ("A", 5, 2.5)])  # both agree → modal = A
+    answers = iter(
+        [DriverOutcome("A", 5, 1.5), DriverOutcome("A", 5, 2.5)]
+    )  # both agree → modal = A
 
     async def _disp(
         self: Any,
@@ -173,13 +180,13 @@ async def test_summed_latency_across_sub_runs(tmp_path: Path, monkeypatch: Any) 
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         return next(answers)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     # both answers are "A" → exact-equal short-circuit in answers_agree → no LLM judge needed
     monkeypatch.setattr(suite, "_verify_llm_fn", lambda: _never_same)
-    _text, _tc, latency = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    _text, _tc, latency, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
     assert latency == pytest.approx(4.0)  # 1.5 + 2.5
 
 
@@ -341,9 +348,9 @@ async def test_consensus_passes_diversity_index_when_on(tmp_path: Path, monkeypa
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         seen.append(diversity_index)
-        return (f"ans{diversity_index}", 1, 0.1)
+        return DriverOutcome(f"ans{diversity_index}", 1, 0.1)
 
     async def _fake_choose_modal(
         answers: list[str], *, question: str, llm_fn: Any
@@ -375,9 +382,9 @@ async def test_consensus_passes_none_diversity_index_when_off(
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         seen.append(diversity_index)
-        return ("same", 1, 0.1)
+        return DriverOutcome("same", 1, 0.1)
 
     async def _fake_choose_modal(
         answers: list[str], *, question: str, llm_fn: Any
@@ -409,9 +416,9 @@ async def test_argue_round_resolves_split(tmp_path: Path, monkeypatch: Any) -> N
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         argued = "Other analysts concluded" in extra_instructions
-        return ("CONVERGED" if argued else f"ans{diversity_index}", 1, 0.1)
+        return DriverOutcome("CONVERGED" if argued else f"ans{diversity_index}", 1, 0.1)
 
     async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
         distinct = set(answers)
@@ -421,7 +428,7 @@ async def test_argue_round_resolves_split(tmp_path: Path, monkeypatch: Any) -> N
     monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
 
     suite = DabSuite(driver="claude-mcp", consensus_k=2, argue_rounds=2)
-    final, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    final, _tc, _lat, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
 
     assert final == "CONVERGED"
 
@@ -443,9 +450,9 @@ async def test_argue_round_fail_open_never_converges(tmp_path: Path, monkeypatch
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         # Always disagreeing, whether or not an argue block was appended.
-        return (f"ans{diversity_index}", 1, 0.1)
+        return DriverOutcome(f"ans{diversity_index}", 1, 0.1)
 
     async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
         distinct = set(answers)
@@ -455,7 +462,7 @@ async def test_argue_round_fail_open_never_converges(tmp_path: Path, monkeypatch
     monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
 
     suite = DabSuite(driver="claude-mcp", consensus_k=2, argue_rounds=2)
-    final, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    final, _tc, _lat, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
 
     assert final == "ans0"  # modal (index 0) from the final, still-split round
 
@@ -479,9 +486,9 @@ async def test_argue_rounds_zero_no_argue_loop(tmp_path: Path, monkeypatch: Any)
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         calls["n"] += 1
-        return (f"ans{diversity_index}", 1, 0.1)
+        return DriverOutcome(f"ans{diversity_index}", 1, 0.1)
 
     async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
         return (0, True)  # always low_confidence
@@ -490,7 +497,7 @@ async def test_argue_rounds_zero_no_argue_loop(tmp_path: Path, monkeypatch: Any)
     monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
 
     suite = DabSuite(driver="claude-mcp", consensus_k=2)  # argue_rounds defaults to 0
-    _final, _tc, _lat = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+    _final, _tc, _lat, _ = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
 
     assert calls["n"] == 2  # only the initial K=2 sub-runs, no argue dispatches
     vdata = json.loads((tmp_path / "verification.json").read_text())
@@ -514,9 +521,11 @@ async def test_reverify_rederive_diversity_index_always_none(
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         seen.append(diversity_index)
-        return ("42", 1, 0.1)  # primary + re-derive identical → agree, no reconcile round
+        return DriverOutcome(
+            "42", 1, 0.1
+        )  # primary + re-derive identical → agree, no reconcile round
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
 
@@ -543,11 +552,11 @@ async def test_rederive_does_not_see_primary_transcript(tmp_path: Path, monkeypa
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         calls.append((sub.name, extra_instructions))
         # Primary and re-derive both return the same sentinel so they agree exactly
         # and no reconcile (subrun901) dispatch is needed.
-        return ("PRIMARY_ANSWER", 5, 1.0)
+        return DriverOutcome("PRIMARY_ANSWER", 5, 1.0)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _fake_dispatch)
 
@@ -587,15 +596,15 @@ async def test_postverify_revises_on_violation(tmp_path: Path, monkeypatch: Any)
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         calls.append(extra_instructions)
         if "does not satisfy" in extra_instructions:
-            return ("A, B, C, D, E", 5, 1.0)
-        return ("A, B, C", 5, 1.0)
+            return DriverOutcome("A, B, C, D, E", 5, 1.0)
+        return DriverOutcome("A, B, C", 5, 1.0)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     suite = DabSuite(driver="claude-mcp", postverify=True)  # standalone — no consensus/reverify
-    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+    text, _tc, _lat, _ = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
 
     assert text == "A, B, C, D, E"
     assert len(calls) == 2  # primary + exactly one revise dispatch
@@ -618,13 +627,13 @@ async def test_postverify_no_revise_when_satisfied(tmp_path: Path, monkeypatch: 
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         calls["n"] += 1
-        return ("A, B, C, D, E", 5, 1.0)
+        return DriverOutcome("A, B, C, D, E", 5, 1.0)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     suite = DabSuite(driver="claude-mcp", postverify=True)
-    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+    text, _tc, _lat, _ = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
 
     assert text == "A, B, C, D, E"
     assert calls["n"] == 1  # no revise dispatch
@@ -645,14 +654,14 @@ async def test_postverify_fail_open_on_revise_error(tmp_path: Path, monkeypatch:
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         if "does not satisfy" in extra_instructions:
             raise RuntimeError("boom")
-        return ("A, B, C", 5, 1.0)
+        return DriverOutcome("A, B, C", 5, 1.0)
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     suite = DabSuite(driver="claude-mcp", postverify=True)
-    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+    text, _tc, _lat, _ = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
 
     assert text == "A, B, C"  # original kept despite the violation — fail-open
 
@@ -674,13 +683,13 @@ async def test_postverify_off_byte_identical(tmp_path: Path, monkeypatch: Any) -
         *,
         extra_instructions: str = "",
         diversity_index: int | None = None,
-    ) -> tuple[str, int, float]:
+    ) -> DriverOutcome:
         calls["n"] += 1
-        return ("A, B, C", 5, 1.0)  # would violate "top 5" if postverify were on
+        return DriverOutcome("A, B, C", 5, 1.0)  # would violate "top 5" if postverify were on
 
     monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
     suite = DabSuite(driver="claude-mcp")  # postverify defaults to False
-    text, _tc, _lat = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+    text, _tc, _lat, _ = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
 
     assert text == "A, B, C" and calls["n"] == 1
     assert not (tmp_path / "verification.json").exists()
@@ -727,3 +736,223 @@ def test_eval_dab_threads_postverify(monkeypatch: Any, tmp_path: Path) -> None:
         ]
     )
     assert captured.get("postverify") is True
+
+
+# ── P2 followups: DriverOutcome return, rate-limit fail-fast, fallback trace ──
+
+
+async def test_run_trial_verified_returns_driver_outcome_with_terminal_flag(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """_run_trial_verified returns a DriverOutcome and relays the SELECTED answer's
+    structured turn_budget_exhausted flag — no instance-state side channel."""
+    suite = DabSuite(driver="claude-mcp")
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        return DriverOutcome("out", 2, 0.5, turn_budget_exhausted=True)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    outcome = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert isinstance(outcome, DriverOutcome)
+    assert outcome.turn_budget_exhausted is True
+    assert outcome.final_text == "out"
+    assert outcome.tool_calls == 2
+    assert outcome.latency_seconds == pytest.approx(0.5)
+
+
+async def test_consensus_subrun_rate_limit_escapes(tmp_path: Path, monkeypatch: Any) -> None:
+    """A rate-limited consensus sub-run must escape _run_trial_verified (fail-fast),
+    never be swallowed into the vote."""
+    suite = DabSuite(driver="claude-mcp", consensus_k=2)
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        if sd.name == "subrun0":
+            raise RateLimitError("quota exhausted")
+        return DriverOutcome("B", 1, 0.1)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    with pytest.raises(RateLimitError):
+        await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+
+async def test_run_trial_classifies_consensus_subrun_rate_limit_as_infra(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The escaped sub-run rate limit reaches run_trial's existing triage and is
+    recorded as infra:rate_limit, not a semantic answer."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2)
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        if sd.name == "subrun0":
+            raise RateLimitError("quota exhausted")
+        return DriverOutcome("B", 1, 0.1)
+
+    async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
+        return (0, False)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
+    monkeypatch.setattr(suite, "_verify_llm_fn", lambda: _never_same)
+
+    result = await suite.run_trial(_task(), trial_num=0, scratch_dir=tmp_path / "s")
+
+    assert result.passed is False
+    assert result.reason == "infra:rate_limit"
+
+
+async def test_argue_round_rate_limit_escapes(tmp_path: Path, monkeypatch: Any) -> None:
+    """A rate-limited argue-round dispatch must escape, not fail-open to the prior answer."""
+    from labrat.agent.verification import consensus as _consensus_mod
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        if "Other analysts concluded" in extra_instructions:
+            raise RateLimitError("quota exhausted")
+        return DriverOutcome(f"ans{diversity_index}", 1, 0.1)
+
+    async def _fake_modal(answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
+        return (0, True)  # always low_confidence → argue round fires
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    monkeypatch.setattr(_consensus_mod, "choose_modal", _fake_modal)
+
+    suite = DabSuite(driver="claude-mcp", consensus_k=2, argue_rounds=1)
+    with pytest.raises(RateLimitError):
+        await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+
+async def test_reverify_rate_limit_escapes(tmp_path: Path, monkeypatch: Any) -> None:
+    """A rate-limited re-derive dispatch must escape, not fail-open to the primary."""
+    suite = DabSuite(driver="claude-mcp", reverify=True)
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        if sd.name == "subrun900":
+            raise RateLimitError("quota exhausted")
+        return DriverOutcome("42", 1, 0.1)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    with pytest.raises(RateLimitError):
+        await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+
+async def test_postverify_rate_limit_escapes(tmp_path: Path, monkeypatch: Any) -> None:
+    """A rate-limited postverify revise dispatch must escape, not fail-open."""
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        if "does not satisfy" in extra_instructions:
+            raise RateLimitError("quota exhausted")
+        return DriverOutcome("A, B, C", 5, 1.0)  # violates "top 5" → revise fires
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    suite = DabSuite(driver="claude-mcp", postverify=True)
+    with pytest.raises(RateLimitError):
+        await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+
+
+async def test_postverify_non_rate_limit_still_fails_open(tmp_path: Path, monkeypatch: Any) -> None:
+    """Non-quota errors keep the existing fail-open semantics (regression guard)."""
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        if "does not satisfy" in extra_instructions:
+            raise RuntimeError("boom")
+        return DriverOutcome("A, B, C", 5, 1.0)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    suite = DabSuite(driver="claude-mcp", postverify=True)
+    outcome = await suite._run_trial_verified(_topn_task(), Path("x"), tmp_path)
+    assert outcome.final_text == "A, B, C"
+
+
+async def test_all_subruns_failed_fallback_promotes_trace(tmp_path: Path, monkeypatch: Any) -> None:
+    """When every consensus sub-run fails, the bounded fallback dispatch must flow
+    through the same exit path as a normal selection: its trace is promoted to the
+    scratch root, verification.json carries a fallback marker, and the returned
+    latency covers at least the fallback run."""
+    suite = DabSuite(driver="claude-mcp", consensus_k=2)
+    calls = {"n": 0}
+    fallback_trace = '{"tool":"run_sql","input":{},"ok":true,"output":"fb","latency_ms":1}\n'
+
+    async def _disp(
+        self: Any,
+        task: Any,
+        dbp: Any,
+        sd: Any,
+        *,
+        extra_instructions: str = "",
+        diversity_index: int | None = None,
+    ) -> DriverOutcome:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("boom")  # both consensus sub-runs fail
+        (sd / "mcp_tool_calls.jsonl").write_text(fallback_trace)
+        return DriverOutcome("fallback-answer", 1, 0.7)
+
+    monkeypatch.setattr(DabSuite, "_dispatch_driver_once", _disp)
+    outcome = await suite._run_trial_verified(_task(), Path("x"), tmp_path)
+
+    assert calls["n"] == 3  # two failed sub-runs + one fallback dispatch
+    assert outcome.final_text == "fallback-answer"
+    assert outcome.latency_seconds >= 0.7
+    assert (tmp_path / "mcp_tool_calls.jsonl").read_text() == fallback_trace
+    vdata = json.loads((tmp_path / "verification.json").read_text())
+    assert vdata["consensus_fallback"] is True
+    assert vdata["chosen_answer"] == "fallback-answer"
+    assert vdata["chosen_subdir"] == "subrun0"
