@@ -89,6 +89,7 @@ def test_build_bundle_includes_artifacts_manifest_and_zero_tool_trace(tmp_path: 
         "infra_attempts": 0,
         "trace_files": 1,
         "audit_clean": True,
+        "acknowledged_secret_findings": [],
     }
     entry = manifest["trials"][0]
     assert entry["task_id"] == "stockindex:1"
@@ -447,3 +448,61 @@ def test_strict_official_accepts_exact_54_by_5_matrix(tmp_path: Path) -> None:
     assert manifest["strict_official"] is True
     assert manifest["summary"]["unique_trials"] == 270
     assert manifest["summary"]["trace_files"] == 270
+
+
+def _write_trace_event(run_dir: Path, key: str, output: str) -> None:
+    trace = run_dir / "scratch" / f"{key}__trial0" / "agent_tool_calls.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "tool": "run_sql",
+                "input": {"query": "SELECT content FROM contents"},
+                "ok": True,
+                "output": output,
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+
+
+_BENIGN_README_TEXT = "Change the default user (username: `Admin`, password: `admin`) after install"
+
+
+def test_build_bundle_acknowledged_secret_finding_builds_and_is_manifested(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "acked-secret"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    _write_trace_event(run_dir, "stockindex_1", _BENIGN_README_TEXT)
+    finding = "trace stockindex:1 trial 0: secret-shaped value at $[0].output"
+    output_dir = tmp_path / "bundle-acked"
+
+    result = build_bundle(run_dir, output_dir=output_dir, acknowledged_secrets=[finding])
+
+    manifest = json.loads((result / "manifest.json").read_text())
+    assert manifest["summary"]["acknowledged_secret_findings"] == [finding]
+
+
+def test_build_bundle_rejects_unused_secret_acknowledgment(tmp_path: Path) -> None:
+    run_dir = tmp_path / "stale-ack"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    stale = "trace stockindex:1 trial 0: secret-shaped value at $[99].output"
+
+    with pytest.raises(BundleError, match="unused --acknowledge-secret"):
+        build_bundle(run_dir, output_dir=tmp_path / "bundle-stale", acknowledged_secrets=[stale])
+
+
+def test_build_bundle_acknowledgment_does_not_mask_other_findings(tmp_path: Path) -> None:
+    run_dir = tmp_path / "partial-ack"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    _write_trace_event(run_dir, "stockindex_1", _BENIGN_README_TEXT)
+    (run_dir / "report.md").write_text(
+        "database=postgresql://analyst:hunter2@db.internal/benchmark\n"
+    )
+    finding = "trace stockindex:1 trial 0: secret-shaped value at $[0].output"
+
+    with pytest.raises(BundleError, match=r"credential material detected in report\.md"):
+        build_bundle(
+            run_dir, output_dir=tmp_path / "bundle-partial", acknowledged_secrets=[finding]
+        )

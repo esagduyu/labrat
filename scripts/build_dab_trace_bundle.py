@@ -23,6 +23,7 @@ import stat
 import sys
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -181,35 +182,54 @@ def _is_credential_key(normalized_key: str) -> bool:
     return normalized_key in _CREDENTIAL_KEYS or normalized_key.endswith(_CREDENTIAL_KEY_SUFFIXES)
 
 
-def _secret_reason(value: Any, *, path: str = "$") -> str | None:
+def _secret_reasons(value: Any, *, path: str = "$") -> list[str]:
+    reasons: list[str] = []
     if isinstance(value, dict):
         for raw_key, item in value.items():
             key = str(raw_key)
             normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
             child_path = f"{path}.{key}"
             if _is_credential_key(normalized_key) and _credential_value_present(item):
-                return f"credential-shaped field {child_path}"
-            nested = _secret_reason(item, path=child_path)
-            if nested is not None:
-                return nested
-        return None
-    if isinstance(value, list):
+                reasons.append(f"credential-shaped field {child_path}")
+            reasons.extend(_secret_reasons(item, path=child_path))
+    elif isinstance(value, list):
         for index, item in enumerate(value):
-            nested = _secret_reason(item, path=f"{path}[{index}]")
-            if nested is not None:
-                return nested
-        return None
-    if isinstance(value, str):
+            reasons.extend(_secret_reasons(item, path=f"{path}[{index}]"))
+    elif isinstance(value, str):
         for pattern in _SECRET_VALUE_PATTERNS:
             if pattern.search(value):
-                return f"secret-shaped value at {path}"
-    return None
+                reasons.append(f"secret-shaped value at {path}")
+                break
+    return reasons
 
 
-def _assert_no_secrets(value: Any, *, source: str) -> None:
-    reason = _secret_reason(value)
-    if reason is not None:
-        raise BundleError(f"credential material detected in {source}: {reason}")
+def _secret_reason(value: Any, *, path: str = "$") -> str | None:
+    reasons = _secret_reasons(value, path=path)
+    return reasons[0] if reasons else None
+
+
+def _assert_no_secrets(
+    value: Any,
+    *,
+    source: str,
+    acknowledged: frozenset[str] = frozenset(),
+    acknowledged_used: set[str] | None = None,
+) -> None:
+    """Fail closed on secret-shaped content unless a finding is explicitly acknowledged.
+
+    ``acknowledged`` holds exact ``"<source>: <reason>"`` strings (from
+    ``--acknowledge-secret``) for findings a human has reviewed and classified as
+    benign benchmark data. Every acknowledged finding actually encountered is
+    recorded in ``acknowledged_used`` so the caller can (a) surface it in the
+    bundle manifest and (b) reject unused/stale acknowledgments.
+    """
+    for reason in _secret_reasons(value):
+        finding = f"{source}: {reason}"
+        if finding in acknowledged:
+            if acknowledged_used is not None:
+                acknowledged_used.add(finding)
+            continue
+        raise BundleError(f"credential material detected in {finding}")
 
 
 def _load_json(path: Path) -> Any:
@@ -455,8 +475,11 @@ def build_bundle(
     output_dir: Path | None = None,
     strict_official: bool = False,
     force: bool = False,
+    acknowledged_secrets: Sequence[str] = (),
 ) -> Path:
     """Validate ``run_dir`` and atomically build its trace bundle."""
+    acknowledged = frozenset(acknowledged_secrets)
+    acknowledged_used: set[str] = set()
     run_dir = run_dir.expanduser().resolve()
     if not run_dir.is_dir():
         raise BundleError(f"run directory not found: {run_dir}")
@@ -520,11 +543,14 @@ def build_bundle(
     except (OSError, UnicodeError) as exc:
         raise BundleError(f"invalid report.md: {exc}") from exc
 
-    _assert_no_secrets(config, source="config.json")
-    _assert_no_secrets([attempt.record for attempt in attempts], source="trials.jsonl")
-    _assert_no_secrets(submission, source="submission.json")
-    _assert_no_secrets(report, source="report.md")
-    _assert_no_secrets(verdicts, source="taint.json")
+    _scan_kwargs = {"acknowledged": acknowledged, "acknowledged_used": acknowledged_used}
+    _assert_no_secrets(config, source="config.json", **_scan_kwargs)
+    _assert_no_secrets(
+        [attempt.record for attempt in attempts], source="trials.jsonl", **_scan_kwargs
+    )
+    _assert_no_secrets(submission, source="submission.json", **_scan_kwargs)
+    _assert_no_secrets(report, source="report.md", **_scan_kwargs)
+    _assert_no_secrets(verdicts, source="taint.json", **_scan_kwargs)
 
     trace_sources: dict[tuple[str, int], tuple[Path, list[dict[str, Any]]]] = {}
     for task_id, trial_num in sorted(selected):
@@ -535,8 +561,13 @@ def build_bundle(
                 f"unsafe trace source for {task_id} trial {trial_num}: {exc}"
             ) from exc
         records = _load_trace_records(source)
-        _assert_no_secrets(records, source=f"trace {task_id} trial {trial_num}")
+        _assert_no_secrets(records, source=f"trace {task_id} trial {trial_num}", **_scan_kwargs)
         trace_sources[(task_id, trial_num)] = (source, records)
+
+    unused_acknowledgments = acknowledged - acknowledged_used
+    if unused_acknowledgments:
+        listing = ", ".join(sorted(unused_acknowledgments))
+        raise BundleError(f"unused --acknowledge-secret entries (stale or mistyped): {listing}")
 
     temp_dir = _validate_output_destination(
         run_dir,
@@ -616,6 +647,7 @@ def build_bundle(
                 "infra_attempts": total_infra_attempts,
                 "trace_files": len(manifest_trials),
                 "audit_clean": True,
+                "acknowledged_secret_findings": sorted(acknowledged_used),
             },
             "trials": manifest_trials,
         }
@@ -643,6 +675,18 @@ def _parser() -> argparse.ArgumentParser:
         help="Require the exact 12-dataset / 54-query / five-trial official matrix",
     )
     parser.add_argument("--force", action="store_true", help="Replace an existing bundle")
+    parser.add_argument(
+        "--acknowledge-secret",
+        action="append",
+        default=[],
+        metavar="FINDING",
+        help=(
+            "Exact '<source>: <reason>' string of a secret-scan finding a human has "
+            'reviewed and classified as benign benchmark data (e.g. "trace github_repos:1 '
+            'trial 1: secret-shaped value at $[25].output"). Repeatable. Every entry must '
+            "match a real finding; acknowledged findings are listed in the bundle manifest."
+        ),
+    )
     return parser
 
 
@@ -654,6 +698,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
             strict_official=args.strict_official,
             force=args.force,
+            acknowledged_secrets=args.acknowledge_secret,
         )
     except BundleError as exc:
         print(f"trace bundle error: {exc}", file=sys.stderr)
