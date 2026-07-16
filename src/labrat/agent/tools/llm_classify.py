@@ -88,6 +88,8 @@ class _Output(BaseModel):
     batch_size: int = 1
     concurrency: int = 1
     max_requests: int = 0
+    row_budget: int | None = None
+    rows_remaining: int | None = None
     columns: list[str] = []
     error: str | None = None
 
@@ -149,6 +151,26 @@ class LlmClassifyTool(Tool[_Input]):
                 ),
             )
         result_table = args.result_table or DEFAULT_CLASSIFY_RESULT_TABLE
+        row_budget = ctx.llm_classify_row_budget
+        rows_remaining = (
+            max(0, row_budget - ctx.llm_classify_rows_used)
+            if row_budget is not None
+            else None
+        )
+        if rows_remaining == 0:
+            return _Output(
+                ok=False,
+                batch_size=args.batch_size,
+                concurrency=ctx.llm_classify_concurrency,
+                max_requests=args.max_requests,
+                row_budget=row_budget,
+                rows_remaining=0,
+                error=(
+                    "llm_classify cumulative row budget exhausted "
+                    f"({ctx.llm_classify_rows_used}/{row_budget} rows); "
+                    "produce the best final answer from the evidence already gathered"
+                ),
+            )
         # Same guard as materialize_table, applied up-front so a bad name fails
         # BEFORE any per-row LLM calls are spent.
         if not result_table.replace("_", "").isalnum():
@@ -157,6 +179,9 @@ class LlmClassifyTool(Tool[_Input]):
                 error=f"result_table must be alphanumeric/underscore: {result_table!r}",
             )
         try:
+            max_rows = MAX_BATCHED_CLASSIFY_ROWS if args.batch_size > 1 else 200
+            if rows_remaining is not None:
+                max_rows = min(max_rows, rows_remaining)
             result = await extract_rows(
                 ctx,
                 table=args.table,
@@ -165,14 +190,13 @@ class LlmClassifyTool(Tool[_Input]):
                 spec=args.labels,
                 where=args.where,
                 limit=args.limit,
-                max_rows=(
-                    MAX_BATCHED_CLASSIFY_ROWS if args.batch_size > 1 else 200
-                ),
+                max_rows=max_rows,
                 classify_batch_size=args.batch_size,
                 max_requests=args.max_requests,
                 classify_concurrency=ctx.llm_classify_concurrency,
                 llm_fn_override=classify_llm_fn,
             )
+            ctx.llm_classify_rows_used += result.rows_processed
             conn.materialize_table(result_table, result.df.to_arrow())  # type: ignore[arg-type]
         except Exception as exc:
             if is_rate_limit_error(exc):
@@ -187,6 +211,12 @@ class LlmClassifyTool(Tool[_Input]):
             batch_size=args.batch_size,
             concurrency=ctx.llm_classify_concurrency,
             max_requests=args.max_requests,
+            row_budget=row_budget,
+            rows_remaining=(
+                max(0, row_budget - ctx.llm_classify_rows_used)
+                if row_budget is not None
+                else None
+            ),
             columns=result.df.columns,
         )
         out.attach_result_df(result.df)

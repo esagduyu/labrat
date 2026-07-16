@@ -280,6 +280,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--llm-classify-row-budget",
+        type=int,
+        default=None,
+        help=(
+            "Evaluator-enforced cumulative llm_classify row cap per trial, spanning "
+            "all tool calls. Unset preserves the normal per-call limits. Restored "
+            "from config.json."
+        ),
+    )
+    parser.add_argument(
         "--agent-levers",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -421,9 +431,18 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help=(
-            "Per-call provider timeout in seconds for the labrat-agent driver. Only the "
-            "claude-code provider honours it (default 120s); useful to absorb slow turns "
-            "when --agent-verify adds round-trips. None = provider default."
+            "Per-trial wall-clock timeout in seconds. None uses the 1200-second DAB "
+            "default; provider implementations may also apply it to individual calls."
+        ),
+    )
+    parser.add_argument(
+        "--terminalize-timeouts",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Record a wall-clock timeout as a traced scored failure instead of retryable "
+            "infrastructure. Off by default; intended for explicitly bounded submission "
+            "runs where timeout is part of the declared evaluator policy."
         ),
     )
     parser.add_argument(
@@ -498,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
         ("llm_classify_model", args.llm_classify_model),
         ("llm_classify_reasoning", args.llm_classify_reasoning),
         ("llm_classify_concurrency", args.llm_classify_concurrency),
+        ("llm_classify_row_budget", args.llm_classify_row_budget),
+        ("terminalize_timeouts", args.terminalize_timeouts),
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
     ]:
@@ -628,10 +649,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.llm_classify_concurrency is not None
         else existing_cfg.get("llm_classify_concurrency", 1)
     )
+    effective_classify_row_budget: int | None = (
+        args.llm_classify_row_budget
+        if args.llm_classify_row_budget is not None
+        else existing_cfg.get("llm_classify_row_budget")
+    )
+    if effective_classify_row_budget is not None and effective_classify_row_budget < 1:
+        parser.error("--llm-classify-row-budget must be positive")
+    effective_terminalize_timeouts: bool = bool(
+        args.terminalize_timeouts
+        if args.terminalize_timeouts is not None
+        else existing_cfg.get("terminalize_timeouts", False)
+    )
+    write_terminal_timeout_config = (
+        not existing_cfg
+        or "terminalize_timeouts" in existing_cfg
+        or args.terminalize_timeouts is not None
+    )
     nested_keys = (
         "llm_classify_model",
         "llm_classify_reasoning",
         "llm_classify_concurrency",
+        "llm_classify_row_budget",
     )
     legacy_nested_config = bool(existing_cfg) and not any(
         key in existing_cfg for key in nested_keys
@@ -642,12 +681,14 @@ def main(argv: list[str] | None = None) -> int:
             args.llm_classify_model,
             args.llm_classify_reasoning,
             args.llm_classify_concurrency,
+            args.llm_classify_row_budget,
         )
     )
     nested_differs_from_legacy = (
         effective_classify_model != effective_model
         or effective_classify_reasoning != effective_reasoning
         or effective_classify_concurrency != 1
+        or effective_classify_row_budget is not None
     )
     if (
         legacy_nested_config
@@ -697,6 +738,8 @@ def main(argv: list[str] | None = None) -> int:
         llm_classify_model=effective_classify_model,
         llm_classify_reasoning=effective_classify_reasoning,
         llm_classify_concurrency=effective_classify_concurrency,
+        llm_classify_row_budget=effective_classify_row_budget,
+        terminalize_timeouts=effective_terminalize_timeouts,
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
         cartograph=effective_cartograph,
@@ -773,12 +816,15 @@ def main(argv: list[str] | None = None) -> int:
                 "n_trials": effective_n_trials,
                 "task_filter": task_filter,
     }
+    if write_terminal_timeout_config:
+        config_payload["terminalize_timeouts"] = effective_terminalize_timeouts
     if write_nested_config:
         config_payload.update(
             {
                 "llm_classify_model": effective_classify_model,
                 "llm_classify_reasoning": effective_classify_reasoning,
                 "llm_classify_concurrency": effective_classify_concurrency,
+                "llm_classify_row_budget": effective_classify_row_budget,
             }
         )
     (output_dir / "config.json").write_text(json.dumps(config_payload, indent=2))

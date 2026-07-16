@@ -541,6 +541,8 @@ class DabSuite:
         llm_classify_model: str | None = None,
         llm_classify_reasoning: str | None = None,
         llm_classify_concurrency: int = 1,
+        llm_classify_row_budget: int | None = None,
+        terminalize_timeouts: bool = False,
         agent_levers: bool = True,
         agent_ledger: bool = True,
         cartograph: bool = False,
@@ -583,7 +585,11 @@ class DabSuite:
         )
         if llm_classify_concurrency not in {1, 2}:
             raise ValueError("llm_classify_concurrency must be 1 or 2")
+        if llm_classify_row_budget is not None and llm_classify_row_budget < 1:
+            raise ValueError("llm_classify_row_budget must be positive when set")
         self._llm_classify_concurrency = llm_classify_concurrency
+        self._llm_classify_row_budget = llm_classify_row_budget
+        self._terminalize_timeouts = terminalize_timeouts
         # Benchmark-safe process levers are enabled by default for historical
         # compatibility. The explicit toggle supports a clean ablation arm.
         self._agent_levers = agent_levers
@@ -705,12 +711,38 @@ class DabSuite:
         validator_path = Path(task.config["validator_path"])
         self._last_usage: dict[str, int] | None = None
         self._last_request_usage: list[dict[str, Any]] = []
+        started = time.monotonic()
 
         try:
             final_text, tool_calls, latency = await self._run_trial_verified(
                 task, db_config_path, scratch_dir
             )
         except Exception as exc:
+            if isinstance(exc, TimeoutError) and self._terminalize_timeouts:
+                from labrat.agent.tool_trace import append_tool_trace
+
+                timeout = self._agent_timeout if self._agent_timeout is not None else _DAB_TIMEOUT
+                final_text = f"[trial exceeded {timeout}s timeout]"
+                latency = time.monotonic() - started
+                append_tool_trace(
+                    scratch_dir,
+                    "agent_tool_calls.jsonl",
+                    tool="runner_timeout",
+                    input={"timeout_seconds": timeout},
+                    ok=False,
+                    output=final_text,
+                    latency_ms=latency * 1000.0,
+                )
+                return TrialResult(
+                    task_id=task.id,
+                    trial_num=trial_num,
+                    passed=False,
+                    reason="terminal:timeout",
+                    latency_seconds=latency,
+                    tool_calls=0,
+                    artifact={"type": "text", "payload": final_text},
+                    meta=self._usage_meta(),
+                )
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
             # fail only THIS trial, not crash the whole run. Record it as an infra failure
             # so aggregate() skips it and a --output-dir resume auto-retries it.
@@ -742,6 +774,34 @@ class DabSuite:
         # eval_dab.py can print INFRA instead of FAIL.
         infra_tag = _detect_infra_failure(final_text)
         if infra_tag is not None:
+            if infra_tag == "timeout" and self._terminalize_timeouts:
+                from labrat.agent.tool_trace import append_tool_trace
+
+                append_tool_trace(
+                    scratch_dir,
+                    "agent_tool_calls.jsonl",
+                    tool="runner_timeout",
+                    input={
+                        "timeout_seconds": (
+                            self._agent_timeout
+                            if self._agent_timeout is not None
+                            else _DAB_TIMEOUT
+                        )
+                    },
+                    ok=False,
+                    output=final_text,
+                    latency_ms=latency * 1000.0,
+                )
+                return TrialResult(
+                    task_id=task.id,
+                    trial_num=trial_num,
+                    passed=False,
+                    reason="terminal:timeout",
+                    latency_seconds=latency,
+                    tool_calls=tool_calls,
+                    artifact={"type": "text", "payload": final_text},
+                    meta=self._usage_meta(),
+                )
             return TrialResult(
                 task_id=task.id,
                 trial_num=trial_num,
@@ -1466,6 +1526,8 @@ class DabSuite:
         # (list_tables / describe_table / column_stats / search_columns) actually work.
         introspect_env_catalogs(env.ctx)
         env.ctx.llm_classify_concurrency = self._llm_classify_concurrency
+        env.ctx.llm_classify_row_budget = self._llm_classify_row_budget
+        env.ctx.llm_classify_rows_used = 0
 
         cartograph_root: Path | None = None
         if self._cartograph:
@@ -1513,6 +1575,14 @@ class DabSuite:
             system_prompt = _build_labrat_agent_system_prompt(
                 env, include_levers=self._agent_levers
             )
+            if self._llm_classify_row_budget is not None:
+                system_prompt = (
+                    system_prompt
+                    + "\n\nEvaluator budget: llm_classify may process at most "
+                    f"{self._llm_classify_row_budget} cumulative rows in this trial. "
+                    "The cap spans all calls. Use the budget deliberately and produce "
+                    "the best final answer from the resulting evidence."
+                )
             if self._agent_provider == "codex" and self._agent_reasoning == "ultra":
                 system_prompt = (
                     system_prompt

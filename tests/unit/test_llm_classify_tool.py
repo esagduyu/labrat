@@ -181,6 +181,40 @@ async def test_classify_tool_batches_more_than_legacy_200_row_cap(tmp_path: Path
     conn.disconnect()
 
 
+async def test_classify_tool_enforces_cumulative_context_row_budget(tmp_path: Path) -> None:
+    calls = 0
+
+    async def counted_llm(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        return await _fake_llm(prompt)
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(
+        connection=conn,
+        catalog=None,
+        llm_fn=counted_llm,
+        llm_classify_row_budget=4,
+    )
+    tool = LlmClassifyTool()
+    args = tool.input_model(
+        table="articles", text_column="headline", labels=_LABELS, key_columns=["id"]
+    )
+
+    first = await tool.execute(ctx, args)
+    second = await tool.execute(ctx, args)
+    exhausted = await tool.execute(ctx, args)
+
+    assert first.ok and first.rows_processed == 3 and first.rows_remaining == 1
+    assert second.ok and second.rows_processed == 1 and second.rows_remaining == 0
+    assert not exhausted.ok
+    assert exhausted.rows_remaining == 0
+    assert exhausted.error is not None and "cumulative row budget exhausted" in exhausted.error
+    assert ctx.llm_classify_rows_used == 4
+    assert calls == 4
+    conn.disconnect()
+
+
 async def test_classify_tool_registry_propagates_rate_limit(tmp_path: Path) -> None:
     async def limited(_prompt: str) -> str:
         raise RateLimitError()

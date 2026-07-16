@@ -310,6 +310,26 @@ def test_codex_dedicated_classifier_config_is_persisted_and_resume_safe(
         main([*args[:-1], "1"])
 
 
+def test_bounded_classifier_and_terminal_timeout_config_is_resume_safe(tmp_path: Path) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "bounded"
+    base = ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]
+    args = [*base, "--llm-classify-row-budget", "200", "--terminalize-timeouts"]
+
+    assert main(args) == 0
+    config = json.loads((output_dir / "config.json").read_text())
+    assert config["llm_classify_row_budget"] == 200
+    assert config["terminalize_timeouts"] is True
+    assert main(base) == 0
+    with pytest.raises(SystemExit, match=r"Resume conflict.*llm-classify-row-budget"):
+        main([*base, "--llm-classify-row-budget", "100"])
+    with pytest.raises(SystemExit, match=r"Resume conflict.*terminalize-timeouts"):
+        main([*base, "--no-terminalize-timeouts"])
+
+
 def test_legacy_semantic_run_rejects_new_classifier_override(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import duckdb
+import pytest
 import yaml
 
 from labrat.agent.loop import TextBlock
@@ -497,6 +499,40 @@ async def test_run_trial_isolates_agent_timeout_as_infra(tmp_path: Path) -> None
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
     assert result.passed is False
     assert result.reason == "infra:timeout"
+
+
+async def test_run_trial_can_terminalize_timeout_as_traced_failure(tmp_path: Path) -> None:
+    """A declared bounded run records timeout as one trace-complete scored failure."""
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_timeout=17,
+        terminalize_timeouts=True,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "terminal-timeout"
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=TimeoutError()),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    assert result.passed is False
+    assert result.reason == "terminal:timeout"
+    assert result.artifact == {"type": "text", "payload": "[trial exceeded 17s timeout]"}
+    trace_path = scratch / "agent_tool_calls.jsonl"
+    trace = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert trace == [
+        {
+            "tool": "runner_timeout",
+            "input": {"timeout_seconds": 17},
+            "ok": False,
+            "output": "[trial exceeded 17s timeout]",
+            "latency_ms": pytest.approx(0.0, abs=100.0),
+        }
+    ]
 
 
 async def test_consensus_promotes_trace_from_actual_retained_subrun(tmp_path: Path) -> None:
