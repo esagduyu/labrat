@@ -93,6 +93,7 @@ class AgentLoop:
         self.turns_used = 0
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
+        self.turn_budget_exhausted = False
         # True iff the loop's final answer was returned WITHOUT a final
         # verifier re-check because the round (or turn) budget ran out —
         # i.e. the last real verdict (if any) was insufficient and nothing
@@ -128,11 +129,13 @@ class AgentLoop:
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
         self.verify_exhausted = False
+        self.turn_budget_exhausted = False
         self.active_on_tool_call = on_tool_call
 
         try:
             while True:
                 if self._max_turns is not None and self.turns_used >= self._max_turns:
+                    self.turn_budget_exhausted = True
                     break
 
                 text_parts: list[str] = []

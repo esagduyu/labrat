@@ -125,6 +125,8 @@ async def test_runner_respects_max_turns_cap() -> None:
     )
     assert result.tool_calls == 2  # exactly 2 tool dispatches over 2 turns
     assert result.final_text == ""  # never reached the closing text
+    assert result.turns == 2
+    assert result.turn_budget_exhausted is True
 
 
 async def test_runner_respects_max_tool_calls_cap() -> None:

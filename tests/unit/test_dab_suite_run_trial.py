@@ -315,6 +315,51 @@ async def test_labrat_agent_uses_and_accounts_dedicated_classifier_provider(
 
 
 @patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_terminalizes_turn_budget_with_trace(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {}
+    provider.request_usage = []
+    mock_build.return_value = provider
+
+    async def fake_run_agent_task(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            final_text="",
+            tool_calls=10,
+            latency_seconds=1.0,
+            turn_budget_exhausted=True,
+        )
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_max_turns=10,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "turn-budget"
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    expected = "[trial exhausted 10-turn budget without a final answer]"
+    assert result.passed is False
+    assert result.reason == "terminal:turn_budget"
+    assert result.artifact == {"type": "text", "payload": expected}
+    trace = [
+        json.loads(line)
+        for line in (scratch / "agent_tool_calls.jsonl").read_text().splitlines()
+    ]
+    assert trace[-1] == {
+        "tool": "runner_turn_budget",
+        "input": {"max_turns": 10},
+        "ok": False,
+        "output": expected,
+        "latency_ms": 0.0,
+    }
+
+
+@patch("labrat.agent.providers.build_provider")
 async def test_labrat_agent_driver_preserves_completed_usage_on_later_failure(
     mock_build: MagicMock, tmp_path: Path
 ) -> None:

@@ -28,6 +28,8 @@ class AgentTaskResult(BaseModel):
     final_text: str
     tool_calls: int
     latency_seconds: float
+    turns: int = 0
+    turn_budget_exhausted: bool = False
 
 
 async def run_agent_task(
@@ -96,4 +98,6 @@ async def run_agent_task(
         final_text="".join(text_parts),
         tool_calls=loop.tool_calls_used,
         latency_seconds=latency,
+        turns=loop.turns_used,
+        turn_budget_exhausted=loop.turn_budget_exhausted,
     )

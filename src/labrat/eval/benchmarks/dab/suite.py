@@ -772,6 +772,18 @@ class DabSuite:
         # don't reflect the agent's ability and shouldn't pollute aggregate scoring.
         # Mark them with reason="infra:<tag>" so aggregate() can skip them and
         # eval_dab.py can print INFRA instead of FAIL.
+        if final_text.startswith("[trial exhausted "):
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason="terminal:turn_budget",
+                latency_seconds=latency,
+                tool_calls=tool_calls,
+                artifact={"type": "text", "payload": final_text},
+                meta=self._usage_meta(),
+            )
+
         infra_tag = _detect_infra_failure(final_text)
         if infra_tag is not None:
             if infra_tag == "timeout" and self._terminalize_timeouts:
@@ -1661,6 +1673,21 @@ class DabSuite:
                 disconnect = getattr(conn, "disconnect", None)
                 if callable(disconnect):
                     disconnect()
+        if getattr(result, "turn_budget_exhausted", False):
+            from labrat.agent.tool_trace import append_tool_trace
+
+            max_turns = self._agent_max_turns
+            final_text = f"[trial exhausted {max_turns}-turn budget without a final answer]"
+            append_tool_trace(
+                scratch_dir,
+                "agent_tool_calls.jsonl",
+                tool="runner_turn_budget",
+                input={"max_turns": max_turns},
+                ok=False,
+                output=final_text,
+                latency_ms=0.0,
+            )
+            return final_text, result.tool_calls, result.latency_seconds
         return result.final_text, result.tool_calls, result.latency_seconds
 
     def aggregate(self, results: list[TrialResult]) -> AggregateScore:
