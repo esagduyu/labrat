@@ -7,7 +7,12 @@ import pytest
 
 from labrat.eval.benchmarks.dab.taint import task_trial_dir_name
 from labrat.eval.types import TrialResult
-from scripts.dab_shards import ShardError, merge_shards, prepare_shards
+from scripts.dab_shards import (
+    ShardError,
+    merge_bounded_recovery,
+    merge_shards,
+    prepare_shards,
+)
 
 
 def _config() -> dict[str, object]:
@@ -139,3 +144,80 @@ def test_merge_rejects_trace_directory_collision(tmp_path: Path) -> None:
 
     with pytest.raises(ShardError, match="trace collision"):
         merge_shards(shards_dir, tmp_path / "canonical")
+
+
+def _bounded_beta_recovery(tmp_path: Path) -> Path:
+    run = tmp_path / "beta-recovery"
+    run.mkdir()
+    config = {
+        **_config(),
+        "task_filter": ["beta:1"],
+        "agent_max_turns": 10,
+        "llm_classify_row_budget": 200,
+        "terminalize_timeouts": True,
+    }
+    (run / "config.json").write_text(json.dumps(config))
+    terminal = TrialResult(
+        task_id="beta:1",
+        trial_num=0,
+        passed=False,
+        reason="terminal:turn_budget",
+        latency_seconds=2.0,
+        artifact={
+            "type": "text",
+            "payload": "[trial exhausted 10-turn budget without a final answer]",
+        },
+    )
+    _write_rows(run, [terminal])
+    trial_dir = run / "scratch" / task_trial_dir_name("beta:1", 0)
+    trial_dir.mkdir(parents=True)
+    record = {
+        "tool": "runner_turn_budget",
+        "input": {"max_turns": 10},
+        "ok": False,
+        "output": terminal.artifact["payload"],
+        "latency_ms": 0,
+    }
+    (trial_dir / "agent_tool_calls.jsonl").write_text(json.dumps(record) + "\n")
+    return run
+
+
+def test_bounded_recovery_fills_only_missing_semantic_keys(tmp_path: Path) -> None:
+    shards_dir = _prepare(tmp_path)
+    _write_rows(shards_dir / "alpha", [_trial("alpha:1")])
+    _write_rows(
+        shards_dir / "beta", [_trial("beta:1", reason="infra:timeout", passed=False)]
+    )
+    _write_trace(shards_dir / "alpha", "alpha:1")
+    _write_trace(shards_dir / "beta", "beta:1")
+    recovery = _bounded_beta_recovery(tmp_path)
+
+    output = tmp_path / "recovered"
+    report = merge_bounded_recovery(shards_dir, [recovery], output)
+
+    rows = [json.loads(line) for line in (output / "trials.jsonl").read_text().splitlines()]
+    assert len(rows) == 2
+    assert [row["reason"] for row in rows] == [None, "terminal:turn_budget"]
+    assert report.score.n_trials == 2
+    assert report.score.n_passes == 1
+    assert report.score.overall == 0.5
+    config = json.loads((output / "config.json").read_text())
+    assert config["bounded_recovery"]["infra_rows_preserved_in_source_runs"] is True
+    assert config["bounded_recovery"]["task_overrides"]["beta:1"] == {
+        "agent_max_turns": 10,
+        "llm_classify_row_budget": 200,
+        "terminalize_timeouts": True,
+    }
+    assert json.loads((output / "taint.json").read_text()) == {
+        "alpha:1:0": "clean",
+        "beta:1:0": "clean",
+    }
+
+
+def test_bounded_recovery_refuses_to_replace_semantic_result(tmp_path: Path) -> None:
+    shards_dir = _prepare(tmp_path)
+    _complete(shards_dir)
+    recovery = _bounded_beta_recovery(tmp_path)
+
+    with pytest.raises(ShardError, match="refuses to replace"):
+        merge_bounded_recovery(shards_dir, [recovery], tmp_path / "recovered")

@@ -26,6 +26,27 @@ _MANIFEST = "shards.json"
 _CONFIG = "config.json"
 _TRIALS = "trials.jsonl"
 
+_RECOVERY_COMPAT_KEYS = (
+    "hints",
+    "driver",
+    "agent_model",
+    "agent_provider",
+    "agent_verify",
+    "agent_cartograph",
+    "cartograph_semantics",
+    "cartograph_semantics_model",
+    "cartograph_semantics_provider",
+    "agent_consensus",
+    "agent_reverify",
+    "agent_argue_rounds",
+    "agent_postverify",
+    "consensus_diversity",
+    "agent_reasoning",
+    "agent_levers",
+    "agent_ledger",
+    "n_trials",
+)
+
 
 class ShardError(RuntimeError):
     """A shard set is unsafe or incomplete."""
@@ -265,6 +286,193 @@ def merge_shards(shards_dir: Path, output_dir: Path) -> BenchmarkReport:
         raise
 
 
+def _config_delta(config: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
+    keys = sorted((set(config) | set(base)) - {"task_filter"})
+    return {key: config.get(key) for key in keys if config.get(key) != base.get(key)}
+
+
+def _validate_terminal_recovery_trace(run: Path, row: TrialResult) -> None:
+    if not (row.reason or "").startswith("terminal:"):
+        return
+    trace = run / "scratch" / task_trial_dir_name(row.task_id, row.trial_num)
+    trace = trace / "agent_tool_calls.jsonl"
+    try:
+        lines = [line for line in trace.read_text(encoding="utf-8").splitlines() if line]
+        final = json.loads(lines[-1])
+    except (OSError, IndexError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ShardError(f"terminal recovery has no readable final trace event: {trace}") from exc
+    artifact = row.artifact.get("payload") if row.artifact.get("type") == "text" else None
+    if not isinstance(final, dict) or final.get("tool") not in {
+        "runner_timeout",
+        "runner_turn_budget",
+    }:
+        raise ShardError(f"terminal recovery trace lacks a runner terminal event: {trace}")
+    if final.get("output") != artifact:
+        raise ShardError(f"terminal recovery artifact does not match final trace event: {trace}")
+
+
+def merge_bounded_recovery(
+    shards_dir: Path,
+    recovery_runs: list[Path],
+    output_dir: Path,
+) -> BenchmarkReport:
+    """Fill only missing semantic keys from declared bounded recovery runs."""
+    if not recovery_runs:
+        raise ShardError("at least one recovery run is required")
+    manifest_path = shards_dir / _MANIFEST
+    manifest = _read_object(manifest_path)
+    if manifest.get("version") != 1:
+        raise ShardError(f"unsupported shard manifest version in {manifest_path}")
+    config_value = manifest.get("config")
+    shard_names_value = manifest.get("shards")
+    if not isinstance(config_value, dict):
+        raise ShardError(f"{manifest_path} has no valid config")
+    if not isinstance(shard_names_value, list) or not all(
+        isinstance(name, str) and name for name in shard_names_value
+    ):
+        raise ShardError(f"{manifest_path} has no valid shards list")
+    base_config = cast(dict[str, Any], config_value)
+    shard_names = cast(list[str], shard_names_value)
+    expected_tasks = _task_filter(base_config, source=manifest_path)
+    n_trials = base_config.get("n_trials")
+    if isinstance(n_trials, bool) or not isinstance(n_trials, int) or n_trials < 1:
+        raise ShardError("config.n_trials must be a positive integer")
+    expected_keys = {(task, trial) for task in expected_tasks for trial in range(n_trials)}
+
+    selected: dict[tuple[str, int], tuple[TrialResult, Path]] = {}
+    shard_deltas: dict[str, dict[str, Any]] = {}
+    for name in shard_names:
+        shard = shards_dir / name
+        shard_config_path = shard / _CONFIG
+        shard_config = _read_object(shard_config_path)
+        tasks = _task_filter(shard_config, source=shard_config_path)
+        expected_for_dataset = [task for task in expected_tasks if task.split(":", 1)[0] == name]
+        if tasks != expected_for_dataset:
+            raise ShardError(
+                f"{shard_config_path} task_filter does not exactly match dataset {name!r}"
+            )
+        delta = _config_delta(shard_config, base_config)
+        if delta:
+            shard_deltas[name] = delta
+        for row in _load_trials(shard, set(tasks), n_trials):
+            if (row.reason or "").startswith("infra:"):
+                continue
+            key = (row.task_id, row.trial_num)
+            if key in selected:
+                raise ShardError(f"duplicate base semantic attempt: {key}")
+            selected[key] = (row, shard)
+
+    task_overrides: dict[str, dict[str, Any]] = {}
+    recovery_sources: list[str] = []
+    for run in recovery_runs:
+        recovery_config_path = run / _CONFIG
+        recovery_config = _read_object(recovery_config_path)
+        tasks = _task_filter(recovery_config, source=recovery_config_path)
+        for key in _RECOVERY_COMPAT_KEYS:
+            if recovery_config.get(key) != base_config.get(key):
+                raise ShardError(
+                    f"recovery config mismatch for {key}: "
+                    f"{recovery_config.get(key)!r} != {base_config.get(key)!r}"
+                )
+        if recovery_config.get("terminalize_timeouts") is not True:
+            raise ShardError(f"{recovery_config_path} must enable terminalize_timeouts")
+        row_budget = recovery_config.get("llm_classify_row_budget")
+        max_turns = recovery_config.get("agent_max_turns")
+        if isinstance(row_budget, bool) or not isinstance(row_budget, int) or row_budget < 1:
+            raise ShardError(f"{recovery_config_path} has no positive classifier row budget")
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int) or max_turns < 1:
+            raise ShardError(f"{recovery_config_path} has no positive turn budget")
+
+        recovery_rows = _load_trials(run, set(tasks), n_trials)
+        recovery_semantic = [
+            row for row in recovery_rows if not (row.reason or "").startswith("infra:")
+        ]
+        recovery_expected = {(task, trial) for task in tasks for trial in range(n_trials)}
+        recovery_actual = {(row.task_id, row.trial_num) for row in recovery_semantic}
+        if recovery_actual != recovery_expected:
+            raise ShardError(
+                f"recovery semantic coverage mismatch for {run}: "
+                f"missing={sorted(recovery_expected - recovery_actual)} "
+                f"extra={sorted(recovery_actual - recovery_expected)}"
+            )
+        for row in recovery_semantic:
+            _validate_terminal_recovery_trace(run, row)
+            key = (row.task_id, row.trial_num)
+            if key in selected:
+                raise ShardError(f"recovery refuses to replace existing semantic key: {key}")
+            selected[key] = (row, run)
+        declared = _config_delta(recovery_config, base_config)
+        for task in tasks:
+            task_overrides[task] = declared
+        recovery_sources.append(str(run.resolve()))
+
+    if set(selected) != expected_keys:
+        raise ShardError(
+            "recovered semantic trial coverage mismatch: "
+            f"missing={sorted(expected_keys - set(selected))} "
+            f"extra={sorted(set(selected) - expected_keys)}"
+        )
+    if output_dir.exists() or output_dir.is_symlink():
+        raise ShardError(f"output directory already exists: {output_dir}")
+
+    ordered = [selected[(task, trial)][0] for task in expected_tasks for trial in range(n_trials)]
+    final_config = {
+        **base_config,
+        "task_filter": expected_tasks,
+        "bounded_recovery": {
+            "base_shards": str(shards_dir.resolve()),
+            "recovery_runs": recovery_sources,
+            "base_shard_config_deltas": shard_deltas,
+            "task_overrides": task_overrides,
+            "infra_rows_preserved_in_source_runs": True,
+        },
+    }
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-recover-", dir=output_dir.parent))
+    try:
+        (temp_dir / _CONFIG).write_text(
+            json.dumps(final_config, indent=2) + "\n", encoding="utf-8"
+        )
+        (temp_dir / _TRIALS).write_text(
+            "".join(row.model_dump_json() + "\n" for row in ordered), encoding="utf-8"
+        )
+        scratch = temp_dir / "scratch"
+        scratch.mkdir()
+        for task in expected_tasks:
+            for trial in range(n_trials):
+                source = selected[(task, trial)][1] / "scratch" / task_trial_dir_name(task, trial)
+                destination = scratch / source.name
+                if not source.is_dir() or source.is_symlink():
+                    raise ShardError(f"missing or unsafe selected trace directory: {source}")
+                if destination.exists():
+                    raise ShardError(f"selected trace collision: {destination.name}")
+                shutil.copytree(source, destination, symlinks=False)
+
+        verdicts = audit_run(temp_dir / _TRIALS, scratch)
+        audit_ok, offenders = gate(verdicts)
+        if not audit_ok:
+            raise ShardError(f"recovered taint audit failed: {offenders}")
+        expected_verdicts = {f"{task}:{trial}" for task, trial in expected_keys}
+        if set(verdicts) != expected_verdicts:
+            raise ShardError("recovered taint audit did not cover every expected trial")
+
+        report = BenchmarkReport(
+            benchmark="dab",
+            run_id=output_dir.name,
+            score=aggregate_dab_results(ordered),
+            trials=ordered,
+            config=final_config,
+        )
+        write_submission_json(report, temp_dir)
+        (temp_dir / "report.md").write_text(report_to_markdown(report), encoding="utf-8")
+        temp_dir.replace(output_dir)
+        return report
+    except BaseException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -277,12 +485,27 @@ def main(argv: list[str] | None = None) -> int:
     merge.add_argument("--shards-dir", type=Path, required=True)
     merge.add_argument("--output-dir", type=Path, required=True)
 
+    recover = subparsers.add_parser(
+        "recover", help="fill missing semantic keys from bounded recovery runs"
+    )
+    recover.add_argument("--shards-dir", type=Path, required=True)
+    recover.add_argument("--recovery-run", type=Path, action="append", required=True)
+    recover.add_argument("--output-dir", type=Path, required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
             shards = prepare_shards(args.config, args.shards_dir)
             for shard in shards:
                 print(f"uv run python scripts/eval_dab.py --output-dir {shard}")
+        elif args.command == "recover":
+            report = merge_bounded_recovery(
+                args.shards_dir, args.recovery_run, args.output_dir
+            )
+            print(
+                f"Recovered {report.score.n_trials} semantic trials into "
+                f"{args.output_dir} ({report.score.n_passes} passes)"
+            )
         else:
             report = merge_shards(args.shards_dir, args.output_dir)
             print(f"Merged {report.score.n_trials} semantic trials into {args.output_dir}")
