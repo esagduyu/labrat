@@ -88,6 +88,23 @@ def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
     return completed
 
 
+def _has_semantic_trials(trials_jsonl: Path) -> bool:
+    """Whether a run already contains any non-infrastructure trial row."""
+    if not trials_jsonl.exists():
+        return False
+    for line in trials_jsonl.read_text().splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        reason = obj.get("reason") or ""
+        if not isinstance(reason, str) or not reason.startswith("infra:"):
+            return True
+    return False
+
+
 async def _run_interim(
     suite: BenchmarkSuite,
     n_trials: int,
@@ -232,6 +249,34 @@ def main(argv: list[str] | None = None) -> int:
             "also support ultra (automatic task delegation). GPT-5.5 retains the "
             "legacy minimal value. New Codex runs default to Luna Max. Ignored by "
             "the other providers."
+        ),
+    )
+    parser.add_argument(
+        "--llm-classify-model",
+        default=None,
+        help=(
+            "Dedicated model for nested llm_classify requests. Defaults to the "
+            "main agent model, preserving existing behavior. Restored from config.json."
+        ),
+    )
+    parser.add_argument(
+        "--llm-classify-reasoning",
+        choices=list(CODEX_REASONING_EFFORTS),
+        default=None,
+        help=(
+            "Reasoning effort for the dedicated nested llm_classify model. Defaults "
+            "to the main agent effort. For DAB AG News, Luna Low avoids spending "
+            "Max reasoning on constrained label selection."
+        ),
+    )
+    parser.add_argument(
+        "--llm-classify-concurrency",
+        type=int,
+        choices=[1, 2],
+        default=None,
+        help=(
+            "Maximum concurrent batched llm_classify requests. Defaults to 1; hard "
+            "capped at 2 and restored from config.json."
         ),
     )
     parser.add_argument(
@@ -418,6 +463,13 @@ def main(argv: list[str] | None = None) -> int:
         existing_cfg_path = args.output_dir / "config.json"
         if existing_cfg_path.exists():
             existing_cfg = json.loads(existing_cfg_path.read_text())
+        elif _has_semantic_trials(args.output_dir / "trials.jsonl"):
+            parser.error(
+                "Cannot safely resume an output directory that has semantic trial rows "
+                "but no config.json. Restore the original config or start a fresh "
+                "--output-dir; inferring model and classifier settings would mix "
+                "incompatible trials."
+            )
 
     # Tri-state --no-consensus-diversity: None (unset) inherits from resume config /
     # defaults to True; True/False resolved from the negation flag once it's set.
@@ -443,6 +495,9 @@ def main(argv: list[str] | None = None) -> int:
         ("consensus_diversity", cli_consensus_diversity),
         ("agent_timeout", args.agent_timeout),
         ("agent_reasoning", args.agent_reasoning),
+        ("llm_classify_model", args.llm_classify_model),
+        ("llm_classify_reasoning", args.llm_classify_reasoning),
+        ("llm_classify_concurrency", args.llm_classify_concurrency),
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
     ]:
@@ -551,6 +606,66 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             parser.error(str(exc))
+    effective_classify_model: str = (
+        args.llm_classify_model
+        or existing_cfg.get("llm_classify_model")
+        or effective_model
+    )
+    effective_classify_reasoning: str | None = (
+        args.llm_classify_reasoning
+        if args.llm_classify_reasoning is not None
+        else existing_cfg.get("llm_classify_reasoning", effective_reasoning)
+    )
+    if effective_provider == "codex":
+        try:
+            effective_classify_model, effective_classify_reasoning = resolve_codex_model_config(
+                effective_classify_model, effective_classify_reasoning
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    effective_classify_concurrency: int = (
+        args.llm_classify_concurrency
+        if args.llm_classify_concurrency is not None
+        else existing_cfg.get("llm_classify_concurrency", 1)
+    )
+    nested_keys = (
+        "llm_classify_model",
+        "llm_classify_reasoning",
+        "llm_classify_concurrency",
+    )
+    legacy_nested_config = bool(existing_cfg) and not any(
+        key in existing_cfg for key in nested_keys
+    )
+    nested_override = any(
+        value is not None
+        for value in (
+            args.llm_classify_model,
+            args.llm_classify_reasoning,
+            args.llm_classify_concurrency,
+        )
+    )
+    nested_differs_from_legacy = (
+        effective_classify_model != effective_model
+        or effective_classify_reasoning != effective_reasoning
+        or effective_classify_concurrency != 1
+    )
+    if (
+        legacy_nested_config
+        and nested_override
+        and nested_differs_from_legacy
+        and args.output_dir is not None
+        and _has_semantic_trials(args.output_dir / "trials.jsonl")
+    ):
+        parser.error(
+            "Cannot add differing llm_classify model/reasoning/concurrency to a legacy "
+            "run that already has semantic rows. Start a fresh --output-dir so nested "
+            "classifier settings remain uniform across the campaign."
+        )
+    write_nested_config = (
+        not existing_cfg
+        or not legacy_nested_config
+        or (nested_override and nested_differs_from_legacy)
+    )
     effective_hints: bool = bool(
         args.hints if args.hints is not None else existing_cfg.get("hints", False)
     )
@@ -579,6 +694,9 @@ def main(argv: list[str] | None = None) -> int:
         agent_verify=effective_verify,
         agent_timeout=effective_timeout,
         agent_reasoning=effective_reasoning,
+        llm_classify_model=effective_classify_model,
+        llm_classify_reasoning=effective_classify_reasoning,
+        llm_classify_concurrency=effective_classify_concurrency,
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
         cartograph=effective_cartograph,
@@ -619,9 +737,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "config.json").write_text(
-        json.dumps(
-            {
+    config_payload: dict[str, Any] = {
                 "hints": effective_hints,
                 "driver": effective_driver,
                 "agent_model": effective_model,
@@ -656,10 +772,16 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "n_trials": effective_n_trials,
                 "task_filter": task_filter,
-            },
-            indent=2,
+    }
+    if write_nested_config:
+        config_payload.update(
+            {
+                "llm_classify_model": effective_classify_model,
+                "llm_classify_reasoning": effective_classify_reasoning,
+                "llm_classify_concurrency": effective_classify_concurrency,
+            }
         )
-    )
+    (output_dir / "config.json").write_text(json.dumps(config_payload, indent=2))
 
     try:
         report = asyncio.run(_run_interim(suite, effective_n_trials, output_dir, task_filter))

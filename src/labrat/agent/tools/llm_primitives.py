@@ -16,6 +16,7 @@ strict, opt-in batching while retaining an enforceable nested-request budget.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from typing import cast
 
 import polars as pl
 
+from labrat.agent.providers.base import is_rate_limit_error
 from labrat.agent.tools.base import LLMFn, ToolContext
 
 # Reuse run_sql's statement-stacking guard (sqlglot-based) for safety parity (F2):
@@ -250,6 +252,8 @@ async def extract_rows(
     max_rows: int = DEFAULT_MAX_ROWS,
     classify_batch_size: int = 1,
     max_requests: int | None = None,
+    classify_concurrency: int = 1,
+    llm_fn_override: LLMFn | None = None,
 ) -> ExtractResult:
     """SELECT a bounded row set and fan out calls to ``ctx.llm_fn``.
 
@@ -260,6 +264,8 @@ async def extract_rows(
     classify mode, ``classify_batch_size > 1`` groups rows into strict JSON batch
     requests; extract mode remains one request per row. At most ``max_requests``
     nested calls are attempted, always bounded by :data:`MAX_NESTED_REQUESTS`.
+    Batched requests use at most ``classify_concurrency`` in-flight calls; the
+    runtime constrains that value to a small hard cap.
     The selected row count is clamped before query execution to
     ``classify_batch_size * max_requests``, so the budget cannot be exceeded.
     ``where``
@@ -275,7 +281,7 @@ async def extract_rows(
     a key/text/field name collision, or an empty spec; the tools convert these into
     structured errors.
     """
-    llm_fn = ctx.llm_fn
+    llm_fn = llm_fn_override or ctx.llm_fn
     if llm_fn is None:
         raise RuntimeError("extract_rows requires an LLM-enabled context (ctx.llm_fn is None)")
     for ident in (table, text_column, *key_columns):
@@ -302,6 +308,8 @@ async def extract_rows(
     if max_requests is not None and (max_requests < 1 or max_requests > MAX_NESTED_REQUESTS):
         raise ValueError(f"max_requests must be between 1 and {MAX_NESTED_REQUESTS}")
     request_budget = max_requests if max_requests is not None else MAX_NESTED_REQUESTS
+    if classify_concurrency < 1 or classify_concurrency > 2:
+        raise ValueError("classify_concurrency must be between 1 and 2")
 
     # F4: catch a key_columns/text_column/schema-field name collision BEFORE any
     # per-row LLM spend. Left unchecked, this only surfaces as a polars
@@ -352,17 +360,53 @@ async def extract_rows(
     rows = list(source.iter_rows(named=True))
 
     if isinstance(spec, list) and classify_batch_size > 1:
-        for start in range(0, len(rows), classify_batch_size):
-            chunk = rows[start : start + classify_batch_size]
+        chunks = [
+            (start, rows[start : start + classify_batch_size])
+            for start in range(0, len(rows), classify_batch_size)
+        ]
+        semaphore = asyncio.Semaphore(classify_concurrency)
+        batch_results: dict[int, list[str | None] | None] = {}
+        rate_limit_exc: Exception | None = None
+
+        async def classify_chunk(
+            start: int, chunk: list[dict[str, object]]
+        ) -> tuple[int, list[str | None] | None]:
+            nonlocal rate_limit_exc, requests_made
             nonnull = [row for row in chunk if row[text_column] is not None]
-            parsed_batch: list[str | None] | None = None
-            if nonnull:
+            if not nonnull:
+                return start, []
+            async with semaphore:
+                if rate_limit_exc is not None:
+                    raise rate_limit_exc
                 # Count the attempt before awaiting it: provider exceptions still
                 # consume the nested-request budget.
                 requests_made += 1
-                parsed_batch = await _classify_many(
-                    llm_fn, spec, [row[text_column] for row in nonnull]
-                )
+                try:
+                    result = await _classify_many(
+                        llm_fn, spec, [row[text_column] for row in nonnull]
+                    )
+                except Exception as exc:
+                    if is_rate_limit_error(exc):
+                        rate_limit_exc = exc
+                    raise
+                return start, result
+
+        tasks = [asyncio.create_task(classify_chunk(start, chunk)) for start, chunk in chunks]
+        try:
+            for start, result in await asyncio.gather(*tasks):
+                batch_results[start] = result
+        except Exception:
+            # gather does not cancel sibling tasks when one fails. Cancel queued
+            # and in-flight siblings explicitly so a 429 stops nested fan-out.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        for start, chunk in chunks:
+            nonnull = [row for row in chunk if row[text_column] is not None]
+            parsed_batch = batch_results[start]
             parsed_iter = iter(parsed_batch or [None] * len(nonnull))
             for row in chunk:
                 category = None if row[text_column] is None else next(parsed_iter)
@@ -403,7 +447,9 @@ async def _classify_many(
     )
     try:
         raw = await llm_fn(prompt)
-    except Exception:
+    except Exception as exc:
+        if is_rate_limit_error(exc):
+            raise
         return None
     return _parse_classify_batch(raw, labels, len(texts))
 
@@ -428,7 +474,9 @@ async def _extract_one(
         )
     try:
         raw = await llm_fn(prompt)
-    except Exception:
+    except Exception as exc:
+        if is_rate_limit_error(exc):
+            raise
         return None
     if isinstance(spec, dict):
         return _parse_extract(raw, fields)

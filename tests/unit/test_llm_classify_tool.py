@@ -7,7 +7,9 @@ from pathlib import Path
 
 import duckdb
 import polars as pl
+import pytest
 
+from labrat.agent.providers.base import RateLimitError
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.llm_classify import LlmClassifyTool
 from labrat.agent.tools.serialization import LedgerPayloadProvider
@@ -149,7 +151,12 @@ async def test_classify_tool_batches_more_than_legacy_200_row_cap(tmp_path: Path
             [{"row": item["row"], "category": "Business"} for item in rows]
         )
 
-    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    ctx = ToolContext(
+        connection=conn,
+        catalog=None,
+        llm_fn=batch_llm,
+        llm_classify_concurrency=2,
+    )
     tool = LlmClassifyTool()
     out = await tool.execute(
         ctx,
@@ -166,6 +173,34 @@ async def test_classify_tool_batches_more_than_legacy_200_row_cap(tmp_path: Path
     assert out.rows_processed == 250
     assert out.rows_failed == 0
     assert out.requests_made == 5
+    assert out.batch_size == 50
+    assert out.concurrency == 2
+    assert out.max_requests == 5
     assert calls == 5
     assert conn.execute("SELECT COUNT(*) AS n FROM llm_classify_result")["n"].item() == 250
+    conn.disconnect()
+
+
+async def test_classify_tool_registry_propagates_rate_limit(tmp_path: Path) -> None:
+    async def limited(_prompt: str) -> str:
+        raise RateLimitError()
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited)
+    tool = LlmClassifyTool()
+    from labrat.agent.tools.base import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(tool)
+    with pytest.raises(RateLimitError):
+        await registry.dispatch(
+            "llm_classify",
+            {
+                "table": "articles",
+                "text_column": "headline",
+                "labels": _LABELS,
+                "batch_size": 2,
+            },
+            ctx,
+        )
     conn.disconnect()

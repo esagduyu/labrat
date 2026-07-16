@@ -266,6 +266,126 @@ def test_new_codex_run_defaults_to_luna_max_and_persists_concrete_config(
     config = json.loads((output_dir / "config.json").read_text())
     assert config["agent_model"] == "gpt-5.6-luna"
     assert config["agent_reasoning"] == "max"
+    assert config["llm_classify_model"] == "gpt-5.6-luna"
+    assert config["llm_classify_reasoning"] == "max"
+    assert config["llm_classify_concurrency"] == 1
+
+
+def test_codex_dedicated_classifier_config_is_persisted_and_resume_safe(
+    tmp_path: Path,
+) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "classifier-low"
+    args = [
+        "--dab-dir",
+        str(dab_dir),
+        "--output-dir",
+        str(output_dir),
+        "--driver",
+        "labrat-agent",
+        "--agent-provider",
+        "codex",
+        "--agent-model",
+        "gpt-5.6-luna",
+        "--agent-reasoning",
+        "max",
+        "--llm-classify-model",
+        "gpt-5.6-luna",
+        "--llm-classify-reasoning",
+        "low",
+        "--llm-classify-concurrency",
+        "2",
+    ]
+    assert main(args) == 0
+    config = json.loads((output_dir / "config.json").read_text())
+    assert config["agent_reasoning"] == "max"
+    assert config["llm_classify_model"] == "gpt-5.6-luna"
+    assert config["llm_classify_reasoning"] == "low"
+    assert config["llm_classify_concurrency"] == 2
+    assert main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    with pytest.raises(SystemExit, match=r"Resume conflict.*llm-classify-concurrency"):
+        main([*args[:-1], "1"])
+
+
+def test_legacy_semantic_run_rejects_new_classifier_override(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "legacy"
+    output_dir.mkdir()
+    (output_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "driver": "labrat-agent",
+                "agent_provider": "codex",
+                "agent_model": "gpt-5.6-luna",
+                "agent_reasoning": "max",
+                "n_trials": 1,
+            }
+        )
+    )
+    (output_dir / "trials.jsonl").write_text(
+        _make_trial("ds:1", trial_num=0, passed=True).model_dump_json() + "\n"
+    )
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--dab-dir",
+                str(dab_dir),
+                "--output-dir",
+                str(output_dir),
+                "--llm-classify-reasoning",
+                "low",
+            ]
+        )
+    assert "fresh --output-dir" in capsys.readouterr().err
+
+
+def test_legacy_resume_without_classifier_override_preserves_config_shape(
+    tmp_path: Path,
+) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "legacy-empty"
+    output_dir.mkdir()
+    (output_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "driver": "labrat-agent",
+                "agent_provider": "codex",
+                "agent_model": "gpt-5.6-luna",
+                "agent_reasoning": "max",
+                "n_trials": 1,
+            }
+        )
+    )
+    assert main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    config = json.loads((output_dir / "config.json").read_text())
+    assert "llm_classify_model" not in config
+    assert "llm_classify_reasoning" not in config
+    assert "llm_classify_concurrency" not in config
+
+
+def test_configless_semantic_run_is_not_resumed(tmp_path: Path) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "configless"
+    output_dir.mkdir()
+    (output_dir / "trials.jsonl").write_text(
+        _make_trial("ds:1", trial_num=0, passed=True).model_dump_json() + "\n"
+    )
+    with pytest.raises(SystemExit):
+        main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)])
 
 
 def test_codex_gpt55_default_and_invalid_pair_fail_fast(tmp_path: Path) -> None:

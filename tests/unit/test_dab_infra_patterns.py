@@ -17,7 +17,6 @@ from labrat.eval.benchmarks.dab.suite import _detect_infra_failure
         "API Error: 500 Internal server error. This is a server-side issue, usually temporary",
         "API Error: 529 Overloaded. This is a server-side issue",
         "API Error: 502 Bad gateway",
-        "API Error: 429 Too Many Requests",
         "The model is Overloaded right now",
     ],
 )
@@ -31,6 +30,7 @@ def test_api_outage_text_is_infra(text: str) -> None:
         "You've hit your Sonnet limit · resets 5am (America/Vancouver)",
         "You've hit your Opus limit · resets 5am",
         "You've hit your usage limit",
+        "API Error: 429 Too Many Requests",
     ],
 )
 def test_model_rate_limit_text_is_infra(text: str) -> None:

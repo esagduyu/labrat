@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
@@ -31,6 +32,27 @@ class RateLimitError(RuntimeError):
             for key, value in (rate_limit or {}).items()
             if key in _RATE_LIMIT_FIELDS and isinstance(value, int) and not isinstance(value, bool)
         }
+
+
+def is_rate_limit_error(value: BaseException) -> bool:
+    """Return True for the provider signal or an HTTP/textual 429 equivalent."""
+    if isinstance(value, RateLimitError):
+        return True
+    response = getattr(value, "response", None)
+    status = getattr(response, "status_code", None)
+    if status == 429 or str(status) == "429":
+        return True
+    direct_status = getattr(value, "status_code", None)
+    if direct_status == 429 or str(direct_status) == "429":
+        return True
+    text = str(value)
+    return bool(
+        re.search(
+            r"(?i)(?:\b429\b.*(?:too many requests|rate.?limit)|"
+            r"(?:too many requests|rate.?limit).*\b429\b)",
+            text,
+        )
+    )
 
 
 class ModelProvider(ABC):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import duckdb
 import polars as pl
 import pytest
 
+from labrat.agent.providers.base import RateLimitError
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.llm_primitives import ExtractResult, extract_rows
 from labrat.db.duckdb_engine import DuckDBConnection
@@ -296,6 +298,76 @@ async def test_extract_rows_classify_request_budget_clamps_rows_and_calls(
     assert result.rows_processed == 100
     assert result.requests_made == 2
     assert calls == 2
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_concurrency_is_bounded_at_two(tmp_path: Path) -> None:
+    calls = 0
+    active = 0
+    max_active = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal active, calls, max_active
+        calls += 1
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.01)
+            encoded = prompt.split(
+                "Texts (JSON array; `row` is only a position identifier):\n", 1
+            )[1].split("\n\nRespond with ONLY", 1)[0]
+            rows = json.loads(encoded)
+            return json.dumps(
+                [{"row": item["row"], "category": "Business"} for item in rows]
+            )
+        finally:
+            active -= 1
+
+    conn = _make_big_conn(tmp_path, 6)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        classify_batch_size=2,
+        classify_concurrency=2,
+        max_requests=3,
+    )
+    assert result.requests_made == 3
+    assert calls == 3
+    assert max_active == 2
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_rate_limit_cancels_sibling_batches(
+    tmp_path: Path,
+) -> None:
+    started = 0
+
+    async def limited(_prompt: str) -> str:
+        nonlocal started
+        started += 1
+        if started == 1:
+            raise RateLimitError()
+        await asyncio.sleep(10)
+        return "[]"
+
+    conn = _make_big_conn(tmp_path, 20)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited)
+    with pytest.raises(RateLimitError):
+        await extract_rows(
+            ctx,
+            table="patents",
+            text_column="abstract",
+            key_columns=["id"],
+            spec=["Business", "Sports"],
+            classify_batch_size=2,
+            classify_concurrency=2,
+            max_requests=10,
+        )
+    assert started <= 2
     conn.disconnect()
 
 

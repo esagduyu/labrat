@@ -14,6 +14,7 @@ from __future__ import annotations
 import polars as pl
 from pydantic import BaseModel, Field, PrivateAttr
 
+from labrat.agent.providers.base import is_rate_limit_error
 from labrat.agent.tools.base import Tool, ToolContext
 from labrat.agent.tools.llm_primitives import (
     MAX_BATCHED_CLASSIFY_ROWS,
@@ -84,6 +85,9 @@ class _Output(BaseModel):
     rows_processed: int = 0
     rows_failed: int = 0
     requests_made: int = 0
+    batch_size: int = 1
+    concurrency: int = 1
+    max_requests: int = 0
     columns: list[str] = []
     error: str | None = None
 
@@ -117,8 +121,9 @@ class LlmClassifyTool(Tool[_Input]):
             "Classify an unstructured text column into a fixed set of labels. The "
             "default is one LLM call per row with a 200-row cap. For large tables, set "
             "batch_size up to 50; batched mode can cover up to 20,000 rows while "
-            "max_requests enforces at most 400 nested calls. The result is materialized "
-            "as a DuckDB "
+            "max_requests enforces at most 400 nested calls. Runtime configuration "
+            "allows one or two concurrent batch requests. The result reports batch "
+            "size, concurrency, and requests made, and is materialized as a DuckDB "
             "temp table (default 'llm_classify_result') with your key_columns plus a "
             "VARCHAR 'category' column constrained to the labels, joinable with "
             "run_sql. Rows whose classification fails (including out-of-label replies) "
@@ -132,7 +137,8 @@ class LlmClassifyTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        if ctx.llm_fn is None:
+        classify_llm_fn = ctx.llm_classify_fn or ctx.llm_fn
+        if classify_llm_fn is None:
             return _Output(ok=False, error=_NO_LLM_ERROR)
         conn = ctx.connection
         if not isinstance(conn, DuckDBConnection):
@@ -164,9 +170,13 @@ class LlmClassifyTool(Tool[_Input]):
                 ),
                 classify_batch_size=args.batch_size,
                 max_requests=args.max_requests,
+                classify_concurrency=ctx.llm_classify_concurrency,
+                llm_fn_override=classify_llm_fn,
             )
             conn.materialize_table(result_table, result.df.to_arrow())  # type: ignore[arg-type]
         except Exception as exc:
+            if is_rate_limit_error(exc):
+                raise
             return _Output(ok=False, error=str(exc))
         out = _Output(
             ok=True,
@@ -174,6 +184,9 @@ class LlmClassifyTool(Tool[_Input]):
             rows_processed=result.rows_processed,
             rows_failed=result.rows_failed,
             requests_made=result.requests_made,
+            batch_size=args.batch_size,
+            concurrency=ctx.llm_classify_concurrency,
+            max_requests=args.max_requests,
             columns=result.df.columns,
         )
         out.attach_result_df(result.df)

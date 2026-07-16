@@ -240,6 +240,79 @@ async def test_labrat_agent_driver_records_provider_token_usage(
 
 
 @patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_uses_and_accounts_dedicated_classifier_provider(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    main = MagicMock()
+    main.usage = {
+        "input_tokens": 1_000,
+        "output_tokens": 100,
+        "cached_tokens": 800,
+        "reasoning_tokens": 90,
+        "requests": 1,
+    }
+    main.request_usage = [
+        {"request": 1, "model": "gpt-5.6-luna", "reasoning_effort": "max"}
+    ]
+    classifier = MagicMock()
+    classifier.usage = {
+        "input_tokens": 2_000,
+        "output_tokens": 200,
+        "cached_tokens": 1_500,
+        "reasoning_tokens": 20,
+        "requests": 2,
+    }
+    classifier.request_usage = [
+        {"request": 1, "model": "gpt-5.6-luna", "reasoning_effort": "low"},
+        {"request": 2, "model": "gpt-5.6-luna", "reasoning_effort": "low"},
+    ]
+    mock_build.side_effect = [main, classifier]
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=1, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.6-luna",
+        agent_reasoning="max",
+        llm_classify_model="gpt-5.6-luna",
+        llm_classify_reasoning="low",
+        llm_classify_concurrency=2,
+    )
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(
+            task, trial_num=0, scratch_dir=tmp_path / "scratch_classifier"
+        )
+
+    assert mock_build.call_count == 2
+    assert mock_build.call_args_list[0].kwargs["reasoning"] == "max"
+    assert mock_build.call_args_list[1].kwargs["reasoning"] == "low"
+    assert ":llm_classify:gpt-5.6-luna:low" in mock_build.call_args_list[1].kwargs[
+        "cache_key"
+    ]
+    assert captured["llm_classify_provider"] is classifier
+    assert captured["ctx"].llm_classify_concurrency == 2
+    assert result.meta["usage"]["input_tokens"] == 3_000
+    assert result.meta["usage"]["requests"] == 3
+    request_usage = result.meta["request_usage"]
+    assert request_usage[0]["reasoning_effort"] == "max"
+    assert "usage_role" not in request_usage[0]
+    assert [item["usage_role"] for item in request_usage[1:]] == [
+        "llm_classify",
+        "llm_classify",
+    ]
+    assert [item["request"] for item in request_usage] == [1, 2, 3]
+    assert [item["provider_request"] for item in request_usage[1:]] == [1, 2]
+    assert {item["reasoning_effort"] for item in request_usage[1:]} == {"low"}
+
+
+@patch("labrat.agent.providers.build_provider")
 async def test_labrat_agent_driver_preserves_completed_usage_on_later_failure(
     mock_build: MagicMock, tmp_path: Path
 ) -> None:

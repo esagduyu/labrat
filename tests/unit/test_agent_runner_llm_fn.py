@@ -61,3 +61,20 @@ async def test_runner_preserves_caller_injected_llm_fn() -> None:
         prompt="q", ctx=ctx, registry=ToolRegistry(), provider=provider, system_prompt="s"
     )
     assert ctx.llm_fn is mine
+
+
+async def test_runner_can_isolate_llm_classify_on_dedicated_provider() -> None:
+    ctx = ToolContext(connections={"primary": object()}, catalogs={"primary": object()})
+    main = _FakeProvider([[TextBlock(text="Direct answer.")]])
+    classifier = _FakeProvider([[TextBlock(text="Business")]])
+    await run_agent_task(
+        prompt="q",
+        ctx=ctx,
+        registry=ToolRegistry(),
+        provider=main,
+        llm_classify_provider=classifier,
+        system_prompt="s",
+    )
+    assert ctx.llm_fn is not None
+    assert ctx.llm_classify_fn is not None
+    assert await ctx.llm_classify_fn("classify this") == "Business"

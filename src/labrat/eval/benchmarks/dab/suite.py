@@ -538,6 +538,9 @@ class DabSuite:
         agent_verify: bool = False,
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
+        llm_classify_model: str | None = None,
+        llm_classify_reasoning: str | None = None,
+        llm_classify_concurrency: int = 1,
         agent_levers: bool = True,
         agent_ledger: bool = True,
         cartograph: bool = False,
@@ -569,6 +572,18 @@ class DabSuite:
         # Reasoning effort for the Codex GPT-5.5/5.6 provider; ignored by the others.
         # None = provider default (medium).
         self._agent_reasoning = agent_reasoning
+        # Nested classification defaults to the main model/effort for backwards
+        # compatibility, but can be isolated onto a cheaper constrained-reasoning
+        # provider. Concurrency is intentionally limited to two.
+        self._llm_classify_model = llm_classify_model or agent_model
+        self._llm_classify_reasoning = (
+            llm_classify_reasoning
+            if llm_classify_reasoning is not None
+            else agent_reasoning
+        )
+        if llm_classify_concurrency not in {1, 2}:
+            raise ValueError("llm_classify_concurrency must be 1 or 2")
+        self._llm_classify_concurrency = llm_classify_concurrency
         # Benchmark-safe process levers are enabled by default for historical
         # compatibility. The explicit toggle supports a clean ablation arm.
         self._agent_levers = agent_levers
@@ -776,7 +791,9 @@ class DabSuite:
             meta["request_usage"] = list(self._last_request_usage)
         return meta
 
-    def _capture_provider_usage(self, provider: Any) -> None:
+    def _capture_provider_usage(
+        self, provider: Any, *, usage_role: str | None = None
+    ) -> None:
         provider_usage = getattr(provider, "usage", None)
         if isinstance(provider_usage, dict):
             if self._last_usage is None:
@@ -788,7 +805,12 @@ class DabSuite:
         if isinstance(request_usage, list):
             for item in cast("list[Any]", request_usage):
                 if isinstance(item, dict):
-                    self._last_request_usage.append(dict(cast("dict[str, Any]", item)))
+                    captured = dict(cast("dict[str, Any]", item))
+                    if usage_role is not None:
+                        captured["provider_request"] = captured.get("request")
+                        captured["request"] = len(self._last_request_usage) + 1
+                        captured["usage_role"] = usage_role
+                    self._last_request_usage.append(captured)
 
     def _capture_provider_usage_delta(
         self,
@@ -1443,6 +1465,7 @@ class DabSuite:
         # builds are empty; introspect now (post-connect) so the catalog-backed tools
         # (list_tables / describe_table / column_stats / search_columns) actually work.
         introspect_env_catalogs(env.ctx)
+        env.ctx.llm_classify_concurrency = self._llm_classify_concurrency
 
         cartograph_root: Path | None = None
         if self._cartograph:
@@ -1459,6 +1482,7 @@ class DabSuite:
             )
 
         provider: Any | None = None
+        classifier_provider: Any | None = None
         try:
             registry = build_data_tools_registry()
             provider = build_provider(
@@ -1472,6 +1496,20 @@ class DabSuite:
                 # machines each time. Only the codex provider uses it.
                 cache_key=task.id,
             )
+            if (
+                self._llm_classify_model != self._agent_model
+                or self._llm_classify_reasoning != self._agent_reasoning
+            ):
+                classifier_provider = build_provider(
+                    self._agent_provider,
+                    self._llm_classify_model,
+                    timeout=self._agent_timeout,
+                    reasoning=self._llm_classify_reasoning,
+                    cache_key=(
+                        f"{task.id}:llm_classify:{self._llm_classify_model}:"
+                        f"{self._llm_classify_reasoning or 'default'}"
+                    ),
+                )
             system_prompt = _build_labrat_agent_system_prompt(
                 env, include_levers=self._agent_levers
             )
@@ -1512,6 +1550,7 @@ class DabSuite:
                 ctx=env.ctx,
                 registry=registry,
                 provider=provider,
+                llm_classify_provider=classifier_provider,
                 system_prompt=system_prompt,
                 max_turns=self._agent_max_turns,
                 max_tool_calls=self._agent_max_tool_calls,
@@ -1544,6 +1583,10 @@ class DabSuite:
             # rate-limits, or raises. Consensus/reverify sub-runs accumulate here.
             if provider is not None:
                 self._capture_provider_usage(provider)
+            if classifier_provider is not None:
+                self._capture_provider_usage(
+                    classifier_provider, usage_role="llm_classify"
+                )
             for conn in env.ctx.connections.values():
                 disconnect = getattr(conn, "disconnect", None)
                 if callable(disconnect):
