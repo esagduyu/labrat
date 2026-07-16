@@ -254,9 +254,7 @@ async def test_labrat_agent_uses_and_accounts_dedicated_classifier_provider(
         "reasoning_tokens": 90,
         "requests": 1,
     }
-    main.request_usage = [
-        {"request": 1, "model": "gpt-5.6-luna", "reasoning_effort": "max"}
-    ]
+    main.request_usage = [{"request": 1, "model": "gpt-5.6-luna", "reasoning_effort": "max"}]
     classifier = MagicMock()
     classifier.usage = {
         "input_tokens": 2_000,
@@ -295,9 +293,7 @@ async def test_labrat_agent_uses_and_accounts_dedicated_classifier_provider(
     assert mock_build.call_count == 2
     assert mock_build.call_args_list[0].kwargs["reasoning"] == "max"
     assert mock_build.call_args_list[1].kwargs["reasoning"] == "low"
-    assert ":llm_classify:gpt-5.6-luna:low" in mock_build.call_args_list[1].kwargs[
-        "cache_key"
-    ]
+    assert ":llm_classify:gpt-5.6-luna:low" in mock_build.call_args_list[1].kwargs["cache_key"]
     assert captured["llm_classify_provider"] is classifier
     assert captured["ctx"].llm_classify_concurrency == 2
     assert result.meta["usage"]["input_tokens"] == 3_000
@@ -347,8 +343,7 @@ async def test_labrat_agent_terminalizes_turn_budget_with_trace(
     assert result.reason == "terminal:turn_budget"
     assert result.artifact == {"type": "text", "payload": expected}
     trace = [
-        json.loads(line)
-        for line in (scratch / "agent_tool_calls.jsonl").read_text().splitlines()
+        json.loads(line) for line in (scratch / "agent_tool_calls.jsonl").read_text().splitlines()
     ]
     assert trace[-1] == {
         "tool": "runner_turn_budget",

@@ -110,8 +110,10 @@ one pass, while losing one raw pass overall because Yelp lost two; dependencies
 and MusicBrainz were unchanged. It reduced noncached input by 750,581
 (-6.5503%) and raised cache-read ratio by 1.1847pp, but increased requests by
 106 (+5.0815%), latency by 1,866.19 seconds (+11.3695%), and tool calls by 113
-(+6.9883%). The official stratified-plus-noncached promotion rule therefore
-selects Ledger for the tier-study grounding configuration, with the explicit
+(+6.9883%). The preregistered headline metric (stratified Pass@1, registered
+before any comparison arm completed) therefore selects Ledger outright — the
+registered noncached-input efficiency comparator agrees but was not needed as
+a tie-breaker — for the tier-study grounding configuration, with the explicit
 caveat that it is slower, makes more requests, and loses one raw pass at this
 descriptive `n=3` denominator.
 
@@ -179,9 +181,11 @@ has one fewer raw pass, but it has the highest preregistered stratified score at
 **83.9286%** and reduces semantic noncached input from 11,458,792 to 10,708,211
 (-750,581; -6.5503%). Its semantic public-API price equivalent is also lower
 ($16.7633 versus $17.3840), and its all-attempt equivalent is lower after
-including retry usage ($18.9869 versus $22.2528). The registered
-stratified-plus-noncached promotion rule therefore selects Ledger with the
-already-recorded raw-pass, request, and latency caveats.
+including retry usage ($18.9869 versus $22.2528). The preregistered headline
+metric (stratified Pass@1) selects Ledger on its own; the registered
+noncached-input comparator agrees as a secondary signal. Caveats stand as
+recorded: one fewer raw pass, more requests, higher latency, and a 0.4pp
+stratified edge at a descriptive `n=3` denominator — directional, not powered.
 
 ## Live status: all five grounding arms complete; Ledger promoted
 
@@ -944,10 +948,13 @@ This is not a model-only causal comparison. PR #65 used Claude Sonnet 4.6 with
 Cartographer and Hints; current uses GPT-5.6 Luna Max with Cartographer, Hints,
 Levers, and ContextLedger on a different host/runtime. The ten new AG News rows
 used a disclosed task-specific 10-turn/200-row cap; maintainers must decide
-whether that evaluator policy is acceptable. Three selected input BSON files
-are dirty locally—one AG News file and two Yelp files—even though the
-validator/ground-truth manifest is clean; this is a model-interaction
-reproducibility caveat.
+whether that evaluator policy is acceptable. Note on `git status` in the DAB
+checkout: five input BSON files (agnews, cve, usaspending, two yelp) show as
+modified, but all five are byte-identical to their committed blobs
+(`git hash-object --no-filters` equals the index SHA-1). The status flag is a
+Git-LFS clean-filter artifact — the files carry a `filter: lfs` attribute but
+were committed as raw blobs — not local dirt; the validator/ground-truth
+manifest is clean and the worktree is effectively pristine.
 
 Full evidence: [`ucbepic/DataAgentBench#65`](https://github.com/ucbepic/DataAgentBench/pull/65),
 [final comparison report](../runs/dab/audits/full-luna-pr65-comparison-final.md),

@@ -234,9 +234,9 @@ async def test_extract_rows_classify_batch_preserves_row_alignment(tmp_path: Pat
     async def batch_llm(prompt: str) -> str:
         nonlocal calls
         calls += 1
-        encoded = prompt.split(
-            "Texts (JSON array; `row` is only a position identifier):\n", 1
-        )[1].split("\n\nRespond with ONLY", 1)[0]
+        encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+            1
+        ].split("\n\nRespond with ONLY", 1)[0]
         rows = json.loads(encoded)
         return json.dumps(
             [
@@ -275,13 +275,11 @@ async def test_extract_rows_classify_request_budget_clamps_rows_and_calls(
     async def batch_llm(prompt: str) -> str:
         nonlocal calls
         calls += 1
-        encoded = prompt.split(
-            "Texts (JSON array; `row` is only a position identifier):\n", 1
-        )[1].split("\n\nRespond with ONLY", 1)[0]
+        encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+            1
+        ].split("\n\nRespond with ONLY", 1)[0]
         rows = json.loads(encoded)
-        return json.dumps(
-            [{"row": item["row"], "category": "Business"} for item in rows]
-        )
+        return json.dumps([{"row": item["row"], "category": "Business"} for item in rows])
 
     conn = _make_big_conn(tmp_path, 300)
     ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
@@ -313,13 +311,11 @@ async def test_extract_rows_classify_concurrency_is_bounded_at_two(tmp_path: Pat
         max_active = max(max_active, active)
         try:
             await asyncio.sleep(0.01)
-            encoded = prompt.split(
-                "Texts (JSON array; `row` is only a position identifier):\n", 1
-            )[1].split("\n\nRespond with ONLY", 1)[0]
+            encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+                1
+            ].split("\n\nRespond with ONLY", 1)[0]
             rows = json.loads(encoded)
-            return json.dumps(
-                [{"row": item["row"], "category": "Business"} for item in rows]
-            )
+            return json.dumps([{"row": item["row"], "category": "Business"} for item in rows])
         finally:
             active -= 1
 

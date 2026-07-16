@@ -153,9 +153,7 @@ class LlmClassifyTool(Tool[_Input]):
         result_table = args.result_table or DEFAULT_CLASSIFY_RESULT_TABLE
         row_budget = ctx.llm_classify_row_budget
         rows_remaining = (
-            max(0, row_budget - ctx.llm_classify_rows_used)
-            if row_budget is not None
-            else None
+            max(0, row_budget - ctx.llm_classify_rows_used) if row_budget is not None else None
         )
         if rows_remaining == 0:
             return _Output(
@@ -213,9 +211,7 @@ class LlmClassifyTool(Tool[_Input]):
             max_requests=args.max_requests,
             row_budget=row_budget,
             rows_remaining=(
-                max(0, row_budget - ctx.llm_classify_rows_used)
-                if row_budget is not None
-                else None
+                max(0, row_budget - ctx.llm_classify_rows_used) if row_budget is not None else None
             ),
             columns=result.df.columns,
         )

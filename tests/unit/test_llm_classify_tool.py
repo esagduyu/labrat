@@ -143,13 +143,11 @@ async def test_classify_tool_batches_more_than_legacy_200_row_cap(tmp_path: Path
     async def batch_llm(prompt: str) -> str:
         nonlocal calls
         calls += 1
-        encoded = prompt.split(
-            "Texts (JSON array; `row` is only a position identifier):\n", 1
-        )[1].split("\n\nRespond with ONLY", 1)[0]
+        encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+            1
+        ].split("\n\nRespond with ONLY", 1)[0]
         rows = json.loads(encoded)
-        return json.dumps(
-            [{"row": item["row"], "category": "Business"} for item in rows]
-        )
+        return json.dumps([{"row": item["row"], "category": "Business"} for item in rows])
 
     ctx = ToolContext(
         connection=conn,

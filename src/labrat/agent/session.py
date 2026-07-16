@@ -98,9 +98,7 @@ def build_agent_session(
     if ctx.llm_fn is None:
         ctx.llm_fn = provider_llm_fn(provider, system=_LLM_FN_SYSTEM)
     if ctx.llm_classify_fn is None and llm_classify_provider is not None:
-        ctx.llm_classify_fn = provider_llm_fn(
-            llm_classify_provider, system=_LLM_FN_SYSTEM
-        )
+        ctx.llm_classify_fn = provider_llm_fn(llm_classify_provider, system=_LLM_FN_SYSTEM)
 
     ledger: ContextLedger | None = None
     if enable_ledger:

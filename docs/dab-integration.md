@@ -96,6 +96,12 @@ uv run python scripts/eval_dab.py \
   --n-trials 5 --output-dir runs/dab/solultra-luna-max
 ```
 
+(The completed 2026-07 campaign actually executed this as per-dataset shards under
+`runs/dab/submission-gpt56-luna-max-ledger-shards/` via `scripts/dab_shards.py`,
+then assembled `runs/dab/submission-gpt56-luna-max-ledger-final-270` with
+`dab_shards.py recover`; the single-directory command above is the equivalent
+unsharded form.)
+
 Launch that arm only with the feature configuration selected by the Luna Max subset ablation; if the winning arm differs, start a fresh output directory with the exact selected toggles. The hard-tail model study must reuse that grounding configuration and compare Luna Max, Terra High, Sol High, and Sol Ultra in separate `runs/dab/tier-<model>-<effort>` directories on the same task filter. Subscription telemetry is appropriate for relative token/latency comparisons; public API list prices are not the cost of subscription-backed calls.
 
 **Provider-agnostic finding (Cartographer):** the Cartographer mechanism is provider-agnostic — GPT-5.5 does consult `search_reference_docs` (confirmed via `agent_tool_calls.jsonl` traces). But the **effect is Sonnet-favoring**: **+8pp on Sonnet, +0pp (neutral) on GPT-5.5** (n=2). GPT-5.5 already self-grounds exhaustively (~32 `run_sql` calls + full schema exploration per trial), making structure-only Scent redundant for it; the leaner-exploring Sonnet benefits. Leaderboard path: Sonnet/claude-mcp + Cartographer + prompt levers.

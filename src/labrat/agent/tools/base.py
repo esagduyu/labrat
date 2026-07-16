@@ -95,8 +95,7 @@ class ToolContext:
         self.active_maps = active_maps
         if not 1 <= llm_classify_concurrency <= MAX_LLM_CLASSIFY_CONCURRENCY:
             raise ValueError(
-                "llm_classify_concurrency must be between 1 and "
-                f"{MAX_LLM_CLASSIFY_CONCURRENCY}"
+                f"llm_classify_concurrency must be between 1 and {MAX_LLM_CLASSIFY_CONCURRENCY}"
             )
         if llm_classify_row_budget is not None and llm_classify_row_budget < 1:
             raise ValueError("llm_classify_row_budget must be positive when set")

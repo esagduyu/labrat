@@ -302,9 +302,7 @@ async def extract_rows(
         fields = ["category"]
 
     if classify_batch_size < 1 or classify_batch_size > MAX_CLASSIFY_BATCH_SIZE:
-        raise ValueError(
-            f"classify_batch_size must be between 1 and {MAX_CLASSIFY_BATCH_SIZE}"
-        )
+        raise ValueError(f"classify_batch_size must be between 1 and {MAX_CLASSIFY_BATCH_SIZE}")
     if max_requests is not None and (max_requests < 1 or max_requests > MAX_NESTED_REQUESTS):
         raise ValueError(f"max_requests must be between 1 and {MAX_NESTED_REQUESTS}")
     request_budget = max_requests if max_requests is not None else MAX_NESTED_REQUESTS

@@ -185,9 +185,7 @@ def _bounded_beta_recovery(tmp_path: Path) -> Path:
 def test_bounded_recovery_fills_only_missing_semantic_keys(tmp_path: Path) -> None:
     shards_dir = _prepare(tmp_path)
     _write_rows(shards_dir / "alpha", [_trial("alpha:1")])
-    _write_rows(
-        shards_dir / "beta", [_trial("beta:1", reason="infra:timeout", passed=False)]
-    )
+    _write_rows(shards_dir / "beta", [_trial("beta:1", reason="infra:timeout", passed=False)])
     _write_trace(shards_dir / "alpha", "alpha:1")
     _write_trace(shards_dir / "beta", "beta:1")
     recovery = _bounded_beta_recovery(tmp_path)

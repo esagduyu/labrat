@@ -507,8 +507,7 @@ def aggregate_dab_results(results: list[TrialResult]) -> AggregateScore:
         dataset = task_id.split(":", 1)[0]
         by_dataset.setdefault(dataset, []).append(pass_rate)
     dataset_means = {
-        dataset: sum(pass_rates) / len(pass_rates)
-        for dataset, pass_rates in by_dataset.items()
+        dataset: sum(pass_rates) / len(pass_rates) for dataset, pass_rates in by_dataset.items()
     }
 
     return AggregateScore(
@@ -579,9 +578,7 @@ class DabSuite:
         # provider. Concurrency is intentionally limited to two.
         self._llm_classify_model = llm_classify_model or agent_model
         self._llm_classify_reasoning = (
-            llm_classify_reasoning
-            if llm_classify_reasoning is not None
-            else agent_reasoning
+            llm_classify_reasoning if llm_classify_reasoning is not None else agent_reasoning
         )
         if llm_classify_concurrency not in {1, 2}:
             raise ValueError("llm_classify_concurrency must be 1 or 2")
@@ -795,9 +792,7 @@ class DabSuite:
                     tool="runner_timeout",
                     input={
                         "timeout_seconds": (
-                            self._agent_timeout
-                            if self._agent_timeout is not None
-                            else _DAB_TIMEOUT
+                            self._agent_timeout if self._agent_timeout is not None else _DAB_TIMEOUT
                         )
                     },
                     ok=False,
@@ -863,9 +858,7 @@ class DabSuite:
             meta["request_usage"] = list(self._last_request_usage)
         return meta
 
-    def _capture_provider_usage(
-        self, provider: Any, *, usage_role: str | None = None
-    ) -> None:
+    def _capture_provider_usage(self, provider: Any, *, usage_role: str | None = None) -> None:
         provider_usage = getattr(provider, "usage", None)
         if isinstance(provider_usage, dict):
             if self._last_usage is None:
@@ -1511,10 +1504,13 @@ class DabSuite:
         scratch_dir.mkdir(parents=True, exist_ok=True)
         (scratch_dir / "agent_tool_calls.jsonl").write_text("")
 
-        # P3 (sandbox note): this path is in-process. The registry exposes no
-        # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
-        # native Bash, so the agent cannot read answer keys. Only carry providers
-        # WITHOUT native filesystem/shell access here; claude-mcp is the path for Claude.
+        # Sandbox note: this path is in-process and exposes no shell/subprocess
+        # tool, and the submission provider (codex) has no native Bash. It is NOT
+        # a filesystem sandbox: load_file, attach_database, and DuckDB
+        # read_csv_auto() via run_sql can read local paths, so answer-key access
+        # is prevented by the taint gate + per-trace audit, not by construction.
+        # Only carry providers WITHOUT native shell access here; claude-mcp is
+        # the sandboxed path for Claude.
         from labrat.agent.data_tools import build_data_tools_registry
         from labrat.agent.providers import build_provider
         from labrat.agent.runner import run_agent_task
@@ -1589,8 +1585,7 @@ class DabSuite:
             )
             if self._llm_classify_row_budget is not None:
                 system_prompt = (
-                    system_prompt
-                    + "\n\nEvaluator budget: llm_classify may process at most "
+                    system_prompt + "\n\nEvaluator budget: llm_classify may process at most "
                     f"{self._llm_classify_row_budget} cumulative rows in this trial. "
                     "The cap spans all calls. Use the budget deliberately and produce "
                     "the best final answer from the resulting evidence."
@@ -1666,9 +1661,7 @@ class DabSuite:
             if provider is not None:
                 self._capture_provider_usage(provider)
             if classifier_provider is not None:
-                self._capture_provider_usage(
-                    classifier_provider, usage_role="llm_classify"
-                )
+                self._capture_provider_usage(classifier_provider, usage_role="llm_classify")
             for conn in env.ctx.connections.values():
                 disconnect = getattr(conn, "disconnect", None)
                 if callable(disconnect):

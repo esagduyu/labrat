@@ -131,7 +131,9 @@ def _load_trials(shard: Path, allowed_tasks: set[str], n_trials: int) -> list[Tr
             raise ShardError(f"invalid trial row {path}:{line_number}: {exc}") from exc
         key = (result.task_id, result.trial_num)
         if result.task_id not in allowed_tasks:
-            raise ShardError(f"{path}:{line_number} has task outside its task_filter: {result.task_id}")
+            raise ShardError(
+                f"{path}:{line_number} has task outside its task_filter: {result.task_id}"
+            )
         if result.trial_num < 0 or result.trial_num >= n_trials:
             raise ShardError(f"{path}:{line_number} has out-of-range trial_num: {result.trial_num}")
         if not (result.reason or "").startswith("infra:"):
@@ -248,7 +250,9 @@ def merge_shards(shards_dir: Path, output_dir: Path) -> BenchmarkReport:
     indexed_rows = list(enumerate(all_rows))
     indexed_rows.sort(key=lambda item: (task_order[item[1].task_id], item[1].trial_num, item[0]))
     ordered_rows = [row for _, row in indexed_rows]
-    ordered_semantic = [semantic[(task, trial)] for task in expected_tasks for trial in range(n_trials)]
+    ordered_semantic = [
+        semantic[(task, trial)] for task in expected_tasks for trial in range(n_trials)
+    ]
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-merge-", dir=output_dir.parent))
@@ -431,9 +435,7 @@ def merge_bounded_recovery(
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-recover-", dir=output_dir.parent))
     try:
-        (temp_dir / _CONFIG).write_text(
-            json.dumps(final_config, indent=2) + "\n", encoding="utf-8"
-        )
+        (temp_dir / _CONFIG).write_text(json.dumps(final_config, indent=2) + "\n", encoding="utf-8")
         (temp_dir / _TRIALS).write_text(
             "".join(row.model_dump_json() + "\n" for row in ordered), encoding="utf-8"
         )
@@ -499,9 +501,7 @@ def main(argv: list[str] | None = None) -> int:
             for shard in shards:
                 print(f"uv run python scripts/eval_dab.py --output-dir {shard}")
         elif args.command == "recover":
-            report = merge_bounded_recovery(
-                args.shards_dir, args.recovery_run, args.output_dir
-            )
+            report = merge_bounded_recovery(args.shards_dir, args.recovery_run, args.output_dir)
             print(
                 f"Recovered {report.score.n_trials} semantic trials into "
                 f"{args.output_dir} ({report.score.n_passes} passes)"

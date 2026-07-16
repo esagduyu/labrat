@@ -628,9 +628,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
     effective_classify_model: str = (
-        args.llm_classify_model
-        or existing_cfg.get("llm_classify_model")
-        or effective_model
+        args.llm_classify_model or existing_cfg.get("llm_classify_model") or effective_model
     )
     effective_classify_reasoning: str | None = (
         args.llm_classify_reasoning
@@ -781,40 +779,40 @@ def main(argv: list[str] | None = None) -> int:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     config_payload: dict[str, Any] = {
-                "hints": effective_hints,
-                "driver": effective_driver,
-                "agent_model": effective_model,
-                "agent_provider": effective_provider,
-                "agent_max_turns": effective_max_turns,
-                "agent_max_tool_calls": effective_max_tool_calls,
-                "agent_verify": effective_verify,
-                "agent_cartograph": effective_cartograph,
-                "cartograph_semantics": effective_cartograph_semantics,
-                "cartograph_semantics_model": effective_cartograph_semantics_model,
-                "cartograph_semantics_provider": effective_cartograph_semantics_provider,
-                "cartograph_scent_dir": (
-                    str(effective_cartograph_scent_dir) if effective_cartograph_scent_dir else None
-                ),
-                "agent_consensus": effective_consensus,
-                "agent_reverify": effective_reverify,
-                "agent_argue_rounds": effective_argue_rounds,
-                "agent_postverify": effective_postverify,
-                "consensus_diversity": effective_consensus_diversity,
-                "agent_timeout": effective_timeout,
-                "agent_reasoning": effective_reasoning,
-                "agent_levers": effective_levers,
-                "agent_ledger": effective_ledger,
-                "trace_attempt_policy": (
-                    "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
-                ),
-                "submission_eligibility": (
-                    "legacy-report-only" if effective_driver == "raw-bash" else "trace-audited"
-                ),
-                "trace_contract": (
-                    "answer-only" if effective_driver == "raw-bash" else "per-attempt-jsonl"
-                ),
-                "n_trials": effective_n_trials,
-                "task_filter": task_filter,
+        "hints": effective_hints,
+        "driver": effective_driver,
+        "agent_model": effective_model,
+        "agent_provider": effective_provider,
+        "agent_max_turns": effective_max_turns,
+        "agent_max_tool_calls": effective_max_tool_calls,
+        "agent_verify": effective_verify,
+        "agent_cartograph": effective_cartograph,
+        "cartograph_semantics": effective_cartograph_semantics,
+        "cartograph_semantics_model": effective_cartograph_semantics_model,
+        "cartograph_semantics_provider": effective_cartograph_semantics_provider,
+        "cartograph_scent_dir": (
+            str(effective_cartograph_scent_dir) if effective_cartograph_scent_dir else None
+        ),
+        "agent_consensus": effective_consensus,
+        "agent_reverify": effective_reverify,
+        "agent_argue_rounds": effective_argue_rounds,
+        "agent_postverify": effective_postverify,
+        "consensus_diversity": effective_consensus_diversity,
+        "agent_timeout": effective_timeout,
+        "agent_reasoning": effective_reasoning,
+        "agent_levers": effective_levers,
+        "agent_ledger": effective_ledger,
+        "trace_attempt_policy": (
+            "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
+        ),
+        "submission_eligibility": (
+            "legacy-report-only" if effective_driver == "raw-bash" else "trace-audited"
+        ),
+        "trace_contract": (
+            "answer-only" if effective_driver == "raw-bash" else "per-attempt-jsonl"
+        ),
+        "n_trials": effective_n_trials,
+        "task_filter": task_filter,
     }
     if write_terminal_timeout_config:
         config_payload["terminalize_timeouts"] = effective_terminalize_timeouts
