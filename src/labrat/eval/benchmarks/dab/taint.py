@@ -5,6 +5,7 @@ contamination pattern list in maze/scent_audit."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,9 +15,144 @@ CLEAN = "clean"
 CHEATING = "external-oracle-cheating"
 AUDIT_ERROR = "audit-error"
 
+TRACE_FILENAMES = ("mcp_tool_calls.jsonl", "agent_tool_calls.jsonl")
+TRACE_FILENAME_BY_DRIVER = {
+    "claude-mcp": "mcp_tool_calls.jsonl",
+    "labrat-agent": "agent_tool_calls.jsonl",
+}
+ANSWER_ONLY_DRIVERS = {"raw-bash"}
+_TRACE_FIELDS = {"tool", "input", "ok", "output", "latency_ms"}
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*:[1-9][0-9]*$")
+
+
+def task_trial_dir_name(task_id: str, trial_num: int) -> str:
+    """Map one canonical DAB task key to its scratch directory name."""
+    dataset = task_id.rsplit(":", 1)[0]
+    if not _TASK_ID_RE.fullmatch(task_id) or ".." in dataset:
+        raise ValueError(f"invalid DAB task_id: {task_id!r}")
+    if isinstance(trial_num, bool) or trial_num < 0:
+        raise ValueError(f"invalid DAB trial_num: {trial_num!r}")
+    return f"{task_id.replace(':', '_')}__trial{trial_num}"
+
+
+def resolve_trial_trace(
+    scratch_dir: Path,
+    task_id: str,
+    trial_num: int,
+    trace_filename: str,
+) -> Path:
+    """Return a contained, non-symlinked trace path or fail closed."""
+    if trace_filename not in TRACE_FILENAMES:
+        raise ValueError(f"invalid trace filename: {trace_filename!r}")
+    if scratch_dir.is_symlink():
+        raise ValueError("scratch directory must not be a symlink")
+    try:
+        scratch_root = scratch_dir.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("scratch directory is missing or unreadable") from exc
+    trial_dir = scratch_dir / task_trial_dir_name(task_id, trial_num)
+    if trial_dir.is_symlink():
+        raise ValueError("trial directory must not be a symlink")
+    try:
+        resolved_trial = trial_dir.resolve(strict=True)
+        resolved_trial.relative_to(scratch_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError("trial directory is missing or escapes scratch") from exc
+    if not resolved_trial.is_dir():
+        raise ValueError("trial path is not a directory")
+
+    trace = trial_dir / trace_filename
+    if trace.is_symlink():
+        raise ValueError("trace file must not be a symlink")
+    try:
+        resolved_trace = trace.resolve(strict=True)
+        resolved_trace.relative_to(scratch_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError("trace file is missing or escapes scratch") from exc
+    if not resolved_trace.is_file():
+        raise ValueError("trace path is not a regular file")
+    return resolved_trace
+
 
 def classify_trial(text: str) -> str:
     return CHEATING if detect_contamination(text) else CLEAN
+
+
+def expected_trace_filenames(run_dir: Path) -> tuple[str, ...]:
+    """Return the trace filename(s) acceptable for a run.
+
+    A configured driver has one exact trace contract. Older unit fixtures and
+    hand-built runs without ``config.json`` may use either shared trace format,
+    but still need at least one trace file.
+    """
+    config_path = run_dir / "config.json"
+    if not config_path.exists():
+        return TRACE_FILENAMES
+    try:
+        parsed: Any = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return TRACE_FILENAMES
+    if not isinstance(parsed, dict):
+        return TRACE_FILENAMES
+    config = cast(dict[str, Any], parsed)
+    driver = str(config.get("driver") or "")
+    if driver in ANSWER_ONLY_DRIVERS:
+        return ()
+    filename = TRACE_FILENAME_BY_DRIVER.get(driver)
+    return (filename,) if filename is not None else TRACE_FILENAMES
+
+
+def validate_trace_jsonl(trace: Path) -> str | None:
+    """Return an audit error message, or ``None`` when a trace is valid.
+
+    An existing empty file is valid: it represents a completed agent attempt
+    that made zero tool calls. Non-empty lines must match the shared tool-trace
+    schema emitted by :func:`append_tool_trace`.
+    """
+    if trace.is_symlink():
+        return f"unsafe trace {trace.name}: symlinks are not allowed"
+    try:
+        lines = trace.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        return f"unreadable trace {trace.name}: {exc}"
+
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            parsed: Any = json.loads(line)
+        except json.JSONDecodeError as exc:
+            return f"malformed trace {trace.name} line {line_number}: {exc.msg}"
+        if not isinstance(parsed, dict):
+            return f"malformed trace {trace.name} line {line_number}: expected object"
+        record = cast(dict[str, Any], parsed)
+        missing = _TRACE_FIELDS - record.keys()
+        if missing:
+            return (
+                f"malformed trace {trace.name} line {line_number}: "
+                f"missing {', '.join(sorted(missing))}"
+            )
+        if not isinstance(record["tool"], str) or not record["tool"]:
+            return f"malformed trace {trace.name} line {line_number}: invalid tool"
+        if not isinstance(record["input"], dict):
+            return f"malformed trace {trace.name} line {line_number}: invalid input"
+        if not isinstance(record["ok"], bool):
+            return f"malformed trace {trace.name} line {line_number}: invalid ok"
+        if not isinstance(record["output"], str):
+            return f"malformed trace {trace.name} line {line_number}: invalid output"
+        latency = record["latency_ms"]
+        if isinstance(latency, bool) or not isinstance(latency, int | float):
+            return f"malformed trace {trace.name} line {line_number}: invalid latency_ms"
+    return None
+
+
+def _merge_verdict(current: str | None, new: str) -> str:
+    """Keep the strongest verdict when retry rows share a trial key."""
+    if current == CHEATING or new == CHEATING:
+        return CHEATING
+    if current == AUDIT_ERROR or new == AUDIT_ERROR:
+        return AUDIT_ERROR
+    return CLEAN
 
 
 def _artifact_text(r: dict[str, Any]) -> str:
@@ -43,47 +179,117 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
     Scans ONLY agent-produced channels: the artifact payload (the agent's actual
     answer, see `_artifact_text`) plus its per-call trace(s) —
     `<scratch>/<task>__trial<n>/mcp_tool_calls.jsonl` (claude-mcp driver) and/or
-    `agent_tool_calls.jsonl` (labrat-agent driver) — whichever are present, for the
-    answer-key / external-dataset leakage patterns in scent_audit.
+    `agent_tool_calls.jsonl` (labrat-agent driver). The configured driver's trace
+    is required and every non-empty line must match the shared trace schema.
+    Missing or malformed traces classify as :data:`AUDIT_ERROR`; an existing
+    empty JSONL file is a valid zero-tool trace. The legacy ``raw-bash`` driver
+    is explicitly answer-only/report-only, so its artifact is contamination-
+    scanned without claiming trace completeness.
 
     Deliberately does NOT substring-scan `reason` — that's the DAB validator's PASS/
     FAIL message, not agent output, and several official validators (agnews,
     bookreview, music_brainz) literally emit "Ground truth found in LLM output." on a
     clean PASS. The one exception: if the suite's own contamination backstop already
     flagged the trial (`reason` starting with `"contaminated:"`), that verdict is
-    trusted directly and short-circuits the channel scan.
+    trusted after the required trace passes its integrity check.
 
     Returns `{f"{task_id}:{trial_num}": verdict}`.
     """
     verdicts: dict[str, str] = {}
-    lines = trials_jsonl.read_text().splitlines() if trials_jsonl.exists() else []
-    for line in lines:
+    try:
+        lines = trials_jsonl.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        verdicts["__run__"] = AUDIT_ERROR
+        (trials_jsonl.parent / "taint.json").write_text(
+            json.dumps(verdicts, indent=2), encoding="utf-8"
+        )
+        return verdicts
+
+    expected_names = expected_trace_filenames(trials_jsonl.parent)
+    for source_line, line in enumerate(lines, start=1):
         line = line.strip()
         if not line:
             continue
-        r = cast(dict[str, Any], json.loads(line))
-        task_id = str(r["task_id"])
-        trial_num = int(r["trial_num"])
+        try:
+            parsed = json.loads(line)
+            if not isinstance(parsed, dict):
+                raise TypeError("trial record is not an object")
+            r = cast(dict[str, Any], parsed)
+            task_id = str(r["task_id"])
+            trial_num = int(r["trial_num"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            verdicts[f"__line_{source_line}__"] = AUDIT_ERROR
+            continue
         key = f"{task_id}:{trial_num}"
 
         reason = str(r.get("reason") or "")
-        if reason.startswith("contaminated:"):
-            verdicts[key] = CHEATING
+        parts = [_artifact_text(r)]
+        if not expected_names:
+            verdict = CHEATING if reason.startswith("contaminated:") else classify_trial(parts[0])
+            verdicts[key] = _merge_verdict(verdicts.get(key), verdict)
+            continue
+        try:
+            trial_dir = scratch_dir / task_trial_dir_name(task_id, trial_num)
+        except ValueError:
+            verdicts[key] = _merge_verdict(verdicts.get(key), AUDIT_ERROR)
             continue
 
-        parts = [_artifact_text(r)]
-        safe = task_id.replace(":", "_")
-        trial_dir = scratch_dir / f"{safe}__trial{trial_num}"
-        for trace_name in ("mcp_tool_calls.jsonl", "agent_tool_calls.jsonl"):
-            trace = trial_dir / trace_name
-            if trace.exists():
-                parts.append(trace.read_text())
-        verdicts[key] = classify_trial("\n".join(parts))
-    (trials_jsonl.parent / "taint.json").write_text(json.dumps(verdicts, indent=2))
+        present_required: list[Path] = []
+        unsafe_trace_path = False
+        for trace_name in expected_names:
+            candidate = trial_dir / trace_name
+            if not candidate.exists() and not candidate.is_symlink():
+                continue
+            try:
+                present_required.append(
+                    resolve_trial_trace(scratch_dir, task_id, trial_num, trace_name)
+                )
+            except ValueError:
+                unsafe_trace_path = True
+                break
+        if unsafe_trace_path or not present_required:
+            verdicts[key] = _merge_verdict(verdicts.get(key), AUDIT_ERROR)
+            continue
+
+        # Scan any additional shared-format trace too. A stale second trace must
+        # not become a blind spot for contamination or malformed JSONL.
+        traces = list(present_required)
+        for trace_name in TRACE_FILENAMES:
+            candidate = trial_dir / trace_name
+            if candidate.exists() or candidate.is_symlink():
+                try:
+                    resolved = resolve_trial_trace(scratch_dir, task_id, trial_num, trace_name)
+                except ValueError:
+                    unsafe_trace_path = True
+                    break
+                if resolved not in traces:
+                    traces.append(resolved)
+
+        if unsafe_trace_path:
+            verdicts[key] = _merge_verdict(verdicts.get(key), AUDIT_ERROR)
+            continue
+
+        trace_error = False
+        for trace in traces:
+            if validate_trace_jsonl(trace) is not None:
+                trace_error = True
+                break
+            parts.append(trace.read_text(encoding="utf-8"))
+        if trace_error:
+            verdict = AUDIT_ERROR
+        elif reason.startswith("contaminated:"):
+            verdict = CHEATING
+        else:
+            verdict = classify_trial("\n".join(parts))
+        verdicts[key] = _merge_verdict(verdicts.get(key), verdict)
+
+    (trials_jsonl.parent / "taint.json").write_text(
+        json.dumps(verdicts, indent=2), encoding="utf-8"
+    )
     return verdicts
 
 
 def gate(verdicts: dict[str, str]) -> tuple[bool, list[str]]:
-    """Return (ok, offending_keys). `ok` is False if any trial verdict is CHEATING."""
-    offenders = [k for k, v in verdicts.items() if v == CHEATING]
+    """Reject every verdict other than explicitly ``clean``."""
+    offenders = sorted(k for k, verdict in verdicts.items() if verdict != CLEAN)
     return (not offenders, offenders)

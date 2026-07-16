@@ -37,3 +37,16 @@ def test_cartographer_line_included_when_on() -> None:
         "main", _env(), _task(), include_cartographer_line=True, max_tool_calls=None
     )
     assert "search_reference_docs" in p  # cartographer consult line present
+
+
+def test_prompt_levers_can_be_disabled() -> None:
+    p = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        _task(),
+        include_cartographer_line=False,
+        max_tool_calls=None,
+        include_levers=False,
+    )
+    assert "How many rows?" in p
+    assert "never answer from prior" not in p

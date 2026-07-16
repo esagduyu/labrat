@@ -89,7 +89,10 @@ def provider_llm_fn(provider: Any, *, system: str = "") -> LLMFn:
         from labrat.agent.loop import TextBlock  # local import avoids an import cycle
 
         parts: list[str] = []
-        stream = await provider.stream(
+        # Each LLMFn invocation is a one-shot conversation. Binding per call keeps
+        # stateful providers from chaining unrelated verifier/row-level requests.
+        conversation = provider.bind_conversation()
+        stream = await conversation.stream(
             messages=[{"role": "user", "content": prompt}],
             tools=[],
             system=system,

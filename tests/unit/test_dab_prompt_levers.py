@@ -26,5 +26,14 @@ def test_labrat_agent_prompt_includes_every_lever() -> None:
         assert lever in prompt
 
 
+def test_labrat_agent_prompt_can_disable_every_lever() -> None:
+    env = DabTaskEnv(
+        ctx=ToolContext(connections={}, catalogs={}, primary="x"), attachable=[], mongo=[]
+    )
+    prompt = _build_labrat_agent_system_prompt(env, include_levers=False)
+    for lever in _dab_lever_lines():
+        assert lever not in prompt
+
+
 def test_top_n_with_ties_lever_present() -> None:
     assert any("truncates ties" in ln for ln in _dab_lever_lines())

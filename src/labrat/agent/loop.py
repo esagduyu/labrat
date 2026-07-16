@@ -76,7 +76,10 @@ class AgentLoop:
         if not isinstance(provider, ModelProvider):
             raise TypeError(f"Expected ModelProvider, got {type(provider)}")
 
-        self._provider = provider
+        # A session can reuse one provider for the main loop, verifier, row-level
+        # LLM helpers, and subagents. Bind here so provider-local continuation or
+        # exact-replay state cannot leak across those independent conversations.
+        self._provider = provider.bind_conversation()
         self._registry = registry
         self._ctx = ctx
         self._system = system or build_system_prompt(dialect)
@@ -90,6 +93,7 @@ class AgentLoop:
         self.turns_used = 0
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
+        self.turn_budget_exhausted = False
         # True iff the loop's final answer was returned WITHOUT a final
         # verifier re-check because the round (or turn) budget ran out —
         # i.e. the last real verdict (if any) was insufficient and nothing
@@ -125,11 +129,13 @@ class AgentLoop:
         self.tool_calls_used = 0
         self.verify_rounds_used = 0
         self.verify_exhausted = False
+        self.turn_budget_exhausted = False
         self.active_on_tool_call = on_tool_call
 
         try:
             while True:
                 if self._max_turns is not None and self.turns_used >= self._max_turns:
+                    self.turn_budget_exhausted = True
                     break
 
                 text_parts: list[str] = []

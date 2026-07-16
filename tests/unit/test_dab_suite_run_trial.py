@@ -1,12 +1,51 @@
+from __future__ import annotations
+
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import duckdb
+import pytest
 import yaml
 
+from labrat.agent.loop import TextBlock
 from labrat.eval.benchmarks.dab.suite import DabSuite
+
+
+class _UsageJudgeProvider:
+    def __init__(self) -> None:
+        self.usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
+            "requests": 0,
+        }
+        self.request_usage: list[dict[str, Any]] = []
+
+    def bind_conversation(self) -> _UsageJudgeProvider:
+        return self
+
+    async def stream(self, **_kwargs: Any) -> Any:
+        self.usage["input_tokens"] += 100
+        self.usage["output_tokens"] += 5
+        self.usage["cached_tokens"] += 80
+        self.usage["requests"] += 1
+        self.request_usage.append(
+            {
+                "request": len(self.request_usage) + 1,
+                "input_tokens": 100,
+                "output_tokens": 5,
+                "cached_tokens": 80,
+            }
+        )
+
+        async def blocks() -> Any:
+            yield TextBlock(text="judge")
+
+        return blocks()
 
 
 def _make_mixed_db_fixture(tmp_path: Path) -> None:
@@ -184,6 +223,7 @@ async def test_labrat_agent_driver_records_provider_token_usage(
     }
     provider = MagicMock()
     provider.usage = usage
+    provider.request_usage = [{"request": 1, "input_tokens": 5000}]
     mock_build.return_value = provider
 
     suite = DabSuite(
@@ -198,6 +238,256 @@ async def test_labrat_agent_driver_records_provider_token_usage(
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_usage")
 
     assert result.meta.get("usage") == usage
+    assert result.meta.get("request_usage") == provider.request_usage
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_uses_and_accounts_dedicated_classifier_provider(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    main = MagicMock()
+    main.usage = {
+        "input_tokens": 1_000,
+        "output_tokens": 100,
+        "cached_tokens": 800,
+        "reasoning_tokens": 90,
+        "requests": 1,
+    }
+    main.request_usage = [{"request": 1, "model": "gpt-5.6-luna", "reasoning_effort": "max"}]
+    classifier = MagicMock()
+    classifier.usage = {
+        "input_tokens": 2_000,
+        "output_tokens": 200,
+        "cached_tokens": 1_500,
+        "reasoning_tokens": 20,
+        "requests": 2,
+    }
+    classifier.request_usage = [
+        {"request": 1, "model": "gpt-5.6-luna", "reasoning_effort": "low"},
+        {"request": 2, "model": "gpt-5.6-luna", "reasoning_effort": "low"},
+    ]
+    mock_build.side_effect = [main, classifier]
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=1, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.6-luna",
+        agent_reasoning="max",
+        llm_classify_model="gpt-5.6-luna",
+        llm_classify_reasoning="low",
+        llm_classify_concurrency=2,
+    )
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(
+            task, trial_num=0, scratch_dir=tmp_path / "scratch_classifier"
+        )
+
+    assert mock_build.call_count == 2
+    assert mock_build.call_args_list[0].kwargs["reasoning"] == "max"
+    assert mock_build.call_args_list[1].kwargs["reasoning"] == "low"
+    assert ":llm_classify:gpt-5.6-luna:low" in mock_build.call_args_list[1].kwargs["cache_key"]
+    assert captured["llm_classify_provider"] is classifier
+    assert captured["ctx"].llm_classify_concurrency == 2
+    assert result.meta["usage"]["input_tokens"] == 3_000
+    assert result.meta["usage"]["requests"] == 3
+    request_usage = result.meta["request_usage"]
+    assert request_usage[0]["reasoning_effort"] == "max"
+    assert "usage_role" not in request_usage[0]
+    assert [item["usage_role"] for item in request_usage[1:]] == [
+        "llm_classify",
+        "llm_classify",
+    ]
+    assert [item["request"] for item in request_usage] == [1, 2, 3]
+    assert [item["provider_request"] for item in request_usage[1:]] == [1, 2]
+    assert {item["reasoning_effort"] for item in request_usage[1:]} == {"low"}
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_terminalizes_turn_budget_with_trace(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {}
+    provider.request_usage = []
+    mock_build.return_value = provider
+
+    async def fake_run_agent_task(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            final_text="",
+            tool_calls=10,
+            latency_seconds=1.0,
+            turn_budget_exhausted=True,
+        )
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_max_turns=10,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "turn-budget"
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    expected = "[trial exhausted 10-turn budget without a final answer]"
+    assert result.passed is False
+    assert result.reason == "terminal:turn_budget"
+    assert result.artifact == {"type": "text", "payload": expected}
+    trace = [
+        json.loads(line) for line in (scratch / "agent_tool_calls.jsonl").read_text().splitlines()
+    ]
+    assert trace[-1] == {
+        "tool": "runner_turn_budget",
+        "input": {"max_turns": 10},
+        "ok": False,
+        "output": expected,
+        "latency_ms": 0.0,
+    }
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_driver_preserves_completed_usage_on_later_failure(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {
+        "input_tokens": 2000,
+        "output_tokens": 50,
+        "cached_tokens": 1500,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 20,
+        "requests": 1,
+    }
+    provider.request_usage = [{"request": 1, "response_id": "resp_1"}]
+    mock_build.return_value = provider
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.5",
+    )
+    task = next(iter(suite.tasks()))
+
+    async def failing_run_agent_task(**_kwargs: Any) -> Any:
+        raise TimeoutError("later turn timed out")
+
+    with patch("labrat.agent.runner.run_agent_task", new=failing_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_fail")
+
+    assert result.reason == "infra:timeout"
+    assert result.meta["usage"]["input_tokens"] == 2000
+    assert result.meta["request_usage"] == provider.request_usage
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_driver_threads_ablation_config_and_touches_trace(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    """Model settings stay intact while lever/ledger controls reach the agent.
+
+    The per-trial trace is also present when the model makes zero tool calls.
+    """
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    mock_build.return_value = provider
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=0, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.5",
+        agent_reasoning="high",
+        agent_levers=False,
+        agent_ledger=False,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "scratch_ablation"
+
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    assert result.tool_calls == 0
+    mock_build.assert_called_once_with(
+        "codex",
+        "gpt-5.5",
+        timeout=None,
+        reasoning="high",
+        cache_key=task.id,
+    )
+    assert captured["enable_ledger"] is False
+    assert captured["ledger_dir"] == scratch
+    assert "never answer from prior" not in captured["system_prompt"]
+    trace = scratch / "agent_tool_calls.jsonl"
+    assert trace.exists()
+    assert trace.read_text() == ""
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_sol_ultra_enables_proactive_labrat_delegation_prompt(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    mock_build.return_value = MagicMock()
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=0, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.6-sol",
+        agent_reasoning="ultra",
+    )
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_ultra")
+
+    assert "Proactive multi-agent delegation is active" in captured["system_prompt"]
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_sol_max_does_not_enable_proactive_labrat_delegation_prompt(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    mock_build.return_value = MagicMock()
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent_task(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(final_text="42", tool_calls=0, latency_seconds=1.0)
+
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_provider="codex",
+        agent_model="gpt-5.6-sol",
+        agent_reasoning="max",
+    )
+    task = next(iter(suite.tasks()))
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_max")
+
+    assert "Proactive multi-agent delegation is active" not in captured["system_prompt"]
+    assert "dispatch_subagent" not in captured["system_prompt"]
 
 
 @patch("labrat.agent.providers.build_provider", return_value=MagicMock())
@@ -249,6 +539,311 @@ async def test_run_trial_isolates_agent_timeout_as_infra(tmp_path: Path) -> None
         result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
     assert result.passed is False
     assert result.reason == "infra:timeout"
+
+
+async def test_run_trial_can_terminalize_timeout_as_traced_failure(tmp_path: Path) -> None:
+    """A declared bounded run records timeout as one trace-complete scored failure."""
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        agent_timeout=17,
+        terminalize_timeouts=True,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "terminal-timeout"
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=TimeoutError()),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    assert result.passed is False
+    assert result.reason == "terminal:timeout"
+    assert result.artifact == {"type": "text", "payload": "[trial exceeded 17s timeout]"}
+    trace_path = scratch / "agent_tool_calls.jsonl"
+    trace = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert trace == [
+        {
+            "tool": "runner_timeout",
+            "input": {"timeout_seconds": 17},
+            "ok": False,
+            "output": "[trial exceeded 17s timeout]",
+            "latency_ms": pytest.approx(0.0, abs=100.0),
+        }
+    ]
+
+
+async def test_consensus_promotes_trace_from_actual_retained_subrun(tmp_path: Path) -> None:
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", consensus_k=2)
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "consensus-trace"
+    winning_trace = '{"tool":"run_sql","input":{},"ok":true,"output":"winner","latency_ms":1}\n'
+
+    async def dispatch(
+        _task: Any,
+        _db_config_path: Path,
+        subrun: Path,
+        **_kwargs: Any,
+    ) -> tuple[str, int, float]:
+        if subrun.name == "subrun0":
+            raise RuntimeError("infra failure")
+        (subrun / "agent_tool_calls.jsonl").write_text(winning_trace)
+        return ("winner", 1, 0.1)
+
+    with (
+        patch.object(suite, "_dispatch_driver_once", new=dispatch),
+        patch.object(suite, "_verify_llm_fn", return_value=AsyncMock(return_value="0")),
+        patch(
+            "labrat.agent.verification.consensus.choose_modal",
+            new=AsyncMock(return_value=(0, False)),
+        ),
+    ):
+        answer = await suite._run_trial_verified(
+            task,
+            Path(task.config["db_config_path"]),
+            scratch,
+        )
+
+    assert answer[0] == "winner"
+    assert (scratch / "agent_tool_calls.jsonl").read_text() == winning_trace
+
+
+async def test_failed_argumentation_round_retains_prior_answer_and_trace(
+    tmp_path: Path,
+) -> None:
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(
+        dab_dir=tmp_path,
+        driver="labrat-agent",
+        consensus_k=2,
+        argue_rounds=1,
+    )
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "argumentation-atomic"
+    prior_trace = '{"tool":"run_sql","input":{},"ok":true,"output":"prior","latency_ms":1}\n'
+    tentative_trace = (
+        '{"tool":"run_sql","input":{},"ok":true,"output":"tentative","latency_ms":1}\n'
+    )
+    calls: dict[str, int] = {}
+
+    async def dispatch(
+        _task: Any,
+        _db_config_path: Path,
+        subrun: Path,
+        **_kwargs: Any,
+    ) -> tuple[str, int, float]:
+        calls[subrun.name] = calls.get(subrun.name, 0) + 1
+        if subrun.name == "subrun0" and calls[subrun.name] == 1:
+            (subrun / "agent_tool_calls.jsonl").write_text(prior_trace)
+            return ("primary-old", 1, 0.1)
+        if subrun.name == "subrun1" and calls[subrun.name] == 1:
+            (subrun / "agent_tool_calls.jsonl").write_text("")
+            return ("other-old", 0, 0.1)
+        if subrun.name in {"subrun0", "argue-round1-subrun0"}:
+            (subrun / "agent_tool_calls.jsonl").write_text(tentative_trace)
+            return ("primary-tentative", 1, 0.1)
+        raise RuntimeError("later tentative rerun failed")
+
+    with (
+        patch.object(suite, "_dispatch_driver_once", new=dispatch),
+        patch.object(suite, "_verify_llm_fn", return_value=AsyncMock(return_value="0")),
+        patch(
+            "labrat.agent.verification.consensus.choose_modal",
+            new=AsyncMock(return_value=(0, True)),
+        ),
+    ):
+        answer = await suite._run_trial_verified(
+            task,
+            Path(task.config["db_config_path"]),
+            scratch,
+        )
+
+    assert answer[0] == "primary-old"
+    assert (scratch / "agent_tool_calls.jsonl").read_text() == prior_trace
+    assert (scratch / "subrun0" / "agent_tool_calls.jsonl").read_text() == prior_trace
+
+
+async def test_consensus_judge_usage_is_included_in_trial_telemetry(tmp_path: Path) -> None:
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", consensus_k=2)
+    task = next(iter(suite.tasks()))
+    judge = _UsageJudgeProvider()
+
+    async def dispatch(
+        _task: Any,
+        _db_config_path: Path,
+        subrun: Path,
+        **_kwargs: Any,
+    ) -> tuple[str, int, float]:
+        (subrun / "agent_tool_calls.jsonl").write_text("")
+        return ("3", 0, 0.1)
+
+    async def choose_modal(_answers: list[str], *, question: str, llm_fn: Any) -> tuple[int, bool]:
+        await llm_fn(question)
+        return (0, False)
+
+    with (
+        patch.object(suite, "_dispatch_driver_once", new=dispatch),
+        patch("labrat.eval.benchmarks.dab.suite.build_provider", return_value=judge),
+        patch("labrat.agent.verification.consensus.choose_modal", new=choose_modal),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "consensus")
+
+    assert result.meta["usage"]["input_tokens"] == 100
+    assert result.meta["usage"]["requests"] == 1
+    assert result.meta["request_usage"] == [
+        {
+            "request": 1,
+            "input_tokens": 100,
+            "output_tokens": 5,
+            "cached_tokens": 80,
+            "usage_role": "verification",
+        }
+    ]
+
+
+async def test_reverify_judge_usage_is_included_in_trial_telemetry(tmp_path: Path) -> None:
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", reverify=True)
+    task = next(iter(suite.tasks()))
+    judge = _UsageJudgeProvider()
+
+    async def dispatch(
+        _task: Any,
+        _db_config_path: Path,
+        subrun: Path,
+        **_kwargs: Any,
+    ) -> tuple[str, int, float]:
+        (subrun / "agent_tool_calls.jsonl").write_text("")
+        return ("3", 0, 0.1)
+
+    async def answers_agree(_first: str, _second: str, *, question: str, llm_fn: Any) -> bool:
+        await llm_fn(question)
+        return True
+
+    with (
+        patch.object(suite, "_dispatch_driver_once", new=dispatch),
+        patch("labrat.eval.benchmarks.dab.suite.build_provider", return_value=judge),
+        patch("labrat.agent.verification.agreement.answers_agree", new=answers_agree),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "reverify")
+
+    assert result.meta["usage"]["input_tokens"] == 100
+    assert result.meta["usage"]["requests"] == 1
+    assert result.meta["request_usage"][0]["usage_role"] == "verification"
+
+
+async def test_verification_usage_delta_does_not_double_count_cumulative_provider(
+    tmp_path: Path,
+) -> None:
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    suite._last_usage = None
+    suite._last_request_usage = []
+    judge = _UsageJudgeProvider()
+
+    with patch("labrat.eval.benchmarks.dab.suite.build_provider", return_value=judge):
+        llm_fn = suite._verify_llm_fn()
+        await llm_fn("first")
+        await llm_fn("second")
+
+    assert suite._last_usage is not None
+    assert suite._last_usage["input_tokens"] == 200
+    assert suite._last_usage["requests"] == 2
+    assert len(suite._last_request_usage) == 2
+
+
+async def test_run_trial_classifies_http_429_and_sanitizes_reset_metadata(
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    request = httpx.Request("POST", "https://chatgpt.com/backend-api/codex/responses")
+    response = httpx.Response(
+        429,
+        request=request,
+        json={
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "raw provider message must not be persisted",
+                "plan_type": "prolite",
+                "resets_at": 1783767751,
+                "resets_in_seconds": 321,
+            }
+        },
+    )
+    error = httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
+
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch_429")
+
+    assert result.passed is False
+    assert result.reason == "infra:rate_limit"
+    assert result.meta["rate_limit"] == {
+        "resets_at": 1783767751,
+        "resets_in_seconds": 321,
+    }
+    assert "raw provider message" not in result.model_dump_json()
+    assert "plan_type" not in result.model_dump_json()
+
+
+async def test_run_trial_classifies_cli_api_error_429_as_rate_limit(tmp_path: Path) -> None:
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="raw-bash")
+    task = next(iter(suite.tasks()))
+
+    with patch.object(
+        DabSuite,
+        "_run_trial_raw_bash",
+        new=AsyncMock(return_value=("API Error: 429 Too Many Requests", 0, 0.1)),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+
+    assert result.reason == "infra:rate_limit"
+
+
+async def test_rate_limit_exception_persists_only_sanitized_allowlisted_data(
+    tmp_path: Path,
+) -> None:
+    from labrat.agent.providers.base import RATE_LIMIT_MESSAGE, RateLimitError
+
+    _make_synthetic_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent")
+    task = next(iter(suite.tasks()))
+    error = RateLimitError(
+        "raw provider quota detail must not persist",
+        rate_limit={
+            "resets_at": 1783767751,
+            "resets_in_seconds": 321,
+            "plan_type": "secret-plan",
+        },
+    )
+
+    with patch.object(
+        DabSuite,
+        "_run_trial_labrat_agent",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await suite.run_trial(task, trial_num=0, scratch_dir=tmp_path / "scratch")
+
+    assert result.reason == "infra:rate_limit"
+    assert result.meta["rate_limit"] == {
+        "resets_at": 1783767751,
+        "resets_in_seconds": 321,
+    }
+    assert result.artifact["payload"] == f"RateLimitError: {RATE_LIMIT_MESSAGE}"
+    persisted = result.model_dump_json()
+    assert "raw provider quota detail" not in persisted
+    assert "secret-plan" not in persisted
 
 
 async def test_run_trial_isolates_generic_agent_error_as_infra(tmp_path: Path) -> None:
@@ -362,6 +957,55 @@ async def test_claude_mcp_driver_sandboxes_tools_and_cwd(tmp_path: Path) -> None
     mcp_config = _json.loads((scratch / "mcp-config.json").read_text())
     server_env = mcp_config["mcpServers"]["labrat"]["env"]
     assert server_env.get("LABRAT_MCP_LOG_DIR")
+
+
+async def test_claude_mcp_zero_tool_attempt_creates_empty_trace(tmp_path: Path) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "zero-tool-mcp"
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch(
+            "subprocess.run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=b'{"result": "answer", "num_turns": 1}',
+                stderr=b"",
+            ),
+        ),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    trace = scratch / "mcp_tool_calls.jsonl"
+    assert trace.is_file()
+    assert trace.read_text() == ""
+
+
+async def test_claude_mcp_retry_truncates_prior_attempt_trace(tmp_path: Path) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "retry-mcp"
+    scratch.mkdir()
+    trace = scratch / "mcp_tool_calls.jsonl"
+    trace.write_text('{"tool":"run_sql","input":{},"ok":true,"output":"old","latency_ms":1}\n')
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch(
+            "subprocess.run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=b'{"result": "answer", "num_turns": 1}',
+                stderr=b"",
+            ),
+        ),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    assert trace.read_text() == ""
 
 
 async def test_claude_mcp_mcp_config_path_absolute_under_relative_scratch(

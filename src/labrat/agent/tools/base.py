@@ -14,6 +14,10 @@ from pydantic import BaseModel, ValidationError
 # this one. run_agent_task injects an implementation onto ToolContext.llm_fn.
 LLMFn = Callable[[str], Awaitable[str]]
 
+# Large batched classifiers may overlap a small number of independent one-shot
+# requests, but must never create an unbounded provider fan-out.
+MAX_LLM_CLASSIFY_CONCURRENCY = 2
+
 
 class SubagentRunner(Protocol):
     """Runs a scoped sub-agent loop; injected by build_agent_session (llm_fn precedent).
@@ -66,8 +70,11 @@ class ToolContext:
         profile_name: str = "default",
         read_only: bool = False,
         llm_fn: LLMFn | None = None,
+        llm_classify_fn: LLMFn | None = None,
         subagent_runner: SubagentRunner | None = None,
         active_maps: list[str] | None = None,
+        llm_classify_concurrency: int = 1,
+        llm_classify_row_budget: int | None = None,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -83,8 +90,18 @@ class ToolContext:
         self.profile_name = profile_name
         self.read_only = read_only
         self.llm_fn = llm_fn
+        self.llm_classify_fn = llm_classify_fn
         self.subagent_runner = subagent_runner
         self.active_maps = active_maps
+        if not 1 <= llm_classify_concurrency <= MAX_LLM_CLASSIFY_CONCURRENCY:
+            raise ValueError(
+                f"llm_classify_concurrency must be between 1 and {MAX_LLM_CLASSIFY_CONCURRENCY}"
+            )
+        if llm_classify_row_budget is not None and llm_classify_row_budget < 1:
+            raise ValueError("llm_classify_row_budget must be positive when set")
+        self.llm_classify_concurrency = llm_classify_concurrency
+        self.llm_classify_row_budget = llm_classify_row_budget
+        self.llm_classify_rows_used = 0
 
     @property
     def connection(self) -> object:
@@ -211,7 +228,9 @@ class ToolRegistry:
     ) -> DispatchResult:
         """Validate args and call the named tool.
 
-        Always returns a DispatchResult — never raises.
+        Returns a DispatchResult for ordinary failures. Provider rate limits are
+        deliberately re-raised so benchmark runners can fail fast and preserve a
+        retryable infrastructure row.
         """
         if name not in self._tools:
             return DispatchResult(ok=False, value=None, error=f"Unknown tool: {name!r}")
@@ -230,4 +249,8 @@ class ToolRegistry:
             result = await tool.execute(ctx, parsed)  # pyright: ignore[reportArgumentType]
             return DispatchResult(ok=True, value=result)
         except Exception as exc:
+            from labrat.agent.providers.base import is_rate_limit_error
+
+            if is_rate_limit_error(exc):
+                raise
             return DispatchResult(ok=False, value=None, error=str(exc))

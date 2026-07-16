@@ -940,3 +940,38 @@ empty active set never renders the segment; a dbt-configured, Map-less profile g
 on first connect, a profile with an existing Map does not. `tests/tui/test_maps_tui.py` and
 `tests/tui/test_main_screen_scent.py` re-run green (unchanged behavior). `TESTING.md` "Maps
 (v1)" section extended with the status-bar/footer/nudge manual-gate steps and checklist items.
+
+## 2026-07-16 — GPT-5.6 DAB campaign audited: submission approved, corrections applied
+
+**Context:** The 2026-07-10→13 Codex-built (GPT-5.6 Sol) campaign on `feat/codex-caching-gpt56`
+delivered exact-replay prompt caching in `CodexSubscriptionProvider`, safe dataset sharding
+(`scripts/dab_shards.py`), bounded AG News recovery, and a full 270-trial DAB package
+(`runs/dab/submission-gpt56-luna-max-ledger-final-270`) on `gpt-5.6-luna` @ max with
+Cartographer+levers+hints+ledger: **206/270 = 74.18% stratified**, +13.29pp over the live
+PR #65 entry.
+
+**Decision:** ship the submission after an independent adversarial audit (Claude Fable,
+2026-07-16, seven parallel review passes — full report
+`docs/claude-fable-gpt56-dab-audit-report.md`). Audit verdict: zero P0/P1; every headline
+number independently reproduced (from-scratch regrade under pinned validators, byte-identical
+package rebuild via `dab_shards.py recover`, all 270 traces event-audited clean, PR #65
+comparison reproduced exactly).
+
+**Corrections applied (this commit):**
+1. "Dirty BSON" claims removed — the 5 `M`-flagged DAB input files are byte-identical to
+   their committed blobs (Git-LFS clean-filter artifact; check with
+   `git hash-object --no-filters`, not `git status`).
+2. Promotion-rule wording softened — preregistered were stratified-as-headline and
+   noncached-input-as-comparator; Ledger won the headline outright, but the compound
+   "stratified-plus-noncached rule" phrase was post-hoc.
+3. `suite.py` sandbox comment corrected — the in-process labrat-agent path is not a
+   filesystem sandbox (`load_file`/`attach_database`/`read_csv_auto` read local paths);
+   answer-key safety comes from the taint gate + per-trace audit.
+4. `docs/dab-integration.md` aligned with the actually-executed sharded run shape.
+
+**Standing lessons:** Cartographer-alone regresses on GPT-5.x (confirmed twice — it is a
+Sonnet-favoring lever); hints+ledger carried the GPT-5.6 lift; a full subscription-backed
+270-trial run is practical with shards + pacing + rate-limit fail-fast (supersedes the
+2026-06 "benchmark-impractical" verdict). Post-PR P2 follow-ups tracked in memory
+`project_gpt56_dab_campaign`: dispatch 429 re-raise leaking into TUI, taint-gate hardening,
+structured terminal flag, base-shard compat-key gate, drop the two campaign stashes.

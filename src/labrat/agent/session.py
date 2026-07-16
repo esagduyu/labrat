@@ -63,6 +63,7 @@ def build_agent_session(
     ctx: ToolContext,
     registry: ToolRegistry,
     provider: ModelProvider,
+    llm_classify_provider: ModelProvider | None = None,
     system_prompt: str = "",
     dialect: str = "duckdb",
     verify: bool = False,
@@ -75,8 +76,10 @@ def build_agent_session(
     """Return a fully wired, persistent AgentLoop.
 
     Wiring performed (mirrors what run_agent_task always did):
-      - ``ctx.llm_fn`` injected from the loop's own provider when the caller
-        left it None (enables llm_extract/llm_classify; caller injection wins);
+      - ``ctx.llm_fn`` injected from the loop's own provider when the caller left
+        it None (enables llm_extract and, by fallback, llm_classify);
+      - ``ctx.llm_classify_fn`` injected only from ``llm_classify_provider`` when
+        supplied, isolating classification without redirecting llm_extract;
       - ContextLedger attached when ``enable_ledger`` (durable at ``ledger_dir``
         or a per-call temp dir);
       - optional LLMVerifier (the sufficiency judge — NOT consensus);
@@ -94,6 +97,8 @@ def build_agent_session(
     """
     if ctx.llm_fn is None:
         ctx.llm_fn = provider_llm_fn(provider, system=_LLM_FN_SYSTEM)
+    if ctx.llm_classify_fn is None and llm_classify_provider is not None:
+        ctx.llm_classify_fn = provider_llm_fn(llm_classify_provider, system=_LLM_FN_SYSTEM)
 
     ledger: ContextLedger | None = None
     if enable_ledger:
@@ -200,5 +205,7 @@ def _sub_ctx(parent: ToolContext) -> ToolContext:
         profile_name=parent.profile_name,
         read_only=parent.read_only,
         llm_fn=parent.llm_fn,
+        llm_classify_fn=parent.llm_classify_fn,
+        llm_classify_concurrency=parent.llm_classify_concurrency,
         subagent_runner=None,
     )

@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from labrat.agent.verifier import LLMFn
 
-from labrat.agent.providers import build_provider
+from labrat.agent.providers import RateLimitError, build_provider
 from labrat.agent.verifier import provider_llm_fn
 from labrat.eval.benchmarks.dab.env import (
     DabTaskEnv,
@@ -85,7 +85,7 @@ _INFRA_PATTERNS: tuple[tuple[str, str], ...] = (
     # 5xx / overloaded are transient infra, NOT a real attempt — must be retried, not
     # scored as a semantic fail. (A 2026-06-23 Claude outage miscounted 14 such trials.)
     ("API Error: 5", "api_error"),
-    ("API Error: 429", "api_error"),
+    ("API Error: 429", "rate_limit"),
     ("Overloaded", "api_error"),
 )
 
@@ -99,6 +99,60 @@ def _detect_infra_failure(final_text: str) -> str | None:
     return None
 
 
+def _http_status_code(exc: Exception) -> int | None:
+    """Return an HTTP exception's response status without importing a client type."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def is_rate_limit_error(value: object) -> bool:
+    """Classify quota exhaustion consistently across providers and CLI text."""
+    if isinstance(value, RateLimitError):
+        return True
+    if isinstance(value, Exception) and _http_status_code(value) == 429:
+        return True
+    text = str(value)
+    return _detect_infra_failure(text) == "rate_limit" or bool(
+        re.search(r"\b429\b.*(?:too many requests|rate.?limit)", text, re.IGNORECASE)
+    )
+
+
+def _rate_limit_meta(exc: Exception) -> dict[str, int]:
+    """Extract only safe reset telemetry from a 429 response body."""
+    stable = getattr(exc, "rate_limit", None)
+    if isinstance(stable, dict):
+        sanitized = {
+            key: value
+            for key, value in cast("dict[str, Any]", stable).items()
+            if key in {"resets_at", "resets_in_seconds"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        }
+        if sanitized:
+            return sanitized
+    response = getattr(exc, "response", None)
+    if response is None:
+        return {}
+    try:
+        payload_raw: Any = response.json()
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload_raw, dict):
+        return {}
+    payload = cast("dict[str, Any]", payload_raw)
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return {}
+    error = cast("dict[str, Any]", error)
+    details: dict[str, int] = {}
+    for key in ("resets_at", "resets_in_seconds"):
+        value = error.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            details[key] = value
+    return details
+
+
 # Contamination detection (answer-key / external-dataset leakage) is shared with the
 # Scent-authoring guard — see labrat.maze.scent_audit. The `as` aliases preserve the
 # module-local names so the rest of this module (and existing tests) are untouched.
@@ -106,7 +160,7 @@ def _detect_infra_failure(final_text: str) -> str | None:
 # counted as a pass.
 
 
-def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
+def _build_labrat_agent_system_prompt(env: DabTaskEnv, *, include_levers: bool = True) -> str:
     parts = [
         "You are a data analyst. Answer the question by querying the available databases "
         "using the provided tools.",
@@ -140,7 +194,7 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv) -> str:
         for mspec in env.mongo:
             parts.append(f"  alias={mspec.alias} database={mspec.database}")
         parts.append("Materialized collections become DuckDB tables you query with run_sql.")
-    levers = _dab_lever_lines()
+    levers = _dab_lever_lines() if include_levers else []
     parts.extend(
         [
             "",
@@ -307,6 +361,7 @@ def _build_claude_mcp_prompt(
     *,
     include_cartographer_line: bool,
     max_tool_calls: int | None,
+    include_levers: bool = True,
 ) -> str:
     """Build the claude-mcp driver's opening user message.
 
@@ -326,7 +381,8 @@ def _build_claude_mcp_prompt(
     ]
     if include_cartographer_line:
         prompt_lines.insert(1, _cartographer_prompt_line())
-    prompt_lines.extend(_dab_lever_lines())
+    if include_levers:
+        prompt_lines.extend(_dab_lever_lines())
     if env_spec.attachable:
         prompt_lines.append("")
         prompt_lines.append(
@@ -426,6 +482,44 @@ _DATASET_DIR_RE = re.compile(r"^query_(.+)$", re.IGNORECASE)
 _QUERY_DIR_RE = re.compile(r"^query(\d+)$")
 
 
+def aggregate_dab_results(results: list[TrialResult]) -> AggregateScore:
+    """Compute DAB's dataset-stratified score from trial results."""
+    if not results:
+        return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
+
+    # Drop infra failures so they don't depress the pass rate on queries that
+    # never got a fair shot (Max-plan session limit, API credit, timeout), and
+    # contaminated trials (data-leakage backstop) which are withdrawn entirely.
+    withdrawn = ("infra:", "contaminated:")
+    semantic_results = [r for r in results if not (r.reason or "").startswith(withdrawn)]
+    if not semantic_results:
+        return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
+
+    per_task: dict[str, list[bool]] = {}
+    for result in semantic_results:
+        per_task.setdefault(result.task_id, []).append(result.passed)
+    per_task_pass_rate = {
+        task_id: sum(passes) / len(passes) for task_id, passes in per_task.items()
+    }
+
+    by_dataset: dict[str, list[float]] = {}
+    for task_id, pass_rate in per_task_pass_rate.items():
+        dataset = task_id.split(":", 1)[0]
+        by_dataset.setdefault(dataset, []).append(pass_rate)
+    dataset_means = {
+        dataset: sum(pass_rates) / len(pass_rates) for dataset, pass_rates in by_dataset.items()
+    }
+
+    return AggregateScore(
+        overall=sum(dataset_means.values()) / len(dataset_means),
+        per_task=per_task_pass_rate,
+        by_dimension={"dataset": dataset_means},
+        n_tasks=len(per_task),
+        n_trials=len(results),
+        n_passes=sum(1 for result in results if result.passed),
+    )
+
+
 class DabSuite:
     """Reads DAB queries from a DataAgentBench checkout."""
 
@@ -443,6 +537,13 @@ class DabSuite:
         agent_verify: bool = False,
         agent_timeout: int | None = None,
         agent_reasoning: str | None = None,
+        llm_classify_model: str | None = None,
+        llm_classify_reasoning: str | None = None,
+        llm_classify_concurrency: int = 1,
+        llm_classify_row_budget: int | None = None,
+        terminalize_timeouts: bool = False,
+        agent_levers: bool = True,
+        agent_ledger: bool = True,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
         cartograph_semantics_model: str = "claude-sonnet-4-6",
@@ -469,9 +570,29 @@ class DabSuite:
         # Per-call provider timeout override (seconds); only the claude-code provider
         # honours it. None = provider default (120s for claude-code).
         self._agent_timeout = agent_timeout
-        # Reasoning effort for the codex (GPT-5.5) provider; ignored by the others.
+        # Reasoning effort for the Codex GPT-5.5/5.6 provider; ignored by the others.
         # None = provider default (medium).
         self._agent_reasoning = agent_reasoning
+        # Nested classification defaults to the main model/effort for backwards
+        # compatibility, but can be isolated onto a cheaper constrained-reasoning
+        # provider. Concurrency is intentionally limited to two.
+        self._llm_classify_model = llm_classify_model or agent_model
+        self._llm_classify_reasoning = (
+            llm_classify_reasoning if llm_classify_reasoning is not None else agent_reasoning
+        )
+        if llm_classify_concurrency not in {1, 2}:
+            raise ValueError("llm_classify_concurrency must be 1 or 2")
+        if llm_classify_row_budget is not None and llm_classify_row_budget < 1:
+            raise ValueError("llm_classify_row_budget must be positive when set")
+        self._llm_classify_concurrency = llm_classify_concurrency
+        self._llm_classify_row_budget = llm_classify_row_budget
+        self._terminalize_timeouts = terminalize_timeouts
+        # Benchmark-safe process levers are enabled by default for historical
+        # compatibility. The explicit toggle supports a clean ablation arm.
+        self._agent_levers = agent_levers
+        # ContextLedger is likewise historically on through run_agent_task's
+        # default; make it explicit so DAB runs can ablate and resume it safely.
+        self._agent_ledger = agent_ledger
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
         self._cartograph = cartograph
@@ -586,16 +707,53 @@ class DabSuite:
         db_config_path = Path(task.config["db_config_path"])
         validator_path = Path(task.config["validator_path"])
         self._last_usage: dict[str, int] | None = None
+        self._last_request_usage: list[dict[str, Any]] = []
+        started = time.monotonic()
 
         try:
             final_text, tool_calls, latency = await self._run_trial_verified(
                 task, db_config_path, scratch_dir
             )
         except Exception as exc:
+            if isinstance(exc, TimeoutError) and self._terminalize_timeouts:
+                from labrat.agent.tool_trace import append_tool_trace
+
+                timeout = self._agent_timeout if self._agent_timeout is not None else _DAB_TIMEOUT
+                final_text = f"[trial exceeded {timeout}s timeout]"
+                latency = time.monotonic() - started
+                append_tool_trace(
+                    scratch_dir,
+                    "agent_tool_calls.jsonl",
+                    tool="runner_timeout",
+                    input={"timeout_seconds": timeout},
+                    ok=False,
+                    output=final_text,
+                    latency_ms=latency * 1000.0,
+                )
+                return TrialResult(
+                    task_id=task.id,
+                    trial_num=trial_num,
+                    passed=False,
+                    reason="terminal:timeout",
+                    latency_seconds=latency,
+                    tool_calls=0,
+                    artifact={"type": "text", "payload": final_text},
+                    meta=self._usage_meta(),
+                )
             # A provider/agent exception (e.g. claude-code's per-call TimeoutError) must
             # fail only THIS trial, not crash the whole run. Record it as an infra failure
             # so aggregate() skips it and a --output-dir resume auto-retries it.
-            tag = "timeout" if isinstance(exc, TimeoutError) else "agent_error"
+            if is_rate_limit_error(exc):
+                tag = "rate_limit"
+            elif isinstance(exc, TimeoutError):
+                tag = "timeout"
+            else:
+                tag = "agent_error"
+            meta = self._usage_meta()
+            if tag == "rate_limit":
+                reset = _rate_limit_meta(exc)
+                if reset:
+                    meta["rate_limit"] = reset
             return TrialResult(
                 task_id=task.id,
                 trial_num=trial_num,
@@ -604,14 +762,53 @@ class DabSuite:
                 latency_seconds=0.0,
                 tool_calls=0,
                 artifact={"type": "text", "payload": f"{type(exc).__name__}: {exc}"},
+                meta=meta,
             )
 
         # Infra failures (Max-plan session limit, API credit, wall-clock timeout)
         # don't reflect the agent's ability and shouldn't pollute aggregate scoring.
         # Mark them with reason="infra:<tag>" so aggregate() can skip them and
         # eval_dab.py can print INFRA instead of FAIL.
+        if final_text.startswith("[trial exhausted "):
+            return TrialResult(
+                task_id=task.id,
+                trial_num=trial_num,
+                passed=False,
+                reason="terminal:turn_budget",
+                latency_seconds=latency,
+                tool_calls=tool_calls,
+                artifact={"type": "text", "payload": final_text},
+                meta=self._usage_meta(),
+            )
+
         infra_tag = _detect_infra_failure(final_text)
         if infra_tag is not None:
+            if infra_tag == "timeout" and self._terminalize_timeouts:
+                from labrat.agent.tool_trace import append_tool_trace
+
+                append_tool_trace(
+                    scratch_dir,
+                    "agent_tool_calls.jsonl",
+                    tool="runner_timeout",
+                    input={
+                        "timeout_seconds": (
+                            self._agent_timeout if self._agent_timeout is not None else _DAB_TIMEOUT
+                        )
+                    },
+                    ok=False,
+                    output=final_text,
+                    latency_ms=latency * 1000.0,
+                )
+                return TrialResult(
+                    task_id=task.id,
+                    trial_num=trial_num,
+                    passed=False,
+                    reason="terminal:timeout",
+                    latency_seconds=latency,
+                    tool_calls=tool_calls,
+                    artifact={"type": "text", "payload": final_text},
+                    meta=self._usage_meta(),
+                )
             return TrialResult(
                 task_id=task.id,
                 trial_num=trial_num,
@@ -620,6 +817,7 @@ class DabSuite:
                 latency_seconds=latency,
                 tool_calls=tool_calls,
                 artifact={"type": "text", "payload": final_text},
+                meta=self._usage_meta(),
             )
 
         # Data-leakage backstop: if the trace shows the agent reached the answer key
@@ -636,6 +834,7 @@ class DabSuite:
                 latency_seconds=latency,
                 tool_calls=tool_calls,
                 artifact={"type": "text", "payload": final_text},
+                meta=self._usage_meta(),
             )
 
         passed, reason = score_with_validator(validator_path, final_text)
@@ -648,8 +847,60 @@ class DabSuite:
             latency_seconds=latency,
             tool_calls=tool_calls,
             artifact={"type": "text", "payload": final_text},
-            meta={"usage": self._last_usage} if self._last_usage else {},
+            meta=self._usage_meta(),
         )
+
+    def _usage_meta(self) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        if self._last_usage:
+            meta["usage"] = dict(self._last_usage)
+        if self._last_request_usage:
+            meta["request_usage"] = list(self._last_request_usage)
+        return meta
+
+    def _capture_provider_usage(self, provider: Any, *, usage_role: str | None = None) -> None:
+        provider_usage = getattr(provider, "usage", None)
+        if isinstance(provider_usage, dict):
+            if self._last_usage is None:
+                self._last_usage = {}
+            for key, value in cast("dict[str, Any]", provider_usage).items():
+                if isinstance(value, int):
+                    self._last_usage[key] = self._last_usage.get(key, 0) + value
+        request_usage = getattr(provider, "request_usage", None)
+        if isinstance(request_usage, list):
+            for item in cast("list[Any]", request_usage):
+                if isinstance(item, dict):
+                    captured = dict(cast("dict[str, Any]", item))
+                    if usage_role is not None:
+                        captured["provider_request"] = captured.get("request")
+                        captured["request"] = len(self._last_request_usage) + 1
+                        captured["usage_role"] = usage_role
+                    self._last_request_usage.append(captured)
+
+    def _capture_provider_usage_delta(
+        self,
+        provider: Any,
+        before_usage: dict[str, int],
+        before_request_count: int,
+        *,
+        usage_role: str,
+    ) -> None:
+        provider_usage = getattr(provider, "usage", None)
+        if isinstance(provider_usage, dict):
+            if self._last_usage is None:
+                self._last_usage = {}
+            for key, value in cast("dict[str, Any]", provider_usage).items():
+                if isinstance(value, int) and not isinstance(value, bool):
+                    delta = value - before_usage.get(key, 0)
+                    if delta:
+                        self._last_usage[key] = self._last_usage.get(key, 0) + delta
+        request_usage = getattr(provider, "request_usage", None)
+        if isinstance(request_usage, list):
+            for item in cast("list[Any]", request_usage)[before_request_count:]:
+                if isinstance(item, dict):
+                    captured = dict(cast("dict[str, Any]", item))
+                    captured["usage_role"] = usage_role
+                    self._last_request_usage.append(captured)
 
     # ── verified dispatch (consensus + re-derive) ─────────────────────────────
 
@@ -659,8 +910,33 @@ class DabSuite:
         # through the claude-code provider (same OAuth) on that path; otherwise reuse
         # the provider the agent itself runs on.
         judge_provider = "claude-code" if self._driver == "claude-mcp" else self._agent_provider
-        provider = build_provider(judge_provider, self._agent_model)
-        return provider_llm_fn(provider)
+        provider = build_provider(
+            judge_provider, self._agent_model, reasoning=self._agent_reasoning
+        )
+        llm_fn = provider_llm_fn(provider)
+
+        async def _tracked(prompt: str) -> str:
+            raw_usage = getattr(provider, "usage", None)
+            before_usage: dict[str, int] = {}
+            if isinstance(raw_usage, dict):
+                for key, value in cast("dict[str, Any]", raw_usage).items():
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        before_usage[key] = value
+            raw_requests = getattr(provider, "request_usage", None)
+            before_request_count = (
+                len(cast("list[Any]", raw_requests)) if isinstance(raw_requests, list) else 0
+            )
+            try:
+                return await llm_fn(prompt)
+            finally:
+                self._capture_provider_usage_delta(
+                    provider,
+                    before_usage,
+                    before_request_count,
+                    usage_role="verification",
+                )
+
+        return _tracked
 
     def _cartograph_llm_fn(self) -> LLMFn:
         # Author the semantics pass with the independent semantics model. Route to the
@@ -689,9 +965,14 @@ class DabSuite:
         verification_active = k > 1 or self._reverify or self._postverify
 
         async def _run_once(
-            i: int, extra: str = "", diversity_index: int | None = None
+            i: int,
+            extra: str = "",
+            diversity_index: int | None = None,
+            subdir_name: str | None = None,
         ) -> tuple[str, int, float]:
-            sub = scratch_dir / f"subrun{i}" if verification_active else scratch_dir
+            sub = (
+                scratch_dir / (subdir_name or f"subrun{i}") if verification_active else scratch_dir
+            )
             sub.mkdir(parents=True, exist_ok=True)
             return await self._dispatch_driver_once(
                 task,
@@ -707,8 +988,9 @@ class DabSuite:
         modal_index: int | None = None
         low_confidence: bool | None = None
         consensus_answers: list[str] | None = None
-        chosen_subdir_i: int | None = None
-        results: list[tuple[str, int, float]] = []
+        chosen_subrun_id: int | None = None
+        chosen_subdir_name: str | None = None
+        results: list[tuple[int, str, tuple[str, int, float]]] = []
 
         if k > 1:
             for i in range(k):
@@ -716,24 +998,28 @@ class DabSuite:
                     r = await _run_once(
                         i, diversity_index=(i if self._consensus_diversity else None)
                     )
-                    results.append(r)
+                    results.append((i, f"subrun{i}", r))
                     total_latency += r[2]
                 except Exception:
                     continue  # a failed sub-run is excluded from the vote
             if not results:
                 return await _run_once(0)  # all failed → let run_trial's handler see it
             llm_fn = self._verify_llm_fn()
-            idx, low = await choose_modal([r[0] for r in results], question=question, llm_fn=llm_fn)
+            idx, low = await choose_modal(
+                [result[0] for _, _, result in results],
+                question=question,
+                llm_fn=llm_fn,
+            )
             modal_index = idx
             low_confidence = low
-            consensus_answers = [r[0] for r in results]
-            primary = results[idx]
-            chosen_subdir_i = idx
+            consensus_answers = [result[0] for _, _, result in results]
+            chosen_subrun_id, chosen_subdir_name, primary = results[idx]
         else:
             primary = await _run_once(0)
             total_latency += primary[2]
             if verification_active:  # reverify-only path
-                chosen_subdir_i = 0
+                chosen_subrun_id = 0
+                chosen_subdir_name = "subrun0"
 
         # ── Argumentation: bounded rounds on a split vote ────────────────
         # Only fires when the K-run vote above came back low_confidence AND the
@@ -746,13 +1032,13 @@ class DabSuite:
         if k > 1 and low_confidence and self._argue_rounds > 0:
             for round_num in range(self._argue_rounds):
                 try:
-                    argued: list[tuple[str, int, float]] = []
-                    for i in range(len(results)):
+                    argued: list[tuple[int, str, tuple[str, int, float]]] = []
+                    for result_index, (subrun_id, _prior_subdir, _current) in enumerate(results):
                         block_lines = ["Other analysts concluded:"]
-                        for j, r in enumerate(results):
-                            if j == i:
+                        for other_index, (_other_id, _other_subdir, other) in enumerate(results):
+                            if other_index == result_index:
                                 continue
-                            block_lines.append(f"- {r[0][:1500]}")
+                            block_lines.append(f"- {other[0][:1500]}")
                         block_lines.append(
                             "Reconsider your answer in light of the above. If you still "
                             "believe your answer is correct, restate it; otherwise revise. "
@@ -760,23 +1046,34 @@ class DabSuite:
                         )
                         argue_extra = "\n".join(block_lines)
                         r = await _run_once(
-                            i,
+                            subrun_id,
                             extra=argue_extra,
-                            diversity_index=(i if self._consensus_diversity else None),
+                            diversity_index=(subrun_id if self._consensus_diversity else None),
+                            subdir_name=f"argue-round{round_num + 1}-subrun{subrun_id}",
                         )
-                        argued.append(r)
-                    total_latency += sum(r[2] for r in argued)
-                    results = argued
-                    argue_rounds_used = round_num + 1
+                        argued.append(
+                            (
+                                subrun_id,
+                                f"argue-round{round_num + 1}-subrun{subrun_id}",
+                                r,
+                            )
+                        )
                     llm_fn = self._verify_llm_fn()
                     idx, low = await choose_modal(
-                        [r[0] for r in results], question=question, llm_fn=llm_fn
+                        [result[0] for _, _, result in argued],
+                        question=question,
+                        llm_fn=llm_fn,
                     )
+                    # Commit the tentative round only after every rerun and the
+                    # judge vote succeed. Until here, prior answers and traces are
+                    # untouched and remain the fail-open selection.
+                    total_latency += sum(result[2] for _, _, result in argued)
+                    results = argued
+                    argue_rounds_used = round_num + 1
                     modal_index = idx
                     low_confidence = low
-                    consensus_answers = [r[0] for r in results]
-                    primary = results[idx]
-                    chosen_subdir_i = idx
+                    consensus_answers = [result[0] for _, _, result in results]
+                    chosen_subrun_id, chosen_subdir_name, primary = results[idx]
                     if not low_confidence:
                         break
                 except Exception:
@@ -811,7 +1108,8 @@ class DabSuite:
                     total_latency += reconcile[2]
                     reconcile_used = True
                     final_answer = reconcile
-                    chosen_subdir_i = 901
+                    chosen_subrun_id = 901
+                    chosen_subdir_name = "subrun901"
             except Exception:
                 pass  # fail-open: keep the primary answer
 
@@ -838,7 +1136,8 @@ class DabSuite:
                     total_latency += revised[2]
                     final_answer = revised
                     postverify_revised = True
-                    chosen_subdir_i = 902
+                    chosen_subrun_id = 902
+                    chosen_subdir_name = "subrun902"
             except Exception:
                 pass  # fail-open: keep the original final answer
 
@@ -860,6 +1159,8 @@ class DabSuite:
                     "postverify": self._postverify,
                     "postverify_violations": postverify_violations,
                     "postverify_revised": postverify_revised,
+                    "chosen_subrun_id": chosen_subrun_id,
+                    "chosen_subdir": chosen_subdir_name,
                     "chosen_answer": final_answer[0],
                 }
                 (scratch_dir / "verification.json").write_text(json.dumps(vdata, indent=2))
@@ -867,15 +1168,16 @@ class DabSuite:
                 pass  # fail-open: a write error must never trap the trial
 
             # Best-effort: promote chosen sub-run's trace file to scratch root
-            if chosen_subdir_i is not None:
+            if chosen_subdir_name is not None:
                 try:
                     import shutil
 
-                    chosen_sub = scratch_dir / f"subrun{chosen_subdir_i}"
+                    chosen_sub = scratch_dir / chosen_subdir_name
                     for src in chosen_sub.glob("*_tool_calls.jsonl"):
                         dst = scratch_dir / src.name
-                        if not dst.exists():
-                            shutil.copy2(src, dst)
+                        # The canonical trace must describe the newly selected
+                        # semantic attempt, including after an infra resume.
+                        shutil.copy2(src, dst)
                         break  # only one trace file expected per sub-run
                 except Exception:
                     pass  # fail-open
@@ -1004,6 +1306,11 @@ class DabSuite:
         # re-resolved by the claude CLI against the new cwd and double. The harness
         # passes a repo-relative scratch dir, so this matters in practice.
         scratch_dir = scratch_dir.resolve()
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        # One JSONL file represents exactly one fresh Claude attempt. Reset it
+        # before dispatch so retries cannot inherit calls and zero-tool successes
+        # still leave a valid empty trace.
+        (scratch_dir / "mcp_tool_calls.jsonl").write_text("", encoding="utf-8")
 
         if not shutil.which("claude"):
             raise RuntimeError(
@@ -1085,6 +1392,7 @@ class DabSuite:
             task,
             include_cartographer_line=maze_root is not None,
             max_tool_calls=self._agent_max_tool_calls,
+            include_levers=self._agent_levers,
         )
         if extra_instructions:
             prompt = f"{prompt}\n\n{extra_instructions}"
@@ -1190,10 +1498,19 @@ class DabSuite:
         extra_instructions: str = "",
         diversity_index: int | None = None,
     ) -> tuple[str, int, float]:
-        # P3 (sandbox note): this path is in-process. The registry exposes no
-        # file-read/shell tool and the submission provider (codex/GPT-5.5) has no
-        # native Bash, so the agent cannot read answer keys. Only carry providers
-        # WITHOUT native filesystem/shell access here; claude-mcp is the path for Claude.
+        # A trace file is a per-trial submission artifact even when the model
+        # makes zero tool calls. Reset it on an infra retry so attempts cannot be
+        # merged into one misleading semantic trace.
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        (scratch_dir / "agent_tool_calls.jsonl").write_text("")
+
+        # Sandbox note: this path is in-process and exposes no shell/subprocess
+        # tool, and the submission provider (codex) has no native Bash. It is NOT
+        # a filesystem sandbox: load_file, attach_database, and DuckDB
+        # read_csv_auto() via run_sql can read local paths, so answer-key access
+        # is prevented by the taint gate + per-trace audit, not by construction.
+        # Only carry providers WITHOUT native shell access here; claude-mcp is
+        # the sandboxed path for Claude.
         from labrat.agent.data_tools import build_data_tools_registry
         from labrat.agent.providers import build_provider
         from labrat.agent.runner import run_agent_task
@@ -1216,6 +1533,9 @@ class DabSuite:
         # builds are empty; introspect now (post-connect) so the catalog-backed tools
         # (list_tables / describe_table / column_stats / search_columns) actually work.
         introspect_env_catalogs(env.ctx)
+        env.ctx.llm_classify_concurrency = self._llm_classify_concurrency
+        env.ctx.llm_classify_row_budget = self._llm_classify_row_budget
+        env.ctx.llm_classify_rows_used = 0
 
         cartograph_root: Path | None = None
         if self._cartograph:
@@ -1231,6 +1551,8 @@ class DabSuite:
                 variant_seed=diversity_index or 0,
             )
 
+        provider: Any | None = None
+        classifier_provider: Any | None = None
         try:
             registry = build_data_tools_registry()
             provider = build_provider(
@@ -1244,7 +1566,37 @@ class DabSuite:
                 # machines each time. Only the codex provider uses it.
                 cache_key=task.id,
             )
-            system_prompt = _build_labrat_agent_system_prompt(env)
+            if (
+                self._llm_classify_model != self._agent_model
+                or self._llm_classify_reasoning != self._agent_reasoning
+            ):
+                classifier_provider = build_provider(
+                    self._agent_provider,
+                    self._llm_classify_model,
+                    timeout=self._agent_timeout,
+                    reasoning=self._llm_classify_reasoning,
+                    cache_key=(
+                        f"{task.id}:llm_classify:{self._llm_classify_model}:"
+                        f"{self._llm_classify_reasoning or 'default'}"
+                    ),
+                )
+            system_prompt = _build_labrat_agent_system_prompt(
+                env, include_levers=self._agent_levers
+            )
+            if self._llm_classify_row_budget is not None:
+                system_prompt = (
+                    system_prompt + "\n\nEvaluator budget: llm_classify may process at most "
+                    f"{self._llm_classify_row_budget} cumulative rows in this trial. "
+                    "The cap spans all calls. Use the budget deliberately and produce "
+                    "the best final answer from the resulting evidence."
+                )
+            if self._agent_provider == "codex" and self._agent_reasoning == "ultra":
+                system_prompt = (
+                    system_prompt
+                    + "\n\nProactive multi-agent delegation is active. Use dispatch_subagent "
+                    "when a task can be divided into concrete independent investigations, "
+                    "then synthesize and verify the results."
+                )
             if cartograph_root is not None:
                 system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
             if extra_instructions:
@@ -1275,11 +1627,14 @@ class DabSuite:
                 ctx=env.ctx,
                 registry=registry,
                 provider=provider,
+                llm_classify_provider=classifier_provider,
                 system_prompt=system_prompt,
                 max_turns=self._agent_max_turns,
                 max_tool_calls=self._agent_max_tool_calls,
                 verify=self._agent_verify,
                 on_tool_call=_trace,
+                enable_ledger=self._agent_ledger,
+                ledger_dir=scratch_dir,
             )
             if cartograph_root is not None:
                 (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)
@@ -1300,53 +1655,36 @@ class DabSuite:
                 result = await asyncio.wait_for(
                     run_agent_task(**run_kwargs), timeout=effective_timeout
                 )
-            # Capture per-trial token usage if the provider tracks it (codex does);
-            # run_trial folds it into TrialResult.meta so trials.jsonl records real
-            # tokens + cache hit rate.
-            provider_usage = getattr(provider, "usage", None)
-            self._last_usage = (
-                cast("dict[str, int]", dict(cast("dict[str, Any]", provider_usage)))
-                if isinstance(provider_usage, dict)
-                else None
-            )
         finally:
+            # Preserve all completed-turn usage even when a later request times out,
+            # rate-limits, or raises. Consensus/reverify sub-runs accumulate here.
+            if provider is not None:
+                self._capture_provider_usage(provider)
+            if classifier_provider is not None:
+                self._capture_provider_usage(classifier_provider, usage_role="llm_classify")
             for conn in env.ctx.connections.values():
                 disconnect = getattr(conn, "disconnect", None)
                 if callable(disconnect):
                     disconnect()
+        if getattr(result, "turn_budget_exhausted", False):
+            from labrat.agent.tool_trace import append_tool_trace
+
+            max_turns = self._agent_max_turns
+            final_text = f"[trial exhausted {max_turns}-turn budget without a final answer]"
+            append_tool_trace(
+                scratch_dir,
+                "agent_tool_calls.jsonl",
+                tool="runner_turn_budget",
+                input={"max_turns": max_turns},
+                ok=False,
+                output=final_text,
+                latency_ms=0.0,
+            )
+            return final_text, result.tool_calls, result.latency_seconds
         return result.final_text, result.tool_calls, result.latency_seconds
 
     def aggregate(self, results: list[TrialResult]) -> AggregateScore:
-        if not results:
-            return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
-
-        # Drop infra failures so they don't depress the pass rate on queries that
-        # never got a fair shot (Max-plan session limit, API credit, timeout), and
-        # contaminated trials (data-leakage backstop) which are withdrawn entirely.
-        _withdrawn = ("infra:", "contaminated:")
-        semantic_results = [r for r in results if not (r.reason or "").startswith(_withdrawn)]
-        if not semantic_results:
-            return AggregateScore(overall=0.0, per_task={}, n_tasks=0, n_trials=0, n_passes=0)
-
-        per_task: dict[str, list[bool]] = {}
-        for r in semantic_results:
-            per_task.setdefault(r.task_id, []).append(r.passed)
-        per_task_pass_rate = {tid: sum(passes) / len(passes) for tid, passes in per_task.items()}
-
-        by_dataset: dict[str, list[float]] = {}
-        for tid, pr in per_task_pass_rate.items():
-            dataset = tid.split(":", 1)[0]
-            by_dataset.setdefault(dataset, []).append(pr)
-        dataset_means = {ds: sum(prs) / len(prs) for ds, prs in by_dataset.items()}
-
-        return AggregateScore(
-            overall=sum(dataset_means.values()) / len(dataset_means),
-            per_task=per_task_pass_rate,
-            by_dimension={"dataset": dataset_means},
-            n_tasks=len(per_task),
-            n_trials=len(results),
-            n_passes=sum(1 for r in results if r.passed),
-        )
+        return aggregate_dab_results(results)
 
     def write_submission(self, report: BenchmarkReport, output_dir: Path) -> None:
         from labrat.eval.benchmarks.dab.reporter import write_submission_json

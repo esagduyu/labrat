@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import duckdb
 import polars as pl
 import pytest
 
+from labrat.agent.providers.base import RateLimitError
 from labrat.agent.tools.base import ToolContext
 from labrat.agent.tools.llm_primitives import ExtractResult, extract_rows
 from labrat.db.duckdb_engine import DuckDBConnection
@@ -222,6 +224,204 @@ async def test_extract_rows_classify_empty_labels_rejected(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="labels"):
         await extract_rows(
             ctx, table="patents", text_column="abstract", key_columns=["id"], spec=[]
+        )
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_batch_preserves_row_alignment(tmp_path: Path) -> None:
+    calls = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+            1
+        ].split("\n\nRespond with ONLY", 1)[0]
+        rows = json.loads(encoded)
+        return json.dumps(
+            [
+                {
+                    "row": item["row"],
+                    "category": "Sports" if "Alan" in item["text"] else "Business",
+                }
+                for item in rows
+            ]
+        )
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        classify_batch_size=2,
+        max_requests=2,
+    )
+    assert result.rows_processed == 3
+    assert result.rows_failed == 0
+    assert result.requests_made == 2
+    assert calls == 2
+    assert result.df["category"].to_list() == ["Business", "Business", "Sports"]
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_request_budget_clamps_rows_and_calls(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+            1
+        ].split("\n\nRespond with ONLY", 1)[0]
+        rows = json.loads(encoded)
+        return json.dumps([{"row": item["row"], "category": "Business"} for item in rows])
+
+    conn = _make_big_conn(tmp_path, 300)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        max_rows=20_000,
+        classify_batch_size=50,
+        max_requests=2,
+    )
+    assert result.rows_processed == 100
+    assert result.requests_made == 2
+    assert calls == 2
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_concurrency_is_bounded_at_two(tmp_path: Path) -> None:
+    calls = 0
+    active = 0
+    max_active = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal active, calls, max_active
+        calls += 1
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.01)
+            encoded = prompt.split("Texts (JSON array; `row` is only a position identifier):\n", 1)[
+                1
+            ].split("\n\nRespond with ONLY", 1)[0]
+            rows = json.loads(encoded)
+            return json.dumps([{"row": item["row"], "category": "Business"} for item in rows])
+        finally:
+            active -= 1
+
+    conn = _make_big_conn(tmp_path, 6)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        classify_batch_size=2,
+        classify_concurrency=2,
+        max_requests=3,
+    )
+    assert result.requests_made == 3
+    assert calls == 3
+    assert max_active == 2
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_rate_limit_cancels_sibling_batches(
+    tmp_path: Path,
+) -> None:
+    started = 0
+
+    async def limited(_prompt: str) -> str:
+        nonlocal started
+        started += 1
+        if started == 1:
+            raise RateLimitError()
+        await asyncio.sleep(10)
+        return "[]"
+
+    conn = _make_big_conn(tmp_path, 20)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=limited)
+    with pytest.raises(RateLimitError):
+        await extract_rows(
+            ctx,
+            table="patents",
+            text_column="abstract",
+            key_columns=["id"],
+            spec=["Business", "Sports"],
+            classify_batch_size=2,
+            classify_concurrency=2,
+            max_requests=10,
+        )
+    assert started <= 2
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_batch_rejects_ambiguous_row_mapping(
+    tmp_path: Path,
+) -> None:
+    async def duplicate_rows(_prompt: str) -> str:
+        return json.dumps(
+            [
+                {"row": 0, "category": "Business"},
+                {"row": 0, "category": "Sports"},
+            ]
+        )
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=duplicate_rows)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        limit=2,
+        classify_batch_size=2,
+        max_requests=1,
+    )
+    assert result.rows_processed == 2
+    assert result.rows_failed == 2
+    assert result.requests_made == 1
+    assert result.df["category"].to_list() == [None, None]
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_hard_limits_apply_to_direct_call(
+    tmp_path: Path,
+) -> None:
+    async def never(_prompt: str) -> str:
+        raise AssertionError("must not be called")
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=never)
+    with pytest.raises(ValueError, match="classify_batch_size"):
+        await extract_rows(
+            ctx,
+            table="patents",
+            text_column="abstract",
+            key_columns=["id"],
+            spec=["Business", "Sports"],
+            classify_batch_size=51,
+        )
+    with pytest.raises(ValueError, match="max_requests"):
+        await extract_rows(
+            ctx,
+            table="patents",
+            text_column="abstract",
+            key_columns=["id"],
+            spec=["Business", "Sports"],
+            max_requests=401,
         )
     conn.disconnect()
 

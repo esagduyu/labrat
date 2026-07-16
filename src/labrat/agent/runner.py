@@ -28,6 +28,8 @@ class AgentTaskResult(BaseModel):
     final_text: str
     tool_calls: int
     latency_seconds: float
+    turns: int = 0
+    turn_budget_exhausted: bool = False
 
 
 async def run_agent_task(
@@ -36,6 +38,7 @@ async def run_agent_task(
     ctx: ToolContext,
     registry: ToolRegistry,
     provider: ModelProvider,
+    llm_classify_provider: ModelProvider | None = None,
     system_prompt: str,
     max_turns: int | None = None,
     max_tool_calls: int | None = None,
@@ -65,6 +68,9 @@ async def run_agent_task(
 
     This runner also injects ``ctx.llm_fn`` (via ``provider_llm_fn``) when the caller
     left it None, enabling the per-row llm_extract/llm_classify tools on this path.
+    ``llm_classify_provider`` optionally isolates classification calls onto a
+    dedicated model without redirecting ``llm_extract``; when omitted both keep
+    using ``provider`` exactly as before.
     """
     text_parts: list[str] = []
 
@@ -75,6 +81,7 @@ async def run_agent_task(
         ctx=ctx,
         registry=registry,
         provider=provider,
+        llm_classify_provider=llm_classify_provider,
         system_prompt=system_prompt,
         verify=verify,
         max_verify_rounds=max_verify_rounds,
@@ -91,4 +98,6 @@ async def run_agent_task(
         final_text="".join(text_parts),
         tool_calls=loop.tool_calls_used,
         latency_seconds=latency,
+        turns=loop.turns_used,
+        turn_budget_exhausted=loop.turn_budget_exhausted,
     )
