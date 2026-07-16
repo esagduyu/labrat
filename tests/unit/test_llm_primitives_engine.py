@@ -226,6 +226,138 @@ async def test_extract_rows_classify_empty_labels_rejected(tmp_path: Path) -> No
     conn.disconnect()
 
 
+async def test_extract_rows_classify_batch_preserves_row_alignment(tmp_path: Path) -> None:
+    calls = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        encoded = prompt.split(
+            "Texts (JSON array; `row` is only a position identifier):\n", 1
+        )[1].split("\n\nRespond with ONLY", 1)[0]
+        rows = json.loads(encoded)
+        return json.dumps(
+            [
+                {
+                    "row": item["row"],
+                    "category": "Sports" if "Alan" in item["text"] else "Business",
+                }
+                for item in rows
+            ]
+        )
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        classify_batch_size=2,
+        max_requests=2,
+    )
+    assert result.rows_processed == 3
+    assert result.rows_failed == 0
+    assert result.requests_made == 2
+    assert calls == 2
+    assert result.df["category"].to_list() == ["Business", "Business", "Sports"]
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_request_budget_clamps_rows_and_calls(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        encoded = prompt.split(
+            "Texts (JSON array; `row` is only a position identifier):\n", 1
+        )[1].split("\n\nRespond with ONLY", 1)[0]
+        rows = json.loads(encoded)
+        return json.dumps(
+            [{"row": item["row"], "category": "Business"} for item in rows]
+        )
+
+    conn = _make_big_conn(tmp_path, 300)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        max_rows=20_000,
+        classify_batch_size=50,
+        max_requests=2,
+    )
+    assert result.rows_processed == 100
+    assert result.requests_made == 2
+    assert calls == 2
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_batch_rejects_ambiguous_row_mapping(
+    tmp_path: Path,
+) -> None:
+    async def duplicate_rows(_prompt: str) -> str:
+        return json.dumps(
+            [
+                {"row": 0, "category": "Business"},
+                {"row": 0, "category": "Sports"},
+            ]
+        )
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=duplicate_rows)
+    result = await extract_rows(
+        ctx,
+        table="patents",
+        text_column="abstract",
+        key_columns=["id"],
+        spec=["Business", "Sports"],
+        limit=2,
+        classify_batch_size=2,
+        max_requests=1,
+    )
+    assert result.rows_processed == 2
+    assert result.rows_failed == 2
+    assert result.requests_made == 1
+    assert result.df["category"].to_list() == [None, None]
+    conn.disconnect()
+
+
+async def test_extract_rows_classify_hard_limits_apply_to_direct_call(
+    tmp_path: Path,
+) -> None:
+    async def never(_prompt: str) -> str:
+        raise AssertionError("must not be called")
+
+    conn = _make_conn(tmp_path)
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=never)
+    with pytest.raises(ValueError, match="classify_batch_size"):
+        await extract_rows(
+            ctx,
+            table="patents",
+            text_column="abstract",
+            key_columns=["id"],
+            spec=["Business", "Sports"],
+            classify_batch_size=51,
+        )
+    with pytest.raises(ValueError, match="max_requests"):
+        await extract_rows(
+            ctx,
+            table="patents",
+            text_column="abstract",
+            key_columns=["id"],
+            spec=["Business", "Sports"],
+            max_requests=401,
+        )
+    conn.disconnect()
+
+
 async def test_extract_rows_where_filters(tmp_path: Path) -> None:
     async def classify_llm(prompt: str) -> str:
         return "Business"

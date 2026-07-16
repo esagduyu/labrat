@@ -15,7 +15,12 @@ import polars as pl
 from pydantic import BaseModel, Field, PrivateAttr
 
 from labrat.agent.tools.base import Tool, ToolContext
-from labrat.agent.tools.llm_primitives import extract_rows
+from labrat.agent.tools.llm_primitives import (
+    MAX_BATCHED_CLASSIFY_ROWS,
+    MAX_CLASSIFY_BATCH_SIZE,
+    MAX_NESTED_REQUESTS,
+    extract_rows,
+)
 from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.duckdb_engine import DuckDBConnection
 
@@ -43,7 +48,29 @@ class _Input(BaseModel):
     where: str | None = Field(default=None, description="Optional SQL WHERE fragment.")
     limit: int | None = Field(
         default=None,
-        description="Optional row cap; always clamped to the hard max of 200 rows.",
+        ge=1,
+        description=(
+            "Optional row cap. Non-batched calls are clamped to 200 rows; batched "
+            "calls are clamped by batch_size * max_requests and the 20,000-row hard max."
+        ),
+    )
+    batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=MAX_CLASSIFY_BATCH_SIZE,
+        description=(
+            "Texts classified per nested LLM request. Default 1 preserves per-row "
+            "behavior; use up to 50 for large datasets."
+        ),
+    )
+    max_requests: int = Field(
+        default=MAX_NESTED_REQUESTS,
+        ge=1,
+        le=MAX_NESTED_REQUESTS,
+        description=(
+            "Hard budget for nested LLM requests in this tool call (maximum 400). "
+            "The selected row count is clamped before execution so this cannot be exceeded."
+        ),
     )
     result_table: str | None = Field(
         default=None,
@@ -56,6 +83,7 @@ class _Output(BaseModel):
     result_table: str | None = None
     rows_processed: int = 0
     rows_failed: int = 0
+    requests_made: int = 0
     columns: list[str] = []
     error: str | None = None
 
@@ -75,7 +103,7 @@ class _Output(BaseModel):
 
 
 class LlmClassifyTool(Tool[_Input]):
-    """Fan out one LLM call per row to classify text into a fixed label set."""
+    """Classify rows individually or in strict, request-budgeted batches."""
 
     mutating = True  # materializes a (temp) result table
 
@@ -86,8 +114,11 @@ class LlmClassifyTool(Tool[_Input]):
     @property
     def description(self) -> str:
         return (
-            "Classify an unstructured text column into a fixed set of labels, one LLM "
-            "call per row (hard cap 200 rows). The result is materialized as a DuckDB "
+            "Classify an unstructured text column into a fixed set of labels. The "
+            "default is one LLM call per row with a 200-row cap. For large tables, set "
+            "batch_size up to 50; batched mode can cover up to 20,000 rows while "
+            "max_requests enforces at most 400 nested calls. The result is materialized "
+            "as a DuckDB "
             "temp table (default 'llm_classify_result') with your key_columns plus a "
             "VARCHAR 'category' column constrained to the labels, joinable with "
             "run_sql. Rows whose classification fails (including out-of-label replies) "
@@ -128,6 +159,11 @@ class LlmClassifyTool(Tool[_Input]):
                 spec=args.labels,
                 where=args.where,
                 limit=args.limit,
+                max_rows=(
+                    MAX_BATCHED_CLASSIFY_ROWS if args.batch_size > 1 else 200
+                ),
+                classify_batch_size=args.batch_size,
+                max_requests=args.max_requests,
             )
             conn.materialize_table(result_table, result.df.to_arrow())  # type: ignore[arg-type]
         except Exception as exc:
@@ -137,6 +173,7 @@ class LlmClassifyTool(Tool[_Input]):
             result_table=result_table,
             rows_processed=result.rows_processed,
             rows_failed=result.rows_failed,
+            requests_made=result.requests_made,
             columns=result.df.columns,
         )
         out.attach_result_df(result.df)

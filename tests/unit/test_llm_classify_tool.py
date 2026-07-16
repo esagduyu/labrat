@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import duckdb
@@ -120,4 +121,51 @@ async def test_classify_tool_empty_labels_structured_error(tmp_path: Path) -> No
     assert not out.ok
     assert out.error is not None
     assert "labels" in out.error
+    conn.disconnect()
+
+
+async def test_classify_tool_batches_more_than_legacy_200_row_cap(tmp_path: Path) -> None:
+    path = str(tmp_path / "large-classify.duckdb")
+    raw = duckdb.connect(path)
+    raw.execute("CREATE TABLE articles (id INTEGER, headline VARCHAR)")
+    raw.executemany(
+        "INSERT INTO articles VALUES (?, ?)",
+        [(row, f"Business headline {row}") for row in range(250)],
+    )
+    raw.close()
+    conn = DuckDBConnection(path=path, read_only=False)
+    conn.connect()
+
+    calls = 0
+
+    async def batch_llm(prompt: str) -> str:
+        nonlocal calls
+        calls += 1
+        encoded = prompt.split(
+            "Texts (JSON array; `row` is only a position identifier):\n", 1
+        )[1].split("\n\nRespond with ONLY", 1)[0]
+        rows = json.loads(encoded)
+        return json.dumps(
+            [{"row": item["row"], "category": "Business"} for item in rows]
+        )
+
+    ctx = ToolContext(connection=conn, catalog=None, llm_fn=batch_llm)
+    tool = LlmClassifyTool()
+    out = await tool.execute(
+        ctx,
+        tool.input_model(
+            table="articles",
+            text_column="headline",
+            labels=_LABELS,
+            key_columns=["id"],
+            batch_size=50,
+            max_requests=5,
+        ),
+    )
+    assert out.ok
+    assert out.rows_processed == 250
+    assert out.rows_failed == 0
+    assert out.requests_made == 5
+    assert calls == 5
+    assert conn.execute("SELECT COUNT(*) AS n FROM llm_classify_result")["n"].item() == 250
     conn.disconnect()
