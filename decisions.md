@@ -1005,3 +1005,14 @@ cumulative `llm_classify` row budget across delegation and propagates `active_ma
 `dab_shards` compat checks share one `_require_compat` helper with honest
 absent-key diagnostics. Real-package rebuild verified byte-identical after every
 change (config fea3b353…, trials 540999c5…).
+
+## 2026-07-16 — DAB leaderboard: LabRat #5 of 27 at 74.18% (PR #72 accepted)
+
+The GPT-5.6 Luna Max submission was accepted as-is (no adjustment, no footnote):
+**"LabRat (GPT-5.6-Luna-Max + Cartographer)", rank 5 of 27, stratified Pass@1
+0.7418**. The board simultaneously added a "Tuned prompt ✓" column — ranks 1–3
+(Alkera ×2, SCRIBE) all carry it, so LabRat is the **#2 untuned-prompt entry,
+0.15pp behind Spacedock**. Both prior entries remain (#13 Sonnet+Cartographer
+0.6088, #18 first Sonnet 0.5138), giving the public board three LabRat points that
+tell the provider-aware grounding story end-to-end. Positioning language lives in
+README §DataAgentBench and docs/competitive-analysis-2026-07-16.md §8.

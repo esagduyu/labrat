@@ -947,8 +947,9 @@ full submission regrades to 176/270 and stratified 0.6088217338.
 This is not a model-only causal comparison. PR #65 used Claude Sonnet 4.6 with
 Cartographer and Hints; current uses GPT-5.6 Luna Max with Cartographer, Hints,
 Levers, and ContextLedger on a different host/runtime. The ten new AG News rows
-used a disclosed task-specific 10-turn/200-row cap; maintainers must decide
-whether that evaluator policy is acceptable. Note on `git status` in the DAB
+used a disclosed task-specific 10-turn/200-row cap; **the maintainers accepted the
+submission as-is (PR #72, 2026-07-16 — leaderboard #5 at 0.7418, no adjustment, no
+footnote, and no "Tuned prompt" mark under the board's new tuned-prompt column).** Note on `git status` in the DAB
 checkout: five input BSON files (agnews, cve, usaspending, two yelp) show as
 modified, but all five are byte-identical to their committed blobs
 (`git hash-object --no-filters` equals the index SHA-1). The status flag is a

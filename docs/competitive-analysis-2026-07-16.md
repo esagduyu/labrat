@@ -84,3 +84,14 @@ tokens on bulk classification; the only working consensus design is MinusX's
 debate (AGPL source); our no-shell registry is a proven differentiator (two of
 the top three had shell-path leakage episodes); and per-backbone asymmetry is
 universal but measured only by us.
+
+## 8. Outcome update (2026-07-16, end of day)
+
+All pending submissions processed, board now 27 entries: **Alkera #1 (0.8328,
+Fable-5+Opus) and #3 (0.8044, Opus)** · SCRIBE #2 (0.8185) · Spacedock #4 (0.7433)
+· **LabRat #5 (0.7418, accepted as-is — no adjustment, no footnote)**. The
+maintainers also added a **"Tuned prompt ✓" column** (DAB-specific up-front prompts
+built from close study of the benchmark's task conventions): ranks 1–3 all carry
+it; **among untuned entries LabRat is #2, 0.15pp behind Spacedock** — the
+positioning wedge from §4 is now institutionalized by the benchmark itself.
+Screenshot: `docs/images/dab-leaderboard-2026-07-16.png`.

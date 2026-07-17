@@ -727,3 +727,19 @@ The Phase 1b run output lives at `runs/dab/dab-1780121141/`. Trial-level results
 ---
 
 *LabRat is [open-source under AGPL-3.0](https://github.com/esagduyu/labrat). DAB integration code: `src/labrat/eval/benchmarks/dab/`. Setup: `scripts/dab_setup.py`.*
+
+---
+
+## 2026-07-16 — GPT-5.6 entry accepted: leaderboard #5 of 27 at 74.18%
+
+The GPT-5.6 Luna Max campaign (labrat-agent driver, codex provider, Cartographer +
+levers + hints + Context Ledger; full story in
+[dab-solultra-ablation.md](dab-solultra-ablation.md)) was submitted as
+[PR #72](https://github.com/ucbepic/DataAgentBench/pull/72) and **accepted as-is**
+("Thanks for the submission and the detailed traces") — **#5 of 27 at stratified
+Pass@1 0.7418**, +13.3pp over our Sonnet entry (#13, 0.6088, still on the board).
+The board's new "Tuned prompt" column marks ranks 1–3 as benchmark-tuned; among
+untuned entries LabRat is #2, 0.15pp behind Spacedock. Independently audited
+pre-submission (zero P0/P1; byte-identical package rebuild;
+`claude-fable-gpt56-dab-audit-report.md`). Screenshot:
+`images/dab-leaderboard-2026-07-16.png`.
