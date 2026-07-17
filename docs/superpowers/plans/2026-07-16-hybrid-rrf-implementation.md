@@ -27,7 +27,7 @@ Both default `False`; `_sub_ctx` propagates; TUI `screens/main.py` sets ctx flag
 **T4 — tool integration (both search tools).**
 After the lexical `hits` list and before sort/top-k: `if ctx.hybrid_retrieval:` build the candidate list (same context-heading exclusions), load embedder+cache (user-layer sidecar `<home>/.labrat/maze/<profile>/<kind>/.embeddings.jsonl`), fused order replaces the sort; lexical `score`/`matched_terms` reported as today (0 / [] for semantic-only hits). Flag off ⇒ code path untouched. Tests: paraphrase query retrieves a lexically-disjoint section under a stub embedder; flag-off output equality vs baseline capture; flag-on + no embedder ⇒ lexical; empty store `[]`.
 
-**T5 — packaging + docs.** `pyproject.toml` optional extra `semantic = ["model2vec>=0.5,<0.7"]` (numpy-only, MIT, ~30 MB model artifacts fetched on first use); CLAUDE.md one-liner; this plan updated with outcomes.
+**T5 — packaging + docs.** `pyproject.toml` optional extra `semantic = ["model2vec>=0.8,<0.9"] (0.8.2 current, MIT, numpy-only)` (numpy-only, MIT, ~30 MB model artifacts fetched on first use); CLAUDE.md one-liner; this plan updated with outcomes.
 
 ## Acceptance gates (every task + end)
 `uv run ruff format . && uv run ruff check . && uv run pyright && uv run pytest tests/unit -q` — plus full `uv run pytest -q` once at the end. Commit per task boundary.
@@ -37,3 +37,13 @@ After the lexical `hits` list and before sort/top-k: `if ctx.hybrid_retrieval:` 
 - **Default model id:** `minishlab/potion-base-8M` (model2vec's standard small model), overridable via `LABRAT_EMBED_MODEL` (local path or HF id). First use may fetch the model (provisioning); offline-without-model fails open to lexical.
 - **Semantic-only hits report `score=0.0, matched_terms=[]`** (lexical fields keep lexical semantics; fused order is the ranking, not the displayed score). Alternative (report fused score) rejected to avoid changing the meaning of an existing field.
 - **Settings-screen toggle shipped now** (trivial pattern); the spec left UI exposure open.
+
+## Outcome (2026-07-16)
+
+All five tasks landed on `feat/hybrid-rrf-retrieval` (T1–T2 `64e45b2`, T3 `121f9bb`,
+T4 `b7ec2a1`, T5 packaging commit). Suite 1438 passed / 7 skipped; ruff + pyright
+clean; the flag-off byte-identity test includes an embedder-must-not-load tripwire.
+Dep pinned `model2vec>=0.8,<0.9` (0.8.2 current; MIT; numpy-only; default model
+`minishlab/potion-base-8M`, ~30 MB, fetched on first use, override via
+LABRAT_EMBED_MODEL). NOT merged: enabling anywhere still requires the DAB A/B from
+spec §4.1; the branch waits for review + the user's merge call.

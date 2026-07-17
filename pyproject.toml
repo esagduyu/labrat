@@ -42,6 +42,11 @@ dependencies = [
     "pyarrow>=24.0.0",
 ]
 
+[project.optional-dependencies]
+# Hybrid (semantic) retrieval for Scent/Trail search — local static embeddings,
+# pure-numpy inference, no torch. Base install stays lexical-only without it.
+semantic = ["model2vec>=0.8,<0.9"]
+
 [project.scripts]
 labrat = "labrat.cli:app"
 
