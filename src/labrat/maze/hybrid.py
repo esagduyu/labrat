@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
-from labrat.maze.embedding import Embedder, SectionEmbeddingCache
+from labrat.maze.embedding import Embedder, SectionEmbeddingCache, get_default_embedder
 
 #: Section identity within one retrieval: (domain, section index).
 SectionKey = tuple[str, int]
@@ -76,3 +78,44 @@ def fused_section_order(
     fused = rrf_fuse([list(lexical_order), sem], k=k)
     ordered = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
     return [key for key, _ in ordered]
+
+
+def user_embedding_sidecar(profile: str, kind: str, home: Path | None = None) -> Path:
+    """The per-profile, per-kind ``.embeddings.jsonl`` sidecar (user maze layer).
+
+    One sidecar per kind is enough: entries are content-hash keyed, so which
+    layer a section came from is irrelevant. The user layer is the always-
+    writable location in the TUI flow; the benchmark path never gets here
+    (flag off).
+    """
+    return (home or Path.home()) / ".labrat" / "maze" / profile / kind / ".embeddings.jsonl"
+
+
+def hybrid_section_keys(
+    question: str,
+    docs: Sequence[Any],
+    *,
+    skip_heading: str,
+    lexical_order: Sequence[SectionKey],
+    profile: str,
+    kind: str,
+) -> list[SectionKey] | None:
+    """Tool-facing orchestrator: fused order over every non-context section.
+
+    ``docs`` are merged ``ScentDoc``s (typed loosely to avoid a maze->tools
+    import cycle). Returns ``None`` on any fail-open condition so the calling
+    tool keeps its pure-lexical result.
+    """
+    embedder = get_default_embedder()
+    if embedder is None:
+        return None
+    candidates: list[tuple[SectionKey, str]] = []
+    for doc in docs:
+        for idx, section in enumerate(doc.sections):
+            if section.heading.strip().lower() == skip_heading:
+                continue
+            candidates.append(
+                ((doc.domain, idx), f"{doc.domain} {section.heading}\n{section.body}")
+            )
+    cache = SectionEmbeddingCache(user_embedding_sidecar(profile, kind), embedder)
+    return fused_section_order(question, candidates, lexical_order, embedder=embedder, cache=cache)
