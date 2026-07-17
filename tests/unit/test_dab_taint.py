@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -322,3 +323,157 @@ def test_audit_run_rejects_symlinked_trace_paths(
     verdicts = audit_run(trials_jsonl, scratch)
 
     assert verdicts["stockindex:1:0"] == AUDIT_ERROR
+
+
+def test_audit_run_flags_obfuscated_answer_key_read_in_trace(tmp_path: Path) -> None:
+    """Taint v2: concat-folded literals must be caught even when no raw needle
+    appears anywhere in the trace text (evasion case from the 2026-07-16 audit)."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "agnews_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            _trace_record(
+                tool_input={
+                    "query": "SELECT * FROM read_csv_auto(concat('ground_', 'tr' || 'uth.csv'))"
+                }
+            )
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "agnews:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["agnews:1:0"] == CHEATING
+
+
+def test_audit_run_flags_unsanctioned_attach_path(tmp_path: Path) -> None:
+    """Taint v2: a file source outside the benchmark's query_dataset layout is
+    flagged structurally even though its text matches no needle."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "yelp_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "tool": "attach_database",
+                "input": {"path": "/opt/elsewhere/answers.db", "alias": "a"},
+                "ok": True,
+                "output": "attached",
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "yelp:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["yelp:1:0"] == CHEATING
+
+
+def test_audit_run_reports_structural_findings_on_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """P3-5: when the structural layer fires, the audit surfaces the first few
+    findings (task:trial, tag, detail) on stderr so gate offenders are
+    actionable without re-running the scan by hand."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "yelp_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "tool": "attach_database",
+                "input": {"path": "/opt/elsewhere/answers.db", "alias": "a"},
+                "ok": True,
+                "output": "attached",
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "yelp:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["yelp:1:0"] == CHEATING
+    err = capsys.readouterr().err
+    assert "yelp:1:0" in err
+    assert "unsanctioned_path" in err
+    assert "attach_database" in err
+
+
+def _submission_corpus_dir() -> Path | None:
+    """The shipped final-270 package, wherever this checkout lives (worktrees
+    share the repo but not untracked runs/, so fall back to the main clone)."""
+    candidates = (
+        Path(__file__).resolve().parents[2] / "runs/dab/submission-gpt56-luna-max-ledger-final-270",
+        Path.home() / "repos/labrat/runs/dab/submission-gpt56-luna-max-ledger-final-270",
+    )
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+@pytest.mark.skipif(
+    _submission_corpus_dir() is None,
+    reason="final-270 submission corpus not present on this machine",
+)
+def test_final_270_submission_corpus_audits_clean(tmp_path: Path) -> None:
+    """P3-4: the shipped 270-trace evidence package must re-audit 270/270 clean
+    under the full gate (v1 needles + v2 structural layers). The run directory
+    itself stays read-only: inputs are copied so taint.json lands in tmp."""
+    corpus = _submission_corpus_dir()
+    assert corpus is not None
+    shutil.copy(corpus / "trials.jsonl", tmp_path / "trials.jsonl")
+    shutil.copy(corpus / "config.json", tmp_path / "config.json")
+
+    verdicts = audit_run(tmp_path / "trials.jsonl", corpus / "scratch")
+
+    assert len(verdicts) == 270
+    assert all(verdict == CLEAN for verdict in verdicts.values())
+    ok, offenders = gate(verdicts)
+    assert ok is True and offenders == []
+
+
+def test_audit_run_keeps_sanctioned_absolute_attach_clean(tmp_path: Path) -> None:
+    """Taint v2 regression guard: the real corpus' attach pattern (absolute path
+    under query_dataset) must stay clean."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "yelp_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "tool": "attach_database",
+                "input": {
+                    "path": "/Users/x/repos/DataAgentBench/query_yelp/query_dataset/yelp_user.db",
+                    "alias": "yelp_user",
+                },
+                "ok": True,
+                "output": "attached",
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "yelp:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["yelp:1:0"] == CLEAN
