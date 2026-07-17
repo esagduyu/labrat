@@ -84,6 +84,7 @@ class ToolContext:
         llm_classify_concurrency: int = 1,
         llm_classify_row_budget: int | None = None,
         raise_rate_limits: bool = False,
+        hybrid_retrieval: bool = False,
     ) -> None:
         if connection is not None:
             self.connections: dict[str, object] = {primary: connection}
@@ -112,6 +113,11 @@ class ToolContext:
         self.llm_classify_row_budget = llm_classify_row_budget
         self.llm_classify_rows_used = 0
         self.raise_rate_limits = raise_rate_limits
+        # Hybrid (lexical+semantic RRF) retrieval for search_reference_docs /
+        # search_trails. Additive, default OFF: no eval/MCP path sets it, so the
+        # benchmark retrieval behavior is byte-identical (same pattern as
+        # ``active_maps``). Set by the TUI from Profile.hybrid_retrieval.
+        self.hybrid_retrieval = hybrid_retrieval
 
     @property
     def connection(self) -> object:

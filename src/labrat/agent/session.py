@@ -221,6 +221,7 @@ def _sub_ctx(parent: ToolContext) -> ToolContext:
         subagent_runner=None,
         active_maps=parent.active_maps,
         raise_rate_limits=parent.raise_rate_limits,
+        hybrid_retrieval=parent.hybrid_retrieval,
     )
     if parent.llm_classify_row_budget is not None:
         # Assigned post-construction: the constructor rejects budgets < 1, but an

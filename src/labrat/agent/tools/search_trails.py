@@ -128,6 +128,31 @@ class SearchTrailsTool(Tool[_Input]):
                 )
 
         hits.sort(key=lambda h: (-h.score, h.domain, h.order))
+
+        if ctx.hybrid_retrieval:
+            from labrat.maze.hybrid import hybrid_section_keys
+
+            fused = hybrid_section_keys(
+                args.intent,
+                docs,
+                skip_heading="when to use",
+                lexical_order=[(h.domain, h.order) for h in hits],
+                profile=ctx.profile_name,
+                kind="trail",
+            )
+            if fused is not None:
+                by_key = {(h.domain, h.order): h for h in hits}
+                sections = {
+                    (doc.domain, idx): s for doc in docs for idx, s in enumerate(doc.sections)
+                }
+                hits = [
+                    by_key.get(key)
+                    or _Hit(
+                        domain=key[0], order=key[1], section=sections[key], score=0.0, matched=[]
+                    )
+                    for key in fused
+                ]
+
         top = hits[: args.top_k]
 
         results: list[TrailResult] = []

@@ -39,6 +39,7 @@ class SettingsScreen(ModalScreen["Profile | None"]):
         padding: 1 2;
     }
     SettingsScreen .row { height: 3; }
+    SettingsScreen .row.toggle { height: 1; }
     SettingsScreen Button { margin: 0 1; min-width: 14; }
     SettingsScreen #status { color: $text-muted; }
     """
@@ -75,15 +76,18 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                     placeholder="path to dbt project root (optional)",
                     id="dbt-path-input",
                 )
-            with Horizontal(classes="row"):
+            with Horizontal(classes="row toggle"):
                 yield Label("Harvest corrections (M5)")
                 yield Switch(value=self._profile.harvest_opt_in, id="harvest-switch")
-            with Horizontal(classes="row"):
+            with Horizontal(classes="row toggle"):
                 yield Label("Trails (save-as-Trail)")
                 yield Switch(value=self._profile.trail_opt_in, id="trail-switch")
-            with Horizontal(classes="row"):
+            with Horizontal(classes="row toggle"):
                 yield Label("Verify answers")
                 yield Switch(value=self._profile.verify_enabled, id="verify-switch")
+            with Horizontal(classes="row toggle"):
+                yield Label("Hybrid retrieval (semantic)")
+                yield Switch(value=self._profile.hybrid_retrieval, id="hybrid-switch")
             with Horizontal(id="actions"):
                 yield Button("Save", id="save-btn", variant="primary")
                 yield Button("Cancel  [Esc]", id="close-btn")
@@ -102,6 +106,7 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                 "harvest_opt_in": self.query_one("#harvest-switch", Switch).value,
                 "trail_opt_in": self.query_one("#trail-switch", Switch).value,
                 "verify_enabled": self.query_one("#verify-switch", Switch).value,
+                "hybrid_retrieval": self.query_one("#hybrid-switch", Switch).value,
                 "dbt_project_path": (
                     self.query_one("#dbt-path-input", Input).value.strip() or None
                 ),

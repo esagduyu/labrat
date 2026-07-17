@@ -39,6 +39,9 @@ class Profile(BaseModel):
     harvest_opt_in: bool = False
     trail_opt_in: bool = False
     verify_enabled: bool = False
+    # Hybrid (lexical+semantic) retrieval over Scent/Trail docs; needs the
+    # optional labrat[semantic] extra — without it, retrieval stays lexical.
+    hybrid_retrieval: bool = False
     # dbt project root (T1b semantic ingestion); None = no dbt project
     dbt_project_path: str | None = None
 
