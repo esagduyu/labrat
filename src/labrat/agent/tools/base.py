@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from polars.exceptions import PanicException
 from pydantic import BaseModel, ValidationError
 
 # One-shot async LLM call: prompt in, raw reply text out. Structurally identical to
@@ -119,6 +120,32 @@ class ToolContext:
     @property
     def catalog(self) -> object:
         return self.catalogs[self.primary]
+
+
+class ResultConversionError(RuntimeError):
+    """A polars result could not be converted to Python values.
+
+    Raised by :func:`stringify_rows` when row extraction fails — most notably
+    pyo3's ``PanicException`` (a ``BaseException``!) on out-of-range dates,
+    which would otherwise sail through every ``except Exception`` isolation
+    layer and kill the host process (observed on DAB deps_dev_v1, 2026-07-16).
+    Normal ``Exception`` subclass so existing per-tool error handling applies.
+    """
+
+
+def stringify_rows(df: Any) -> list[list[str]]:
+    """Convert a polars frame's rows to strings, containing pyo3 panics.
+
+    Use this instead of bare ``df.iter_rows()`` at every tool-output seam.
+    """
+    try:
+        return [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
+    except (Exception, PanicException) as exc:
+        raise ResultConversionError(
+            f"query succeeded but its result rows could not be converted: {exc}. "
+            "A column value is unrepresentable in Python (e.g. an out-of-range "
+            "date) — CAST the offending column to VARCHAR in the query and retry."
+        ) from None
 
 
 def reraise_if_rate_limited(ctx: ToolContext, exc: Exception) -> None:
@@ -276,6 +303,10 @@ class ToolRegistry:
         try:
             result = await tool.execute(ctx, parsed)  # pyright: ignore[reportArgumentType]
             return DispatchResult(ok=True, value=result)
+        except PanicException as exc:
+            # pyo3 panics are BaseExceptions; contain them here so a single
+            # pathological value cannot kill the host process/run.
+            return DispatchResult(ok=False, value=None, error=str(exc))
         except Exception as exc:
             reraise_if_rate_limited(ctx, exc)
             return DispatchResult(ok=False, value=None, error=str(exc))
