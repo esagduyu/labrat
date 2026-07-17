@@ -178,3 +178,6 @@ test_output/
 runs/
 # screenshots/ is tracked — milestone SVGs live in screenshots/
 docs/superpowers/specs/2026-06-01-codex-subscription-provider-design.md
+
+# Competitive-intelligence docs stay local-only (user decision 2026-07-16)
+docs/competitive-*.md
