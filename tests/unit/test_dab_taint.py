@@ -322,3 +322,88 @@ def test_audit_run_rejects_symlinked_trace_paths(
     verdicts = audit_run(trials_jsonl, scratch)
 
     assert verdicts["stockindex:1:0"] == AUDIT_ERROR
+
+
+def test_audit_run_flags_obfuscated_answer_key_read_in_trace(tmp_path: Path) -> None:
+    """Taint v2: concat-folded literals must be caught even when no raw needle
+    appears anywhere in the trace text (evasion case from the 2026-07-16 audit)."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "agnews_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            _trace_record(
+                tool_input={
+                    "query": "SELECT * FROM read_csv_auto(concat('ground_', 'tr' || 'uth.csv'))"
+                }
+            )
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "agnews:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["agnews:1:0"] == CHEATING
+
+
+def test_audit_run_flags_unsanctioned_attach_path(tmp_path: Path) -> None:
+    """Taint v2: a file source outside the benchmark's query_dataset layout is
+    flagged structurally even though its text matches no needle."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "yelp_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "tool": "attach_database",
+                "input": {"path": "/opt/elsewhere/answers.db", "alias": "a"},
+                "ok": True,
+                "output": "attached",
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "yelp:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["yelp:1:0"] == CHEATING
+
+
+def test_audit_run_keeps_sanctioned_absolute_attach_clean(tmp_path: Path) -> None:
+    """Taint v2 regression guard: the real corpus' attach pattern (absolute path
+    under query_dataset) must stay clean."""
+    scratch_dir = tmp_path / "scratch"
+    trial_dir = scratch_dir / "yelp_1__trial0"
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "agent_tool_calls.jsonl").write_text(
+        json.dumps(
+            {
+                "tool": "attach_database",
+                "input": {
+                    "path": "/Users/x/repos/DataAgentBench/query_yelp/query_dataset/yelp_user.db",
+                    "alias": "yelp_user",
+                },
+                "ok": True,
+                "output": "attached",
+                "latency_ms": 1,
+            }
+        )
+        + "\n"
+    )
+    trials_jsonl = tmp_path / "trials.jsonl"
+    trials_jsonl.write_text(
+        json.dumps({"task_id": "yelp:1", "trial_num": 0, "artifact": "", "reason": ""}) + "\n"
+    )
+
+    verdicts = audit_run(trials_jsonl, scratch_dir)
+
+    assert verdicts["yelp:1:0"] == CLEAN

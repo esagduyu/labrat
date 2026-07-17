@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
+from labrat.eval.benchmarks.dab.taint_structural import TaintFinding, scan_records
 from labrat.maze.scent_audit import detect_contamination
 
 CLEAN = "clean"
@@ -76,6 +77,24 @@ def resolve_trial_trace(
 
 def classify_trial(text: str) -> str:
     return CHEATING if detect_contamination(text) else CLEAN
+
+
+def parse_trace_records(text: str) -> list[dict[str, Any]]:
+    """Parse a schema-valid trace JSONL text into records (skip blank lines)."""
+    records: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parsed: Any = json.loads(line)
+        if isinstance(parsed, dict):
+            records.append(cast(dict[str, Any], parsed))
+    return records
+
+
+def scan_trace_text(text: str) -> list[TaintFinding]:
+    """Taint v2 structural scan over one trace's JSONL text (already validated)."""
+    return scan_records(parse_trace_records(text))
 
 
 def expected_trace_filenames(run_dir: Path) -> tuple[str, ...]:
@@ -270,14 +289,21 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
             continue
 
         trace_error = False
+        structural_hit = False
         for trace in traces:
             if validate_trace_jsonl(trace) is not None:
                 trace_error = True
                 break
-            parts.append(trace.read_text(encoding="utf-8"))
+            text = trace.read_text(encoding="utf-8")
+            parts.append(text)
+            # Taint v2: structural inspection of tool inputs (file sources,
+            # folded SQL literals, composite-tool steps) — catches obfuscated
+            # or needle-free answer-key access the text scan cannot see.
+            if scan_trace_text(text):
+                structural_hit = True
         if trace_error:
             verdict = AUDIT_ERROR
-        elif reason.startswith("contaminated:"):
+        elif reason.startswith("contaminated:") or structural_hit:
             verdict = CHEATING
         else:
             verdict = classify_trial("\n".join(parts))
