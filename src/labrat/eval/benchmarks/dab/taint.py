@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -289,7 +290,7 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
             continue
 
         trace_error = False
-        structural_hit = False
+        structural_findings: list[TaintFinding] = []
         for trace in traces:
             if validate_trace_jsonl(trace) is not None:
                 trace_error = True
@@ -299,12 +300,20 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
             # Taint v2: structural inspection of tool inputs (file sources,
             # folded SQL literals, composite-tool steps) — catches obfuscated
             # or needle-free answer-key access the text scan cannot see.
-            if scan_trace_text(text):
-                structural_hit = True
+            structural_findings.extend(scan_trace_text(text))
         if trace_error:
             verdict = AUDIT_ERROR
-        elif reason.startswith("contaminated:") or structural_hit:
+        elif reason.startswith("contaminated:") or structural_findings:
             verdict = CHEATING
+            # P3-5: surface the first few structural findings so a gate
+            # offender is actionable without re-running the scan by hand.
+            # taint.json / the verdict vocabulary stay unchanged.
+            for finding in structural_findings[:3]:
+                print(
+                    f"taint-gate: {key}: structural[{finding.layer}:{finding.tag}] "
+                    f"event {finding.event_index} {finding.tool}: {finding.detail}",
+                    file=sys.stderr,
+                )
         else:
             verdict = classify_trial("\n".join(parts))
         verdicts[key] = _merge_verdict(verdicts.get(key), verdict)

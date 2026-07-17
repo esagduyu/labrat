@@ -37,9 +37,11 @@ _LOCAL_DB_URI_RE = re.compile(
     re.IGNORECASE,
 )
 _QUERY_DIR_RE = re.compile(r"(^|/)query_?\d+(/|$)", re.IGNORECASE)
-_READ_FN_RE = re.compile(
-    r"\bread_(?:csv_auto|csv|parquet|json_auto|json|ndjson|text)\s*\(", re.IGNORECASE
-)
+# Generalized DuckDB file/table-function coverage: every read_* variant
+# (read_csv[_auto], read_parquet, read_json[_auto], read_ndjson, read_text,
+# read_blob, read_xlsx, ...), every *_scan alias (parquet_scan, sqlite_scan,
+# postgres_scan, mysql_scan, delta_scan, iceberg_scan, ...), and glob().
+_READ_FN_RE = re.compile(r"\b(?:read_[a-z0-9_]+|[a-z0-9_]+_scan|glob)\s*\(", re.IGNORECASE)
 _ATTACH_RE = re.compile(r"\battach\b(?:\s+database\b)?", re.IGNORECASE)
 _COPY_RE = re.compile(r"\bcopy\b", re.IGNORECASE)
 _FROM_FILE_RE = re.compile(r"\bfrom\s+'((?:[^']|'')*)'", re.IGNORECASE)
@@ -83,14 +85,69 @@ class TaintFinding:
     detail: str
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """Replace SQL comments with a single space, quote-aware.
+
+    ``/* ... */`` (nested, as DuckDB/Postgres parse them) and ``-- ...`` to
+    end-of-line are treated as whitespace so they cannot break literal folding
+    (``concat('ground_', /*c*/ 'truth.csv')``). Comment markers inside
+    single-quoted literals are preserved verbatim.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    in_literal = False
+    while i < n:
+        ch = sql[i]
+        if in_literal:
+            out.append(ch)
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    out.append("'")
+                    i += 1
+                else:
+                    in_literal = False
+            i += 1
+            continue
+        if ch == "'":
+            in_literal = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            depth = 1
+            i += 2
+            while i < n and depth:
+                if sql.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif sql.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            out.append(" ")
+            continue
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            end = sql.find("\n", i + 2)
+            i = n if end == -1 else end  # keep the newline itself
+            out.append(" ")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def fold_sql_literals(sql: str) -> list[str]:
     """Extract single-quoted literals with concatenation folded.
 
     ``'a' || 'b'``, ``concat('a', 'b')`` (commas act as glue inside a concat
     call), and ``chr(N)`` all fold into one literal so obfuscated names are
-    seen assembled. Any other token between literals breaks adjacency.
-    Returns lowercased folded strings.
+    seen assembled. SQL comments are stripped (quote-aware) first and count as
+    whitespace, never a fold-break. Any other token between literals breaks
+    adjacency. Returns lowercased folded strings.
     """
+    sql = _strip_sql_comments(sql)
     items: list[tuple[str, str]] = []  # (kind, text): LIT | GLUE | BREAK
     concat_depth: list[bool] = []  # per open paren: is this a concat frame?
     pos = 0
@@ -202,22 +259,67 @@ def classify_file_source(source: str) -> tuple[str, str] | None:
     for needle in _SENSITIVE_SOURCE_NEEDLES:
         if needle in low:
             return ("answer_key", f"answer-shaped file source ({needle}): {s[:120]}")
+    segments = [seg for seg in low.split("/") if seg]
+    if ".." in segments:
+        # Traversal is checked BEFORE the temp allow so `/tmp/x/../../...`
+        # cannot launder an escape back into the checkout.
+        return ("unsanctioned_path", f"path traversal in file source: {s[:120]}")
+    if any(marker in low for marker in _TEMP_MARKERS):
+        # Temp/scratch allow comes BEFORE the query-dir shape check:
+        # agent-created exports under /tmp legitimately reuse task names like
+        # "query3" (e.g. /tmp/query3/export.csv), and copying an actual answer
+        # key into a temp dir would require a flagged read first. Answer-shaped
+        # *names* (ground_truth.csv, ...) are still caught by the needle check
+        # above regardless of location.
+        return None
     if _QUERY_DIR_RE.search(low):
         return ("answer_key_dir", f"benchmark query-dir file source: {s[:120]}")
-    segments = [seg for seg in low.split("/") if seg]
     if ".git" in segments or "leaderboard_submissions" in segments:
         return ("prior_artifact", f"repository/submission artifact source: {s[:120]}")
     for a, b in itertools.pairwise(segments):
         if a == "runs" and b == "dab":
             return ("prior_artifact", f"prior-run artifact source: {s[:120]}")
-    if ".." in segments:
-        return ("unsanctioned_path", f"path traversal in file source: {s[:120]}")
     if low.startswith("/") or low.startswith("~"):
         if "query_dataset" in segments:
             return None
-        if any(marker in low for marker in _TEMP_MARKERS):
-            return None
         return ("unsanctioned_path", f"absolute path outside sanctioned layout: {s[:120]}")
+    return None
+
+
+def classify_folded_literal(literal: str) -> tuple[str, str] | None:
+    """Spec §(b): layer-(a) classification for a *path-shaped* folded literal.
+
+    Applies to any single-quoted SQL literal after folding — regardless of the
+    surrounding function name — so unlisted/future DuckDB file functions fail
+    closed. Path-shaped means: absolute (``/`` or ``~``), contains a ``..``
+    segment, or carries a URL scheme. Plain relative strings never classify.
+
+    URL-scheme literals get the *answer-shape* checks only (sensitive needles,
+    ``query<N>`` dir segments, remote/DB schemes, ``file://``) rather than the
+    blanket ``web_fetch`` tag: URLs as SQL filter values are a real benign
+    corpus shape, while a URL in a genuine file-source position is already
+    tagged ``web_fetch`` by layer (a).
+    """
+    s = literal.strip().strip('"')
+    if not s:
+        return None
+    low = s.lower()
+    if _DB_SCHEME_RE.match(low) or low.startswith("file://"):
+        return classify_file_source(s)
+    if _SCHEME_RE.match(low):
+        for needle in _SENSITIVE_SOURCE_NEEDLES:
+            if needle in low:
+                return ("answer_key", f"answer-shaped URL literal ({needle}): {s[:120]}")
+        if _QUERY_DIR_RE.search(low):
+            return ("answer_key_dir", f"benchmark query-dir URL literal: {s[:120]}")
+        return None
+    segments = [seg for seg in low.split("/") if seg]
+    if not segments:
+        # Slash-only literals ('/', '//') are string delimiters in real corpus
+        # SQL (split_part(name, '/', 1)), not paths.
+        return None
+    if low.startswith("/") or low.startswith("~") or ".." in segments:
+        return classify_file_source(s)
     return None
 
 
@@ -249,6 +351,7 @@ def _matching_paren_slice(text: str, open_pos: int, limit: int = 2000) -> str:
 
 def extract_sql_file_sources(sql: str) -> list[str]:
     """Folded literals appearing in file-source positions of a SQL string."""
+    sql = _strip_sql_comments(sql)
     sources: list[str] = []
     for m in _READ_FN_RE.finditer(sql):
         sources.extend(fold_sql_literals(_matching_paren_slice(sql, m.end() - 1)))
@@ -325,6 +428,18 @@ def scan_records(records: list[dict[str, Any]]) -> list[TaintFinding]:
                                 index,
                                 label,
                                 f"folded SQL literal matches needle: {literal[:120]}",
+                            )
+                        )
+                        continue
+                    hit = classify_folded_literal(literal)
+                    if hit is not None:
+                        findings.append(
+                            TaintFinding(
+                                "sql_literal",
+                                hit[0],
+                                index,
+                                label,
+                                f"path-shaped folded SQL literal: {hit[1]}",
                             )
                         )
     return findings

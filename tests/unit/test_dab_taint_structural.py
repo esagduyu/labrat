@@ -9,6 +9,7 @@ from typing import Any
 
 from labrat.eval.benchmarks.dab.taint_structural import (
     TaintFinding,
+    classify_folded_literal,
     fold_sql_literals,
     scan_records,
 )
@@ -264,6 +265,185 @@ def test_local_db_uri_with_answer_shaped_name_is_flagged() -> None:
         [_ev("attach_database", {"path": "postgresql://localhost/ground_truth", "alias": "x"})]
     )
     assert "answer_key" in _tags(findings)
+
+
+# --- P2-2: SQL comments must not break literal folding ------------------------------
+
+
+def test_fold_block_comment_is_neutral() -> None:
+    folded = fold_sql_literals("SELECT concat('ground_', /*c*/ 'truth.csv')")
+    assert "ground_truth.csv" in folded
+
+
+def test_fold_line_comment_is_neutral() -> None:
+    folded = fold_sql_literals("SELECT 'ground_' || -- sneaky\n'truth.csv'")
+    assert "ground_truth.csv" in folded
+
+
+def test_fold_nested_block_comment_is_neutral() -> None:
+    # DuckDB (like Postgres) nests block comments; a naive first-*/ strip
+    # would leave `*/` residue that breaks the fold.
+    folded = fold_sql_literals("SELECT concat('ground_', /* /*x*/ */ 'truth.csv')")
+    assert "ground_truth.csv" in folded
+
+
+def test_fold_comment_markers_inside_literals_are_preserved() -> None:
+    assert fold_sql_literals("SELECT 'a--b'") == ["a--b"]
+    assert fold_sql_literals("SELECT 'a/*b*/c'") == ["a/*b*/c"]
+
+
+def test_comment_obfuscated_ground_truth_read_is_flagged() -> None:
+    findings = scan_records(
+        [
+            _ev(
+                "run_sql",
+                {"query": "SELECT * FROM read_csv_auto(concat('ground_', /*c*/ 'truth.csv'))"},
+            )
+        ]
+    )
+    assert "answer_key" in _tags(findings)
+
+
+# --- P1-1(a): generalized DuckDB table-function coverage ----------------------------
+
+
+def test_sqlite_scan_of_query_dir_is_flagged() -> None:
+    findings = scan_records(
+        [
+            _ev(
+                "run_sql",
+                {"query": "SELECT * FROM sqlite_scan('/x/query_agnews/query3/gt.db', 't')"},
+            )
+        ]
+    )
+    assert "answer_key_dir" in _tags(findings)
+
+
+def test_parquet_scan_of_query_dir_is_flagged() -> None:
+    findings = scan_records(
+        [
+            _ev(
+                "run_sql",
+                {"query": "SELECT * FROM parquet_scan('/x/query_agnews/query3/labels.parquet')"},
+            )
+        ]
+    )
+    assert "answer_key_dir" in _tags(findings)
+
+
+def test_glob_of_query_dir_is_flagged() -> None:
+    findings = scan_records(
+        [_ev("run_sql", {"query": "SELECT * FROM glob('/x/query_agnews/query3/*')"})]
+    )
+    assert "answer_key_dir" in _tags(findings)
+
+
+def test_read_xlsx_and_read_blob_are_covered() -> None:
+    findings = scan_records(
+        [
+            _ev("run_sql", {"query": "SELECT * FROM read_xlsx('/x/query_agnews/query3/gt.xlsx')"}),
+            _ev(
+                "run_sql",
+                {"query": "SELECT * FROM read_blob('https://evil.example.com/labels.bin')"},
+            ),
+        ]
+    )
+    assert {"answer_key_dir", "web_fetch"} <= _tags(findings)
+
+
+# --- P1-1(b): path-shaped folded literals fail closed for unknown functions ---------
+
+
+def test_unknown_table_function_on_query_dir_path_is_flagged() -> None:
+    # A future/unlisted DuckDB function must not escape: the path-shaped
+    # literal itself classifies, regardless of the function name.
+    findings = scan_records(
+        [_ev("run_sql", {"query": "SELECT * FROM future_reader('/x/query_agnews/query3/gt.bin')"})]
+    )
+    assert "answer_key_dir" in _tags(findings)
+
+
+def test_unknown_table_function_on_unsanctioned_absolute_path_is_flagged() -> None:
+    findings = scan_records(
+        [_ev("run_sql", {"query": "SELECT * FROM mystery_fn('/opt/answers/labels.db')"})]
+    )
+    assert "unsanctioned_path" in _tags(findings)
+
+
+def test_traversal_shaped_literal_is_flagged() -> None:
+    findings = scan_records(
+        [_ev("run_sql", {"query": "SELECT * FROM mystery_fn('../query3/gt.bin')"})]
+    )
+    assert "unsanctioned_path" in _tags(findings) or "answer_key_dir" in _tags(findings)
+
+
+def test_answer_shaped_url_literal_is_flagged() -> None:
+    findings = scan_records(
+        [_ev("run_sql", {"query": "SELECT * FROM f('https://x.example.com/ground_truth.csv')"})]
+    )
+    assert "answer_key" in _tags(findings)
+
+
+def test_classify_folded_literal_keeps_plain_url_value_clean() -> None:
+    # URLs as SQL *values* are a real benign corpus shape (spec acceptance #2);
+    # only answer-shaped URLs flag at the literal layer. File-source-position
+    # URLs still flag as web_fetch via layer (a).
+    assert classify_folded_literal("https://github.com/torvalds/linux") is None
+
+
+def test_classify_folded_literal_ignores_relative_and_plain_strings() -> None:
+    assert classify_folded_literal("exports/joined.parquet") is None
+    assert classify_folded_literal("wait...") is None
+    assert classify_folded_literal("readme.md") is None
+
+
+def test_slash_delimiter_literal_is_clean() -> None:
+    # Real corpus shape (deps_dev_v1, patents): '/' as a split delimiter.
+    assert classify_folded_literal("/") is None
+    findings = scan_records(
+        [_ev("run_sql", {"query": "SELECT split_part(name, '/', 1) FROM pkgs"})]
+    )
+    assert findings == []
+
+
+def test_sanctioned_absolute_literal_in_sql_is_clean() -> None:
+    findings = scan_records(
+        [
+            _ev(
+                "run_sql",
+                {
+                    "query": (
+                        "ATTACH '/Users/ege/repos/DataAgentBench"
+                        "/query_yelp/query_dataset/yelp_user.db' AS y (TYPE SQLITE)"
+                    )
+                },
+            )
+        ]
+    )
+    assert findings == []
+
+
+# --- P2-3: temp/scratch allow precedes the query-dir shape check --------------------
+
+
+def test_tmp_export_with_query_dir_shaped_name_is_clean() -> None:
+    # Agent-created exports under /tmp legitimately reuse task names like
+    # "query3"; copying a real key into /tmp requires a flagged read first.
+    findings = scan_records([_ev("load_file", {"path": "/tmp/query3/export.csv"})])
+    assert findings == []
+
+
+def test_answer_shaped_name_in_tmp_is_still_flagged() -> None:
+    findings = scan_records([_ev("load_file", {"path": "/tmp/ground_truth.csv"})])
+    assert "answer_key" in _tags(findings)
+
+
+def test_traversal_out_of_tmp_is_still_flagged() -> None:
+    # The temp allow must not launder `..` escapes back into the checkout.
+    findings = scan_records(
+        [_ev("load_file", {"path": "/tmp/x/../../repo/query_agnews/query3/gt.csv"})]
+    )
+    assert "unsanctioned_path" in _tags(findings)
 
 
 def test_fold_nested_concat_folds_through() -> None:
