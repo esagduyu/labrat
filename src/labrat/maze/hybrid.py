@@ -11,8 +11,8 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
+from labrat.maze.document import ScentDoc
 from labrat.maze.embedding import Embedder, SectionEmbeddingCache, get_default_embedder
 
 #: Section identity within one retrieval: (domain, section index).
@@ -93,7 +93,7 @@ def user_embedding_sidecar(profile: str, kind: str, home: Path | None = None) ->
 
 def hybrid_section_keys(
     question: str,
-    docs: Sequence[Any],
+    docs: Sequence[ScentDoc],
     *,
     skip_heading: str,
     lexical_order: Sequence[SectionKey],
@@ -102,9 +102,8 @@ def hybrid_section_keys(
 ) -> list[SectionKey] | None:
     """Tool-facing orchestrator: fused order over every non-context section.
 
-    ``docs`` are merged ``ScentDoc``s (typed loosely to avoid a maze->tools
-    import cycle). Returns ``None`` on any fail-open condition so the calling
-    tool keeps its pure-lexical result.
+    ``docs`` are merged ``ScentDoc``s. Returns ``None`` on any fail-open
+    condition so the calling tool keeps its pure-lexical result.
     """
     embedder = get_default_embedder()
     if embedder is None:
