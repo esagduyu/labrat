@@ -84,6 +84,9 @@ class SettingsScreen(ModalScreen["Profile | None"]):
             with Horizontal(classes="row"):
                 yield Label("Verify answers")
                 yield Switch(value=self._profile.verify_enabled, id="verify-switch")
+            with Horizontal(classes="row"):
+                yield Label("Hybrid retrieval (semantic)")
+                yield Switch(value=self._profile.hybrid_retrieval, id="hybrid-switch")
             with Horizontal(id="actions"):
                 yield Button("Save", id="save-btn", variant="primary")
                 yield Button("Cancel  [Esc]", id="close-btn")
@@ -102,6 +105,7 @@ class SettingsScreen(ModalScreen["Profile | None"]):
                 "harvest_opt_in": self.query_one("#harvest-switch", Switch).value,
                 "trail_opt_in": self.query_one("#trail-switch", Switch).value,
                 "verify_enabled": self.query_one("#verify-switch", Switch).value,
+                "hybrid_retrieval": self.query_one("#hybrid-switch", Switch).value,
                 "dbt_project_path": (
                     self.query_one("#dbt-path-input", Input).value.strip() or None
                 ),

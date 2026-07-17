@@ -390,6 +390,7 @@ class MainScreen(Screen[None]):
             profile_name=profile_obj.name,
             read_only=profile_obj.is_read_only,
             active_maps=self._active_maps,
+            hybrid_retrieval=profile_obj.hybrid_retrieval,
         )
 
         provider, degraded_warning = resolve_provider(profile_obj)
