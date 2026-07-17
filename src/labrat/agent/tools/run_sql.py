@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.base import ResultConversionError, Tool, ToolContext, stringify_rows
 from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.base import Connection
 from labrat.history.events import QueryEvent
@@ -423,7 +423,31 @@ class RunSqlTool(Tool[_Input]):
                 hint=hint,
             )
 
-        rows = [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
+        try:
+            rows = stringify_rows(df)
+        except ResultConversionError as exc:
+            _log(
+                profile=ctx.profile_name,
+                thread_id=thread_id,
+                version_id=version_id,
+                sql=sql,
+                executed=True,
+                success=False,
+                execution_time_ms=elapsed_ms,
+                error_message=str(exc),
+            )
+            return _Output(
+                ok=False,
+                query=args.query,
+                error=str(exc),
+                error_category="result_conversion",
+                executed_sql=sql,
+                hint=(
+                    "The query ran but a result value cannot be represented "
+                    "(e.g. an out-of-range date). CAST the offending column to "
+                    "VARCHAR, e.g. SELECT CAST(col AS VARCHAR) ..."
+                ),
+            )
         _log(
             profile=ctx.profile_name,
             thread_id=thread_id,

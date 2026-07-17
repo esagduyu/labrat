@@ -18,7 +18,7 @@ from typing import cast
 
 from pydantic import BaseModel, Field
 
-from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.base import Tool, ToolContext, stringify_rows
 from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.base import Connection
 from labrat.db.catalog import Catalog, Table
@@ -152,7 +152,7 @@ class ProfileDatasetTool(Tool[_Input]):
             try:
                 df = conn.sample_table(table.qualified_name, n=sample_rows)
                 sample_columns = df.columns
-                sample = [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
+                sample = stringify_rows(df)
             except Exception as exc:
                 note = f"sampling failed: {exc}"
 

@@ -7,7 +7,7 @@ from typing import cast
 import polars as pl
 from pydantic import BaseModel, Field, PrivateAttr
 
-from labrat.agent.tools.base import Tool, ToolContext
+from labrat.agent.tools.base import Tool, ToolContext, stringify_rows
 from labrat.agent.tools.serialization import LedgerPayloadKind
 from labrat.db.base import Connection
 
@@ -64,7 +64,7 @@ class SampleRowsTool(Tool[_Input]):
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
         conn = cast(Connection, ctx.connections[args.database or ctx.primary])
         df = conn.sample_table(args.table, n=args.n)
-        rows = [[str(v) if v is not None else "" for v in row] for row in df.iter_rows()]
+        rows = stringify_rows(df)
         out = _Output(
             table_name=args.table,
             row_count=len(df),

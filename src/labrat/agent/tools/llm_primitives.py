@@ -23,9 +23,10 @@ from dataclasses import dataclass
 from typing import cast
 
 import polars as pl
+from polars.exceptions import PanicException
 
 from labrat.agent.providers.base import is_rate_limit_error
-from labrat.agent.tools.base import LLMFn, ToolContext
+from labrat.agent.tools.base import LLMFn, ResultConversionError, ToolContext
 
 # Reuse run_sql's statement-stacking guard (sqlglot-based) for safety parity (F2):
 # a `where` fragment that stacks a second statement (e.g. "1=1; DROP TABLE t")
@@ -355,7 +356,14 @@ async def extract_rows(
     values: dict[str, list[str | None]] = {field: [] for field in fields}
     rows_failed = 0
     requests_made = 0
-    rows = list(source.iter_rows(named=True))
+    try:
+        rows = list(source.iter_rows(named=True))
+    except (Exception, PanicException) as exc:
+        raise ResultConversionError(
+            f"source rows could not be converted: {exc}. A column value is "
+            "unrepresentable in Python (e.g. an out-of-range date) — CAST it "
+            "to VARCHAR in the source query."
+        ) from None
 
     if isinstance(spec, list) and classify_batch_size > 1:
         chunks = [
