@@ -1294,6 +1294,9 @@ class DabSuite:
                         # semantic attempt, including after an infra resume.
                         shutil.copy2(src, dst)
                         break  # only one trace file expected per sub-run
+                    chosen_prompt = chosen_sub / "opening_prompt.txt"
+                    if chosen_prompt.is_file():
+                        shutil.copy2(chosen_prompt, scratch_dir / "opening_prompt.txt")
                 except Exception:
                     pass  # fail-open
 

@@ -59,6 +59,12 @@ async def classify_rows_local_embed(
     """
     if not labels:
         raise ValueError("labels must be a non-empty list")
+    all_names = [*key_columns, text_column, "category"]
+    if len(set(all_names)) != len(all_names):
+        raise ValueError(
+            "key_columns/text_column collide with each other or the reserved "
+            "'category' result column — rename to avoid a column-name clash."
+        )
     embedder = get_default_embedder()
     if embedder is None:
         raise RuntimeError(NO_EMBEDDER_ERROR)

@@ -141,3 +141,17 @@ async def test_local_embed_needs_no_llm_fn(ctx: ToolContext) -> None:
 def test_tool_context_validates_backend() -> None:
     with pytest.raises(ValueError, match="llm_classify_backend"):
         ToolContext(connections={}, catalogs={}, primary="x", llm_classify_backend="bogus")
+
+
+async def test_local_embed_rejects_category_column_collision(ctx: ToolContext) -> None:
+    import labrat.agent.tools.local_classify as local_mod
+
+    tool = LlmClassifyTool()
+    orig = local_mod.get_default_embedder
+    local_mod.get_default_embedder = lambda: _StubEmbedder()  # type: ignore[assignment]
+    try:
+        out = await tool.execute(ctx, _args(tool, key_columns=["category"]))  # type: ignore[arg-type]
+    finally:
+        local_mod.get_default_embedder = orig  # type: ignore[assignment]
+    assert out.ok is False
+    assert out.error is not None and "category" in out.error
