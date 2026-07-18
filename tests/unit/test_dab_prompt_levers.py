@@ -37,3 +37,71 @@ def test_labrat_agent_prompt_can_disable_every_lever() -> None:
 
 def test_top_n_with_ties_lever_present() -> None:
     assert any("truncates ties" in ln for ln in _dab_lever_lines())
+
+
+def _env() -> DabTaskEnv:
+    return DabTaskEnv(
+        ctx=ToolContext(connections={}, catalogs={}, primary="x"), attachable=[], mongo=[]
+    )
+
+
+def test_taxonomy_off_by_default_and_prompt_byte_identical() -> None:
+    from labrat.eval.benchmarks.dab.suite import _taxonomy_lines
+
+    base = _build_labrat_agent_system_prompt(_env())
+    explicit_off = _build_labrat_agent_system_prompt(_env(), include_taxonomy=False)
+    assert base == explicit_off
+    for line in _taxonomy_lines():
+        assert line not in base
+
+
+def test_taxonomy_on_appends_answer_discipline_section() -> None:
+    from labrat.eval.benchmarks.dab.suite import _taxonomy_lines
+
+    prompt = _build_labrat_agent_system_prompt(_env(), include_taxonomy=True)
+    assert "Answer discipline:" in prompt
+    for line in _taxonomy_lines():
+        assert line in prompt
+
+
+def test_taxonomy_text_is_benchmark_agnostic() -> None:
+    from labrat.eval.benchmarks.dab.suite import _taxonomy_lines
+
+    text = " ".join(_taxonomy_lines()).lower()
+    for forbidden in (
+        "dab",
+        "benchmark",
+        "validator",
+        "leaderboard",
+        "agnews",
+        "yelp",
+        "stockindex",
+        "stockmarket",
+        "patents",
+        "crmarena",
+        "bookreview",
+        "googlelocal",
+        "music_brainz",
+        "deps_dev",
+        "github_repos",
+        "pancancer",
+        "ground truth",
+        "gold",
+    ):
+        assert forbidden not in text, forbidden
+
+
+def test_taxonomy_covers_the_seven_disciplines() -> None:
+    from labrat.eval.benchmarks.dab.suite import _taxonomy_lines
+
+    text = " ".join(_taxonomy_lines())
+    assert "one row per" in text  # shape
+    assert "native" in text and "code" in text  # grain
+    assert "every qualifying item" in text  # delivery / enumeration
+    assert "decimal" in text  # delivery / numeric form
+    assert "inclusive" in text  # literal reading
+    assert "Re-run" in text  # verify before commit
+    assert "most defensible" in text  # interpretation enumeration
+    assert "does not contain" in text  # legitimate not-supported answer
+    assert "deterministic rule" in text  # bulk categorization
+    assert "exactly as" in text and "stored" in text  # verbatim entity names (D1)

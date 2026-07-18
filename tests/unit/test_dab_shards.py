@@ -310,3 +310,9 @@ def test_bounded_recovery_refuses_to_replace_semantic_result(tmp_path: Path) -> 
 
     with pytest.raises(ShardError, match="refuses to replace"):
         merge_bounded_recovery(shards_dir, [recovery], tmp_path / "recovered")
+
+
+def test_agent_taxonomy_is_a_recovery_compat_key() -> None:
+    from scripts.dab_shards import _RECOVERY_COMPAT_KEYS
+
+    assert "agent_taxonomy" in _RECOVERY_COMPAT_KEYS

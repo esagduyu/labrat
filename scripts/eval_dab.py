@@ -310,6 +310,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-taxonomy",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Append the answer-discipline taxonomy (Lever Pack v2: shape/grain "
+            "pinning, literal delivery, verify-before-commit) to the labrat-agent "
+            "system prompt. Off by default for new runs; restored from config.json "
+            "on resume. Benchmark-agnostic process guidance only."
+        ),
+    )
+    parser.add_argument(
         "--max-turns",
         type=int,
         default=None,
@@ -521,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         ("terminalize_timeouts", args.terminalize_timeouts),
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
+        ("agent_taxonomy", args.agent_taxonomy),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -718,6 +730,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_ledger is not None
         else existing_cfg.get("agent_ledger", True)
     )
+    effective_taxonomy: bool = bool(
+        args.agent_taxonomy
+        if args.agent_taxonomy is not None
+        else existing_cfg.get("agent_taxonomy", False)
+    )
     effective_n_trials: int = (
         args.n_trials if args.n_trials is not None else existing_cfg.get("n_trials", 5)
     )
@@ -740,6 +757,7 @@ def main(argv: list[str] | None = None) -> int:
         terminalize_timeouts=effective_terminalize_timeouts,
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
+        agent_taxonomy=effective_taxonomy,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
         cartograph_semantics_model=effective_cartograph_semantics_model,
@@ -802,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_reasoning": effective_reasoning,
         "agent_levers": effective_levers,
         "agent_ledger": effective_ledger,
+        "agent_taxonomy": effective_taxonomy,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
         ),
