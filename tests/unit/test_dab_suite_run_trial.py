@@ -1179,3 +1179,36 @@ async def test_run_trial_records_validator_error(tmp_path: Path) -> None:
     assert result.passed is False
     assert result.reason is not None
     assert result.reason.startswith("validator_error")
+
+
+@patch("labrat.agent.providers.build_provider")
+async def test_labrat_agent_writes_opening_prompt_file(
+    mock_build: MagicMock, tmp_path: Path
+) -> None:
+    _make_real_duckdb_fixture(tmp_path)
+    provider = MagicMock()
+    provider.usage = {}
+    provider.request_usage = []
+    mock_build.return_value = provider
+
+    async def fake_run_agent_task(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            final_text="42",
+            tool_calls=0,
+            latency_seconds=1.0,
+            turn_budget_exhausted=False,
+        )
+
+    suite = DabSuite(dab_dir=tmp_path, driver="labrat-agent", agent_taxonomy=True)
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "prompt-file"
+    with patch("labrat.agent.runner.run_agent_task", new=fake_run_agent_task):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    prompt_file = scratch / "opening_prompt.txt"
+    assert prompt_file.is_file()
+    content = prompt_file.read_text()
+    assert "=== SYSTEM PROMPT ===" in content
+    assert "=== OPENING USER MESSAGE ===" in content
+    assert task.prompt in content
+    assert "Answer discipline:" in content  # taxonomy lever reflected in disclosure

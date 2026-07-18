@@ -506,3 +506,47 @@ def test_build_bundle_acknowledgment_does_not_mask_other_findings(tmp_path: Path
         build_bundle(
             run_dir, output_dir=tmp_path / "bundle-partial", acknowledged_secrets=[finding]
         )
+
+
+def test_bundle_carries_per_trial_usage_and_opening_prompt(tmp_path: Path) -> None:
+    run_dir = tmp_path / "usage-prompt-run"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    # attach usage meta to the trial row
+    row = json.loads((run_dir / "trials.jsonl").read_text())
+    row["meta"] = {
+        "usage": {
+            "input_tokens": 1200,
+            "cached_tokens": 900,
+            "output_tokens": 30,
+            "requests": 4,
+        }
+    }
+    (run_dir / "trials.jsonl").write_text(json.dumps(row) + "\n")
+    trial_dir = run_dir / "scratch" / "stockindex_1__trial0"
+    (trial_dir / "opening_prompt.txt").write_text(
+        "=== SYSTEM PROMPT ===\nsys\n\n=== OPENING USER MESSAGE ===\nq\n"
+    )
+
+    output_dir = tmp_path / "bundle-usage-prompt"
+    result = build_bundle(run_dir, output_dir=output_dir)
+
+    manifest = json.loads((result / "manifest.json").read_text())
+    entry = manifest["trials"][0]
+    assert entry["usage"] == {
+        "input_tokens": 1200,
+        "cached_tokens": 900,
+        "output_tokens": 30,
+        "requests": 4,
+    }
+    assert entry["opening_prompt"] == "traces/stockindex_1__trial0/opening_prompt.txt"
+    copied = result / "traces" / "stockindex_1__trial0" / "opening_prompt.txt"
+    assert copied.is_file() and "sys" in copied.read_text()
+
+
+def test_bundle_without_usage_or_prompt_stays_compatible(tmp_path: Path) -> None:
+    run_dir = tmp_path / "no-usage-run"
+    _write_run(run_dir, [("stockindex:1", 0)])
+    result = build_bundle(run_dir, output_dir=tmp_path / "bundle-no-usage")
+    entry = json.loads((result / "manifest.json").read_text())["trials"][0]
+    assert entry["usage"] is None
+    assert entry["opening_prompt"] is None

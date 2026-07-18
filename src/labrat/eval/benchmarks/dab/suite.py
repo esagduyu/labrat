@@ -1725,6 +1725,18 @@ class DabSuite:
             if extra_instructions:
                 system_prompt = f"{system_prompt}\n\n{extra_instructions}"
 
+            # Disclosure: persist the exact opening prompts (Lever Pack v2 T3) so
+            # every trial — including failed/terminal ones — carries its prompt
+            # for reviewer leakage checks without post-hoc reconstruction.
+            (scratch_dir / "opening_prompt.txt").write_text(
+                "=== SYSTEM PROMPT ===\n"
+                + system_prompt
+                + "\n\n=== OPENING USER MESSAGE ===\n"
+                + task.prompt
+                + "\n",
+                encoding="utf-8",
+            )
+
             def _trace(
                 tool: str,
                 tool_input: dict[str, Any],
