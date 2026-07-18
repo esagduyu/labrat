@@ -622,3 +622,25 @@ def test_agent_taxonomy_defaults_off_persists_and_rejects_resume_conflict(
 
     with pytest.raises(SystemExit, match=r"Resume conflict.*agent-taxonomy"):
         main([*base2, "--no-agent-taxonomy"])
+
+
+def test_llm_classify_backend_persists_and_rejects_resume_conflict(tmp_path: Path) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "run-backend"
+    base = ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]
+
+    assert main([*base, "--llm-classify-backend", "local-embed"]) == 0
+    cfg = json.loads((output_dir / "config.json").read_text())
+    assert cfg["llm_classify_backend"] == "local-embed"
+
+    assert main(base) == 0  # restored on resume
+    assert (
+        json.loads((output_dir / "config.json").read_text())["llm_classify_backend"]
+        == "local-embed"
+    )
+
+    with pytest.raises(SystemExit, match=r"Resume conflict.*llm-classify-backend"):
+        main([*base, "--llm-classify-backend", "llm"])

@@ -241,6 +241,40 @@ def _parse_classify_batch(
     return categories
 
 
+def select_classify_rows(
+    ctx: ToolContext,
+    *,
+    table: str,
+    text_column: str,
+    key_columns: list[str],
+    where: str | None,
+    limit: int | None,
+    cap: int,
+) -> pl.DataFrame:
+    """Guarded row selection shared by the LLM fan-out and local backends.
+
+    Applies the same identifier-safety, statement-stacking, and Python-layer
+    row-cap backstops as ``extract_rows`` and returns a polars DataFrame of at
+    most ``cap`` rows with ``key_columns + [text_column]``.
+    """
+    for ident in (table, text_column, *key_columns):
+        if not _SAFE_IDENT.fullmatch(ident):
+            raise ValueError(f"unsafe SQL identifier: {ident!r}")
+    effective_cap = cap if limit is None else min(limit, cap)
+    select_cols = ", ".join([*key_columns, text_column])
+    sql = f"SELECT {select_cols} FROM {table}"
+    if where is not None:
+        sql += f" WHERE {where}"
+    if _statement_count(sql) > 1:
+        raise ValueError(
+            "Multiple SQL statements are not allowed in `where`; submit a single "
+            "predicate fragment per call."
+        )
+    sql += f" LIMIT {effective_cap}"
+    source = cast(Connection, ctx.connection).execute(sql)
+    return source.head(effective_cap)
+
+
 async def extract_rows(
     ctx: ToolContext,
     *,

@@ -218,6 +218,7 @@ def _sub_ctx(parent: ToolContext) -> ToolContext:
         llm_fn=parent.llm_fn,
         llm_classify_fn=parent.llm_classify_fn,
         llm_classify_concurrency=parent.llm_classify_concurrency,
+        llm_classify_backend=parent.llm_classify_backend,
         subagent_runner=None,
         active_maps=parent.active_maps,
         raise_rate_limits=parent.raise_rate_limits,

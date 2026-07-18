@@ -612,6 +612,7 @@ class DabSuite:
         llm_classify_reasoning: str | None = None,
         llm_classify_concurrency: int = 1,
         llm_classify_row_budget: int | None = None,
+        llm_classify_backend: str = "llm",
         terminalize_timeouts: bool = False,
         agent_levers: bool = True,
         agent_ledger: bool = True,
@@ -658,6 +659,9 @@ class DabSuite:
             raise ValueError("llm_classify_row_budget must be positive when set")
         self._llm_classify_concurrency = llm_classify_concurrency
         self._llm_classify_row_budget = llm_classify_row_budget
+        if llm_classify_backend not in ("llm", "local-embed"):
+            raise ValueError("llm_classify_backend must be 'llm' or 'local-embed'")
+        self._llm_classify_backend = llm_classify_backend
         self._terminalize_timeouts = terminalize_timeouts
         # Benchmark-safe process levers are enabled by default for historical
         # compatibility. The explicit toggle supports a clean ablation arm.
@@ -1647,6 +1651,7 @@ class DabSuite:
         introspect_env_catalogs(env.ctx)
         env.ctx.llm_classify_concurrency = self._llm_classify_concurrency
         env.ctx.llm_classify_row_budget = self._llm_classify_row_budget
+        env.ctx.llm_classify_backend = self._llm_classify_backend
         env.ctx.llm_classify_rows_used = 0
         # Benchmark fail-fast: a 429 inside a tool must escape the loop so
         # run_trial records a durable infra:rate_limit row instead of a

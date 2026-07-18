@@ -270,6 +270,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--llm-classify-backend",
+        choices=["llm", "local-embed"],
+        default=None,
+        help=(
+            "Backend for nested llm_classify calls: 'llm' (default; per-row model "
+            "calls) or 'local-embed' (zero-token local embedding classifier via the "
+            "`semantic` extra). Restored from config.json on resume."
+        ),
+    )
+    parser.add_argument(
         "--llm-classify-concurrency",
         type=int,
         choices=[1, 2],
@@ -529,6 +539,7 @@ def main(argv: list[str] | None = None) -> int:
         ("llm_classify_reasoning", args.llm_classify_reasoning),
         ("llm_classify_concurrency", args.llm_classify_concurrency),
         ("llm_classify_row_budget", args.llm_classify_row_budget),
+        ("llm_classify_backend", args.llm_classify_backend),
         ("terminalize_timeouts", args.terminalize_timeouts),
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
@@ -664,6 +675,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.llm_classify_row_budget is not None
         else existing_cfg.get("llm_classify_row_budget")
     )
+    effective_classify_backend: str = (
+        args.llm_classify_backend
+        if args.llm_classify_backend is not None
+        else existing_cfg.get("llm_classify_backend", "llm")
+    )
     if effective_classify_row_budget is not None and effective_classify_row_budget < 1:
         parser.error("--llm-classify-row-budget must be positive")
     effective_terminalize_timeouts: bool = bool(
@@ -681,6 +697,7 @@ def main(argv: list[str] | None = None) -> int:
         "llm_classify_reasoning",
         "llm_classify_concurrency",
         "llm_classify_row_budget",
+        "llm_classify_backend",
     )
     legacy_nested_config = bool(existing_cfg) and not any(
         key in existing_cfg for key in nested_keys
@@ -692,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
             args.llm_classify_reasoning,
             args.llm_classify_concurrency,
             args.llm_classify_row_budget,
+            args.llm_classify_backend,
         )
     )
     nested_differs_from_legacy = (
@@ -699,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         or effective_classify_reasoning != effective_reasoning
         or effective_classify_concurrency != 1
         or effective_classify_row_budget is not None
+        or effective_classify_backend != "llm"
     )
     if (
         legacy_nested_config
@@ -754,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
         llm_classify_reasoning=effective_classify_reasoning,
         llm_classify_concurrency=effective_classify_concurrency,
         llm_classify_row_budget=effective_classify_row_budget,
+        llm_classify_backend=effective_classify_backend,
         terminalize_timeouts=effective_terminalize_timeouts,
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
@@ -842,6 +862,7 @@ def main(argv: list[str] | None = None) -> int:
                 "llm_classify_reasoning": effective_classify_reasoning,
                 "llm_classify_concurrency": effective_classify_concurrency,
                 "llm_classify_row_budget": effective_classify_row_budget,
+                "llm_classify_backend": effective_classify_backend,
             }
         )
     (output_dir / "config.json").write_text(json.dumps(config_payload, indent=2))
