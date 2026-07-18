@@ -142,3 +142,21 @@ deps_dev_v1 3/6, music_brainz_20k 9/9, stockindex 9/9, yelp 18/21.
   respected; backend flag plumbed through CLI/config/resume.
 - opening_prompt.txt: written per trial (incl. terminal trials); bundle manifest
   carries usage + prompt file with existing checks green.
+
+## Amendment (2026-07-18, preregistered before launch): Arm L3 — Terra tier comparison
+
+Mandate extension relayed from the user. **Arm L3** runs AFTER L1 completes (never
+concurrently): `gpt-5.6-terra` @ `high` reasoning, identical stack otherwise
+(cartograph + levers + hints + ledger + **taxonomy ON**), same 15 tasks × 3
+trials, codex provider, sharded sequential with the same ≤3-attempt retry
+machinery, into `runs/dab/ablation-gpt56-terra-high-taxonomy-shards`.
+
+Preregistered constraints:
+- **Descriptive only.** L3 is a matched-config tier comparison
+  (luna-max+taxonomy vs terra-high+taxonomy). No promotion decision at n=3.
+- **Partial coverage is reported as partial.** Terra historically rate-limits
+  before completion (the campaign tier arm reached 14/18 rows). On exit-4
+  stalls: at most 3 resume attempts total across the run, then stop and record
+  coverage honestly. Survivor-only accuracy is never compared as if complete;
+  report per-key coverage alongside any rates.
+- **No Anthropic/Sonnet arm** in this campaign (user-deferred to next week).
