@@ -37,6 +37,10 @@ _LOCAL_DB_URI_RE = re.compile(
     re.IGNORECASE,
 )
 _QUERY_DIR_RE = re.compile(r"(^|/)query_?\d+(/|$)", re.IGNORECASE)
+# A real path has directory structure or a filename with an extension. Used to
+# stop a bare slash-prefixed SQL fragment (e.g. '/00', a CPC subgroup suffix from
+# concat(prefix, '/00')) being misread as an absolute filesystem path.
+_FILE_EXT_RE = re.compile(r"\.[a-z0-9]{1,8}$", re.IGNORECASE)
 # Generalized DuckDB file/table-function coverage: every read_* variant
 # (read_csv[_auto], read_parquet, read_json[_auto], read_ndjson, read_text,
 # read_blob, read_xlsx, ...), every *_scan alias (parquet_scan, sqlite_scan,
@@ -225,13 +229,24 @@ def fold_sql_literals(sql: str) -> list[str]:
     return [f.lower() for f in folded]
 
 
-def classify_file_source(source: str) -> tuple[str, str] | None:
+def classify_file_source(
+    source: str, *, require_path_shape: bool = False
+) -> tuple[str, str] | None:
     """Classify one file-source string; return ``(tag, detail)`` or ``None``.
 
     Order is fail-closed severity: URL scheme, sensitive name, answer-key
     directory shape (``query<N>``), prior-run/VCS artifacts, traversal, and
     absolute paths outside the sanctioned ``query_dataset`` layout. Relative
     paths and temp/scratch locations are allowed.
+
+    ``require_path_shape`` (set only for folded SQL literals, which are arbitrary
+    strings rather than real file-source arguments): the generic catch-all
+    "absolute path outside sanctioned layout" branch fires only when the string
+    actually looks like a path — a directory structure (>=2 segments) or a
+    filename extension. Every *specific* threat (sensitive names, ``query<N>``
+    dirs, traversal, prior-run/VCS artifacts, remote DBs) is still caught
+    regardless, so a bare ``/00`` CPC suffix is cleared without weakening
+    detection of a real answer-key read.
     """
     s = source.strip().strip('"')
     if not s:
@@ -282,6 +297,9 @@ def classify_file_source(source: str) -> tuple[str, str] | None:
     if low.startswith("/") or low.startswith("~"):
         if "query_dataset" in segments:
             return None
+        if require_path_shape and len(segments) < 2 and not _FILE_EXT_RE.search(low):
+            # Folded SQL literal with no real path shape (e.g. '/00'): not a path.
+            return None
         return ("unsanctioned_path", f"absolute path outside sanctioned layout: {s[:120]}")
     return None
 
@@ -318,8 +336,14 @@ def classify_folded_literal(literal: str) -> tuple[str, str] | None:
         # Slash-only literals ('/', '//') are string delimiters in real corpus
         # SQL (split_part(name, '/', 1)), not paths.
         return None
-    if low.startswith("/") or low.startswith("~") or ".." in segments:
+    if ".." in segments:
+        # Traversal is always path-shaped enough to flag.
         return classify_file_source(s)
+    if low.startswith("/") or low.startswith("~"):
+        # Bare slash-prefixed fragments ('/00' CPC suffix, '/'-delimiter concat
+        # pieces) are not paths; require real path shape for the catch-all, while
+        # specific threats (needles, query-dir, prior-run) still fire inside.
+        return classify_file_source(s, require_path_shape=True)
     return None
 
 

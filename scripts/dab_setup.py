@@ -21,8 +21,13 @@ DEFAULT_DAB_DIR = Path("~/repos/DataAgentBench").expanduser()
 
 
 def pg_database_exists(name: str) -> bool:
-    """True if a PG database with this name exists."""
-    name = name.lower()
+    """True if a PG database with this name exists.
+
+    The name is checked with its exact case: Postgres identifiers are
+    case-sensitive when quoted, and the DAB config's ``db_name`` (e.g.
+    ``patent_CPCDefinition``) is what the eval connects with verbatim, so setup
+    must create/find that exact name — never a lowercased variant.
+    """
     result = subprocess.run(
         [
             "psql",
@@ -47,12 +52,15 @@ def pg_load_dataset(name: str, sql_file: Path) -> None:
     persists and a retry will skip with 'already loaded'. To retry a failed
     load, manually `DROP DATABASE <name>` first.
     """
-    name = name.lower()
     if pg_database_exists(name):
         print(f"  [pg] {name}: already loaded, skipping")
         return
+    # Quote the identifier so Postgres preserves the config's exact case. An
+    # unquoted CREATE DATABASE folds to lowercase, but the eval connects with the
+    # verbatim config db_name (e.g. patent_CPCDefinition) — an unquoted create
+    # would silently produce a db the eval can't find (infra connection failure).
     subprocess.run(
-        ["psql", "-h", "localhost", "-d", "postgres", "-c", f"CREATE DATABASE {name};"],
+        ["psql", "-h", "localhost", "-d", "postgres", "-c", f'CREATE DATABASE "{name}";'],
         check=True,
     )
     subprocess.run(

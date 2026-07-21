@@ -454,3 +454,32 @@ def test_fold_nested_concat_folds_through() -> None:
 def test_fold_concat_after_literal_without_glue_does_not_join() -> None:
     folded = fold_sql_literals("SELECT 'x', concat('a', 'b')")
     assert folded == ["x", "ab"]
+
+
+# --- Regression: CPC-code SQL literals are not filesystem paths (2026-07-20) ---
+
+
+def test_cpc_subgroup_suffix_literal_is_clean() -> None:
+    # patents:2 normalizes CPC codes via concat(prefix, '/00') — the folded '/00'
+    # literal must NOT be flagged as an absolute path (real false positive that
+    # marked legitimate patents trials as external-oracle-cheating).
+    from labrat.eval.benchmarks.dab.taint_structural import classify_folded_literal
+
+    assert classify_folded_literal("/00") is None
+    assert classify_folded_literal("/1") is None
+    assert classify_folded_literal("/A") is None
+
+
+def test_real_paths_and_threats_still_flagged_in_folded_literals() -> None:
+    from labrat.eval.benchmarks.dab.taint_structural import classify_folded_literal
+
+    # multi-segment absolute path → still flagged
+    assert classify_folded_literal("/etc/passwd") is not None
+    # bare filename with a data extension → still flagged (fail-closed)
+    assert classify_folded_literal("/gt.csv") is not None
+    # traversal → still flagged
+    assert classify_folded_literal("/../secret/x") is not None
+    # answer-key needle regardless of shape → still flagged
+    assert classify_folded_literal("/ground_truth.csv") is not None
+    # query-dir shape → still flagged
+    assert classify_folded_literal("/query3/labels.csv") is not None
