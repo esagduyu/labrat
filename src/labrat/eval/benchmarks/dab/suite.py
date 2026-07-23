@@ -1506,6 +1506,10 @@ class DabSuite:
                         # the zero-token static-embedder classifier — the only
                         # working classification path on claude-mcp.
                         "LABRAT_MCP_LLM_CLASSIFY_BACKEND": self._llm_classify_backend,
+                        # Persist the static-embedder model cache across trials:
+                        # the cartograph hermetic HOME below would otherwise force
+                        # a fresh ~30MB model download every trial (HF rate limits).
+                        "HF_HOME": os.path.join(os.path.expanduser("~"), ".cache", "huggingface"),
                         **(
                             {
                                 "LABRAT_MAZE_DIR": str(maze_root),
