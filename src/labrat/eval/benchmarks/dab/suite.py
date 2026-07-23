@@ -178,7 +178,9 @@ def _rate_limit_meta(exc: Exception) -> dict[str, int]:
 # counted as a pass.
 
 
-def _build_labrat_agent_system_prompt(env: DabTaskEnv, *, include_levers: bool = True) -> str:
+def _build_labrat_agent_system_prompt(
+    env: DabTaskEnv, *, include_levers: bool = True, include_taxonomy: bool = False
+) -> str:
     parts = [
         "You are a data analyst. Answer the question by querying the available databases "
         "using the provided tools.",
@@ -232,6 +234,10 @@ def _build_labrat_agent_system_prompt(env: DabTaskEnv, *, include_levers: bool =
             "on the last line.",
         ]
     )
+    if include_taxonomy:
+        parts.append("")
+        parts.append("Answer discipline:")
+        parts.extend(f"  - {line}" for line in _taxonomy_lines())
     return "\n".join(parts)
 
 
@@ -348,6 +354,53 @@ def _dab_lever_lines() -> list[str]:
         "For 'top N' / 'highest' questions, remember a bare LIMIT N silently truncates ties: "
         "if the Nth value can repeat, rank with ties (RANK()/DENSE_RANK() or fetch the full tie "
         "band) rather than LIMIT alone.",
+    ]
+
+
+def _taxonomy_lines() -> list[str]:
+    """Answer-discipline taxonomy (Lever Pack v2) — general analysis practice.
+
+    Authored as universal data-analysis discipline: how to pin an answer's shape
+    and grain, deliver it literally, read questions precisely, and verify before
+    committing. Deliberately benchmark-agnostic (no dataset, validator, or
+    output-convention knowledge) so it applies to any analyst workload; see
+    docs/superpowers/specs/2026-07-18-lever-pack-v2-design.md for provenance.
+    """
+    return [
+        "Before writing the final query, pin the answer's SHAPE: does the question "
+        "want one value, or one row per group? Phrases like 'for each X' or 'per X' "
+        "ask for every qualifying X; a superlative inside such a question picks the "
+        "best WITHIN each group, not one global winner. If the shape is genuinely "
+        "ambiguous, return all qualifying rows, then check your row count against "
+        "the number of qualifying groups.",
+        "Pin the GRAIN too: prefer the column that stores the asked-about thing at "
+        "its native granularity. When both an identifier code column and a display "
+        "name column exist and the question is ambiguous, prefer the finer coded "
+        "column and check whether distinct codes share one name. If a stated "
+        "qualifier filters out zero rows even though such values exist elsewhere in "
+        "that column, you probably picked the wrong column.",
+        "Deliver the complete literal answer on the final line: enumerate every "
+        "qualifying item (never truncate or summarize a list), keep each item and "
+        "its value adjacent as plain tokens, give numbers at query precision, and "
+        "express a fraction as a decimal unless a percentage is requested. State "
+        "entity names exactly as they are stored in the data. No preamble.",
+        "Read the question literally: 'more than' is strict while 'at least' is "
+        "inclusive; key time filters to the exact event the question names; treat "
+        "'not X' as strict absence unless the question says primary or main; when a "
+        "metric word is loose, choose one concrete definition the schema supports "
+        "and state it in a single clause.",
+        "When several readings are defensible, note them briefly, commit to the "
+        "most defensible one grounded in the schema and sampled data, and state "
+        "your choice in one short clause before the answer.",
+        "Verify before you commit: Re-run the exact query behind your final answer "
+        "and check the stated items, counts, and values against it; after each "
+        "significant filter, sanity-check the cohort size and a few sample rows "
+        "before building on it.",
+        "To categorize many rows of free text, derive one deterministic rule from "
+        "sampled rows, state the rule, and apply it uniformly to every row; do not "
+        "sample-and-extrapolate or change the rule midway.",
+        "After checking every provided database, 'the data does not contain this' "
+        "is a legitimate final answer; prefer it over a fabricated or forced result.",
     ]
 
 
@@ -559,9 +612,11 @@ class DabSuite:
         llm_classify_reasoning: str | None = None,
         llm_classify_concurrency: int = 1,
         llm_classify_row_budget: int | None = None,
+        llm_classify_backend: str = "llm",
         terminalize_timeouts: bool = False,
         agent_levers: bool = True,
         agent_ledger: bool = True,
+        agent_taxonomy: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
         cartograph_semantics_model: str = "claude-sonnet-4-6",
@@ -604,6 +659,9 @@ class DabSuite:
             raise ValueError("llm_classify_row_budget must be positive when set")
         self._llm_classify_concurrency = llm_classify_concurrency
         self._llm_classify_row_budget = llm_classify_row_budget
+        if llm_classify_backend not in ("llm", "local-embed"):
+            raise ValueError("llm_classify_backend must be 'llm' or 'local-embed'")
+        self._llm_classify_backend = llm_classify_backend
         self._terminalize_timeouts = terminalize_timeouts
         # Benchmark-safe process levers are enabled by default for historical
         # compatibility. The explicit toggle supports a clean ablation arm.
@@ -611,6 +669,7 @@ class DabSuite:
         # ContextLedger is likewise historically on through run_agent_task's
         # default; make it explicit so DAB runs can ablate and resume it safely.
         self._agent_ledger = agent_ledger
+        self._agent_taxonomy = agent_taxonomy
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
         self._cartograph = cartograph
@@ -1235,6 +1294,9 @@ class DabSuite:
                         # semantic attempt, including after an infra resume.
                         shutil.copy2(src, dst)
                         break  # only one trace file expected per sub-run
+                    chosen_prompt = chosen_sub / "opening_prompt.txt"
+                    if chosen_prompt.is_file():
+                        shutil.copy2(chosen_prompt, scratch_dir / "opening_prompt.txt")
                 except Exception:
                     pass  # fail-open
 
@@ -1592,6 +1654,7 @@ class DabSuite:
         introspect_env_catalogs(env.ctx)
         env.ctx.llm_classify_concurrency = self._llm_classify_concurrency
         env.ctx.llm_classify_row_budget = self._llm_classify_row_budget
+        env.ctx.llm_classify_backend = self._llm_classify_backend
         env.ctx.llm_classify_rows_used = 0
         # Benchmark fail-fast: a 429 inside a tool must escape the loop so
         # run_trial records a durable infra:rate_limit row instead of a
@@ -1642,7 +1705,9 @@ class DabSuite:
                     ),
                 )
             system_prompt = _build_labrat_agent_system_prompt(
-                env, include_levers=self._agent_levers
+                env,
+                include_levers=self._agent_levers,
+                include_taxonomy=self._agent_taxonomy,
             )
             if self._llm_classify_row_budget is not None:
                 system_prompt = (
@@ -1662,6 +1727,18 @@ class DabSuite:
                 system_prompt = system_prompt + "\n" + _cartographer_prompt_line()
             if extra_instructions:
                 system_prompt = f"{system_prompt}\n\n{extra_instructions}"
+
+            # Disclosure: persist the exact opening prompts (Lever Pack v2 T3) so
+            # every trial — including failed/terminal ones — carries its prompt
+            # for reviewer leakage checks without post-hoc reconstruction.
+            (scratch_dir / "opening_prompt.txt").write_text(
+                "=== SYSTEM PROMPT ===\n"
+                + system_prompt
+                + "\n\n=== OPENING USER MESSAGE ===\n"
+                + task.prompt
+                + "\n",
+                encoding="utf-8",
+            )
 
             def _trace(
                 tool: str,

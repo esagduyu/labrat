@@ -599,6 +599,40 @@ def build_bundle(
             trace_records = _copy_trace_records(trace_records_payload, destination)
             trace_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
 
+            # Disclosure extras (additive): the trial's opening prompt, when the
+            # run persisted one, and its usage summary from the trial record.
+            relative_prompt: str | None = None
+            prompt_source = _source.parent / "opening_prompt.txt"
+            if prompt_source.is_file() and not prompt_source.is_symlink():
+                prompt_text = prompt_source.read_text(encoding="utf-8")
+                _assert_no_secrets(
+                    prompt_text,
+                    source=f"opening prompt {task_id} trial {trial_num}",
+                    **_scan_kwargs,
+                )
+                prompt_dest = destination.parent / "opening_prompt.txt"
+                prompt_dest.write_text(_scrub_text(prompt_text), encoding="utf-8")
+                relative_prompt = str(
+                    Path("traces")
+                    / f"{_safe_name(task_id)}__trial{trial_num}"
+                    / "opening_prompt.txt"
+                )
+            meta = attempt.record.get("meta")
+            usage_summary: dict[str, Any] | None = None
+            if isinstance(meta, dict):
+                usage = meta.get("usage")
+                if isinstance(usage, dict):
+                    usage_summary = {
+                        key_name: usage.get(key_name)
+                        for key_name in (
+                            "input_tokens",
+                            "cached_tokens",
+                            "output_tokens",
+                            "requests",
+                        )
+                        if key_name in usage
+                    }
+
             manifest_trials.append(
                 {
                     "task_id": task_id,
@@ -608,6 +642,8 @@ def build_bundle(
                     "selected_line_number": attempt.line_number,
                     "attempt_count": len(group),
                     "infra_attempt_count": len(infra_attempts),
+                    "usage": usage_summary,
+                    "opening_prompt": relative_prompt,
                     "trace_scope": (
                         "selected-attempt"
                         if config.get("trace_attempt_policy") == "reset_on_attempt"

@@ -593,3 +593,54 @@ def test_runner_normalizes_textual_429_to_retryable_stop(
     rows = [json.loads(line) for line in (output_dir / "trials.jsonl").read_text().splitlines()]
     assert len(rows) == 1
     assert rows[0]["reason"] == "infra:rate_limit"
+
+
+def test_agent_taxonomy_defaults_off_persists_and_rejects_resume_conflict(
+    tmp_path: Path,
+) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "run-tax"
+    base = ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]
+
+    assert main(base) == 0
+    initial = json.loads((output_dir / "config.json").read_text())
+    assert initial["agent_taxonomy"] is False
+
+    output_dir2 = tmp_path / "run-tax-on"
+    base2 = ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir2)]
+    assert main([*base2, "--agent-taxonomy"]) == 0
+    enabled = json.loads((output_dir2 / "config.json").read_text())
+    assert enabled["agent_taxonomy"] is True
+
+    # Omitting the flag on resume restores the stored value.
+    assert main(base2) == 0
+    resumed = json.loads((output_dir2 / "config.json").read_text())
+    assert resumed["agent_taxonomy"] is True
+
+    with pytest.raises(SystemExit, match=r"Resume conflict.*agent-taxonomy"):
+        main([*base2, "--no-agent-taxonomy"])
+
+
+def test_llm_classify_backend_persists_and_rejects_resume_conflict(tmp_path: Path) -> None:
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "run-backend"
+    base = ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]
+
+    assert main([*base, "--llm-classify-backend", "local-embed"]) == 0
+    cfg = json.loads((output_dir / "config.json").read_text())
+    assert cfg["llm_classify_backend"] == "local-embed"
+
+    assert main(base) == 0  # restored on resume
+    assert (
+        json.loads((output_dir / "config.json").read_text())["llm_classify_backend"]
+        == "local-embed"
+    )
+
+    with pytest.raises(SystemExit, match=r"Resume conflict.*llm-classify-backend"):
+        main([*base, "--llm-classify-backend", "llm"])

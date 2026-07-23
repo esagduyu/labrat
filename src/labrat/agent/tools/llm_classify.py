@@ -138,8 +138,9 @@ class LlmClassifyTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
+        local_backend = ctx.llm_classify_backend == "local-embed"
         classify_llm_fn = ctx.llm_classify_fn or ctx.llm_fn
-        if classify_llm_fn is None:
+        if classify_llm_fn is None and not local_backend:
             return _Output(ok=False, error=_NO_LLM_ERROR)
         conn = ctx.connection
         if not isinstance(conn, DuckDBConnection):
@@ -179,6 +180,38 @@ class LlmClassifyTool(Tool[_Input]):
             max_rows = MAX_BATCHED_CLASSIFY_ROWS if args.batch_size > 1 else 200
             if rows_remaining is not None:
                 max_rows = min(max_rows, rows_remaining)
+            if local_backend:
+                from labrat.agent.tools.local_classify import classify_rows_local_embed
+
+                result = await classify_rows_local_embed(
+                    ctx,
+                    table=args.table,
+                    text_column=args.text_column,
+                    key_columns=args.key_columns,
+                    labels=args.labels,
+                    where=args.where,
+                    limit=args.limit,
+                    max_rows=max_rows,
+                )
+                ctx.llm_classify_rows_used += result.rows_processed
+                conn.materialize_table(result_table, result.df.to_arrow())  # type: ignore[arg-type]
+                return _Output(
+                    ok=True,
+                    result_table=result_table,
+                    rows_processed=result.rows_processed,
+                    rows_failed=result.rows_failed,
+                    requests_made=0,
+                    batch_size=args.batch_size,
+                    concurrency=ctx.llm_classify_concurrency,
+                    max_requests=args.max_requests,
+                    row_budget=row_budget,
+                    rows_remaining=(
+                        max(0, row_budget - ctx.llm_classify_rows_used)
+                        if row_budget is not None
+                        else None
+                    ),
+                    columns=result.df.columns,
+                )
             result = await extract_rows(
                 ctx,
                 table=args.table,

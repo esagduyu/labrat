@@ -124,3 +124,21 @@ Launch that arm only with the feature configuration selected by the Luna Max sub
 - **MCP server connections are JSON env vars** — `LABRAT_MCP_CONNECTIONS` + optional `LABRAT_MCP_PRIMARY`/`LABRAT_MCP_LOG_DIR`. Only `db_type=duckdb` in the spec today; SQLite/Postgres/MySQL reached via the `attach_database` tool. To add Postgres/Mongo MCP support, extend `_build_context_from_env` in `src/labrat/mcp/server.py`.
 - **music_brainz_20k answer-from-context** — returns in 7-10s with wrong answers (model answers from prompt without querying). A force-query prompt rule is the candidate fix (untried). Distinct from a slow-but-wrong failure like deps_dev_v1:1 (60-170s real queries, still wrong).
 - **Self-healing Sonnet re-run loop** (`scripts/dab_rerun_{tick,loop}.sh`) — probes Max-plan, then starts/resumes `eval_dab.py --output-dir runs/dab/dab-rerun-clean` (official-scoped, n=5, 1200s); 30-min poll. Must run locally (Max-plan OAuth + mongod + DAB checkout). mongod must be up (agnews/yelp need it).
+
+## Lever Pack v2 additions (2026-07-18)
+
+- `--agent-taxonomy` (default off, resume-safe): appends the benchmark-agnostic
+  "Answer discipline" section to the labrat-agent system prompt (shape/grain
+  pinning, literal delivery, verify-before-commit, deterministic-rule bulk
+  categorization). Spec: `superpowers/specs/2026-07-18-lever-pack-v2-design.md`.
+- `--llm-classify-backend llm|local-embed`: `local-embed` classifies rows with
+  the `semantic` extra's local embedder — zero LLM tokens, provider-quota-immune;
+  fail-closed self-error when the extra is absent.
+- **Hard-tail timeout recipe** (no new config surface): run slow datasets as
+  their own shard with a longer wall clock, e.g.
+  `uv run python scripts/eval_dab.py --output-dir runs/dab/<run>/agnews --datasets agnews --agent-timeout 2400 ...`
+  — shard-level `--agent-timeout` composes with `dab_shards.py merge`'s
+  permitted per-shard config deltas.
+- Trace bundles now carry per-trial `opening_prompt.txt` (written by the
+  labrat-agent driver at dispatch time) and a per-trial `usage` summary in
+  `manifest.json` — both additive.

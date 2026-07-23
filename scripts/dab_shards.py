@@ -44,6 +44,7 @@ _RECOVERY_COMPAT_KEYS = (
     "agent_reasoning",
     "agent_levers",
     "agent_ledger",
+    "agent_taxonomy",
     "n_trials",
 )
 

@@ -270,6 +270,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--llm-classify-backend",
+        choices=["llm", "local-embed"],
+        default=None,
+        help=(
+            "Backend for nested llm_classify calls: 'llm' (default; per-row model "
+            "calls) or 'local-embed' (zero-token local embedding classifier via the "
+            "`semantic` extra). Restored from config.json on resume."
+        ),
+    )
+    parser.add_argument(
         "--llm-classify-concurrency",
         type=int,
         choices=[1, 2],
@@ -307,6 +317,17 @@ def main(argv: list[str] | None = None) -> int:
             "Enable the ContextLedger for labrat-agent trials and persist its artifacts "
             "in the trial scratch directory. On by default for new runs; restored from "
             "config.json on resume. Use --no-agent-ledger for the ablation control."
+        ),
+    )
+    parser.add_argument(
+        "--agent-taxonomy",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Append the answer-discipline taxonomy (Lever Pack v2: shape/grain "
+            "pinning, literal delivery, verify-before-commit) to the labrat-agent "
+            "system prompt. Off by default for new runs; restored from config.json "
+            "on resume. Benchmark-agnostic process guidance only."
         ),
     )
     parser.add_argument(
@@ -518,9 +539,11 @@ def main(argv: list[str] | None = None) -> int:
         ("llm_classify_reasoning", args.llm_classify_reasoning),
         ("llm_classify_concurrency", args.llm_classify_concurrency),
         ("llm_classify_row_budget", args.llm_classify_row_budget),
+        ("llm_classify_backend", args.llm_classify_backend),
         ("terminalize_timeouts", args.terminalize_timeouts),
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
+        ("agent_taxonomy", args.agent_taxonomy),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -652,6 +675,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.llm_classify_row_budget is not None
         else existing_cfg.get("llm_classify_row_budget")
     )
+    effective_classify_backend: str = (
+        args.llm_classify_backend
+        if args.llm_classify_backend is not None
+        else existing_cfg.get("llm_classify_backend", "llm")
+    )
     if effective_classify_row_budget is not None and effective_classify_row_budget < 1:
         parser.error("--llm-classify-row-budget must be positive")
     effective_terminalize_timeouts: bool = bool(
@@ -669,6 +697,7 @@ def main(argv: list[str] | None = None) -> int:
         "llm_classify_reasoning",
         "llm_classify_concurrency",
         "llm_classify_row_budget",
+        "llm_classify_backend",
     )
     legacy_nested_config = bool(existing_cfg) and not any(
         key in existing_cfg for key in nested_keys
@@ -680,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
             args.llm_classify_reasoning,
             args.llm_classify_concurrency,
             args.llm_classify_row_budget,
+            args.llm_classify_backend,
         )
     )
     nested_differs_from_legacy = (
@@ -687,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         or effective_classify_reasoning != effective_reasoning
         or effective_classify_concurrency != 1
         or effective_classify_row_budget is not None
+        or effective_classify_backend != "llm"
     )
     if (
         legacy_nested_config
@@ -718,6 +749,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_ledger is not None
         else existing_cfg.get("agent_ledger", True)
     )
+    effective_taxonomy: bool = bool(
+        args.agent_taxonomy
+        if args.agent_taxonomy is not None
+        else existing_cfg.get("agent_taxonomy", False)
+    )
     effective_n_trials: int = (
         args.n_trials if args.n_trials is not None else existing_cfg.get("n_trials", 5)
     )
@@ -737,9 +773,11 @@ def main(argv: list[str] | None = None) -> int:
         llm_classify_reasoning=effective_classify_reasoning,
         llm_classify_concurrency=effective_classify_concurrency,
         llm_classify_row_budget=effective_classify_row_budget,
+        llm_classify_backend=effective_classify_backend,
         terminalize_timeouts=effective_terminalize_timeouts,
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
+        agent_taxonomy=effective_taxonomy,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
         cartograph_semantics_model=effective_cartograph_semantics_model,
@@ -802,6 +840,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_reasoning": effective_reasoning,
         "agent_levers": effective_levers,
         "agent_ledger": effective_ledger,
+        "agent_taxonomy": effective_taxonomy,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
         ),
@@ -823,6 +862,7 @@ def main(argv: list[str] | None = None) -> int:
                 "llm_classify_reasoning": effective_classify_reasoning,
                 "llm_classify_concurrency": effective_classify_concurrency,
                 "llm_classify_row_budget": effective_classify_row_budget,
+                "llm_classify_backend": effective_classify_backend,
             }
         )
     (output_dir / "config.json").write_text(json.dumps(config_payload, indent=2))
