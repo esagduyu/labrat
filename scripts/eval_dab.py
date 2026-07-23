@@ -67,8 +67,10 @@ def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
 
     Infra failures (``reason`` starts with ``"infra:"``) are NOT considered
     completed — they never got a fair shot at the query, so a resume rerun
-    should attempt them again. Retry rows are append-only: a successful rerun
-    adds a new semantic row while preserving the infrastructure attempt.
+    should attempt them again. A rerun that is still infra keeps both rows
+    (append-only audit trail); a rerun that succeeds with a real semantic
+    result replaces the stale infra row(s) for that key — see
+    ``_compact_stale_infra_rows``.
     """
     completed: set[tuple[str, int]] = set()
     if not trials_jsonl.exists():
@@ -86,6 +88,47 @@ def _load_completed_trials(trials_jsonl: Path) -> set[tuple[str, int]]:
         except (json.JSONDecodeError, KeyError):
             pass
     return completed
+
+
+def _compact_stale_infra_rows(trials_jsonl: Path, key: tuple[str, int]) -> None:
+    """Drop stale infra row(s) for ``key`` from trials.jsonl in place.
+
+    Called right after a resume rerun of a previously-infra (task_id, trial_num)
+    trial produces a semantic (non-infra) result: the fresh row has already been
+    appended, so any earlier infra row(s) for the same key are now stale
+    duplicates left behind by the append-only resume writer. Every other line
+    — including the just-appended new row, and infra rows for OTHER keys — is
+    left untouched, so this only closes the "infra row stays, new row also
+    appended" leak; it does not otherwise renumber or reorder the file.
+
+    Safe to call while the caller still holds its own file handle open in
+    append ("a") mode: append-mode writes always seek to the current end of
+    file before writing, so a later ``f.write()`` on that handle lands after
+    whatever this rewrite leaves in place.
+    """
+    task_id, trial_num = key
+    lines = trials_jsonl.read_text().splitlines()
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        reason = obj.get("reason") or ""
+        is_stale_infra = (
+            obj.get("task_id") == task_id
+            and obj.get("trial_num") == trial_num
+            and isinstance(reason, str)
+            and reason.startswith("infra:")
+        )
+        if is_stale_infra:
+            continue
+        kept.append(line)
+    trials_jsonl.write_text("".join(f"{line}\n" for line in kept))
 
 
 def _has_semantic_trials(trials_jsonl: Path) -> bool:
@@ -164,6 +207,15 @@ async def _run_interim(
                 f.flush()
                 all_trials.append(result)
                 reason = result.reason or ""
+                key = (task.id, trial_num)
+                if key in infra_keys_to_rewrite and not reason.startswith("infra:"):
+                    # This resume rerun of a previously-infra trial produced a real
+                    # semantic result — drop the stale infra row(s) for this key so
+                    # the file keeps exactly one row per (task_id, trial_num). A
+                    # rerun that is STILL infra keeps both rows (append-only audit
+                    # trail intact) — see _compact_stale_infra_rows.
+                    _compact_stale_infra_rows(trials_jsonl, key)
+                    infra_keys_to_rewrite.discard(key)
                 if reason.startswith("infra:"):
                     status = f"INFRA: {reason[len('infra:') :]}"
                 else:

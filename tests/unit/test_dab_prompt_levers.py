@@ -39,6 +39,57 @@ def test_top_n_with_ties_lever_present() -> None:
     assert any("truncates ties" in ln for ln in _dab_lever_lines())
 
 
+def test_lever_lines_now_number_seven() -> None:
+    assert len(_dab_lever_lines()) == 7
+
+
+def test_enumeration_completeness_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "every qualifying item" in text
+    assert "distinct qualifying groups" in text
+
+
+def test_tie_band_sanity_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "tie band" in text
+    assert "tied roster" in text
+
+
+def test_adjacent_token_delivery_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "directly adjacent as plain tokens" in text
+    assert "markdown table" in text
+
+
+def test_lever_lines_are_untuned_no_dataset_names_or_answer_content() -> None:
+    """Levers stay 'untuned prompt' under DAB's definition — pure process/structure,
+    no dataset names, no answer content."""
+    text = " ".join(_dab_lever_lines()).lower()
+    for forbidden in (
+        "yelp",
+        "googlelocal",
+        "stockmarket",
+        "stockindex",
+        "bookreview",
+        "crmarena",
+        "crmarenapro",
+        "deps_dev",
+        "deps_dev_v1",
+        "agnews",
+        "music_brainz",
+        "github_repos",
+        "patents",
+        "pancancer",
+        "ground truth",
+        "gold",
+        "dab",
+        "benchmark",
+        "validator",
+        "leaderboard",
+    ):
+        assert forbidden not in text, forbidden
+
+
 def _env() -> DabTaskEnv:
     return DabTaskEnv(
         ctx=ToolContext(connections={}, catalogs={}, primary="x"), attachable=[], mongo=[]

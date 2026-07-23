@@ -1045,6 +1045,37 @@ async def test_claude_mcp_driver_sandboxes_tools_and_cwd(tmp_path: Path) -> None
     mcp_config = _json.loads((scratch / "mcp-config.json").read_text())
     server_env = mcp_config["mcpServers"]["labrat"]["env"]
     assert server_env.get("LABRAT_MCP_LOG_DIR")
+    # classify backend flows through to the MCP server (default "llm" here).
+    assert server_env.get("LABRAT_MCP_LLM_CLASSIFY_BACKEND") == "llm"
+
+
+async def test_claude_mcp_passes_local_embed_classify_backend(tmp_path: Path) -> None:
+    """A local-embed configured run must tell the MCP server to use it — the only
+    classification backend that works over MCP (no llm_fn)."""
+    import json as _json
+    import subprocess
+    from unittest.mock import patch
+
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp", llm_classify_backend="local-embed")
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "scratch_backend"
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=b'{"result": "x", "num_turns": 1}', stderr=b""
+        )
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    server_env = _json.loads((scratch / "mcp-config.json").read_text())["mcpServers"]["labrat"][
+        "env"
+    ]
+    assert server_env["LABRAT_MCP_LLM_CLASSIFY_BACKEND"] == "local-embed"
 
 
 async def test_claude_mcp_zero_tool_attempt_creates_empty_trace(tmp_path: Path) -> None:

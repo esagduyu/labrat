@@ -98,6 +98,10 @@ def _build_context_from_env() -> tuple[ToolContext, list[Connection]]:
         primary=rc.primary,
         read_only=rc.read_only,
         profile_name=rc.profile_name,
+        # The local-embed classify backend runs without an llm_fn, so it is the
+        # only classification path usable over MCP (where llm_fn is None and the
+        # LLM backend self-errors). Opt in via env; default "llm" is unchanged.
+        llm_classify_backend=os.environ.get("LABRAT_MCP_LLM_CLASSIFY_BACKEND", "llm"),
     )
     return ctx, list(rc.connections.values())
 
