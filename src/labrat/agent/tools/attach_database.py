@@ -74,11 +74,21 @@ class AttachDatabaseTool(Tool[_Input]):
             conn.attach(args.path, args.alias, args.db_type)
         except Exception as exc:
             return _Output(ok=False, alias=args.alias, message=f"ATTACH failed: {exc}")
+
+        catalog_note = ""
+        try:
+            ctx.catalogs[args.alias] = conn.introspect_attached_catalog(args.alias)
+            # Register the alias against the SAME primary connection so catalog tools
+            # that need a live handle (column_stats, describe_table value-hints) resolve
+            # it; attached tables are addressed as alias.table through this connection.
+            ctx.connections[args.alias] = conn
+        except Exception as exc:  # introspection is best-effort; never fail the attach
+            catalog_note = f" (schema not indexed: {exc})"
         return _Output(
             ok=True,
             alias=args.alias,
             message=(
                 f"Attached {args.path!r} as {args.alias}. "
-                f"Reference its tables as {args.alias}.<table_name>."
+                f"Reference its tables as {args.alias}.<table_name>.{catalog_note}"
             ),
         )
