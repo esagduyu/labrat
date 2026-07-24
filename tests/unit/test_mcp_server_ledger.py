@@ -108,6 +108,40 @@ def test_render_payload_via_ledger_passthrough_under_budget(tmp_path: Path) -> N
     assert text == "small payload"
 
 
+def test_ledger_max_bytes_defaults_to_8000_when_env_unset(monkeypatch: Any) -> None:
+    """Default budget is unchanged (8000) — the OFF-path guarantee."""
+    monkeypatch.delenv("LABRAT_MCP_LEDGER_MAX_BYTES", raising=False)
+    assert mcp_server._ledger_max_bytes() == 8000
+
+
+def test_ledger_max_bytes_env_override_raises_threshold(tmp_path: Path, monkeypatch: Any) -> None:
+    """LABRAT_MCP_LEDGER_MAX_BYTES lets a grounding-sized payload pass untruncated.
+
+    A 30 KB payload (search_reference_docs/describe_table land in the 8-22 KB
+    range) is truncated at the 8000-byte default but survives whole at 64000 —
+    so raising the budget stops the ledger from chopping grounding while still
+    bounding genuinely oversized run_sql dumps.
+    """
+    payload = "g" * 30_000
+    monkeypatch.delenv("LABRAT_MCP_LEDGER_MAX_BYTES", raising=False)
+    truncated = mcp_server._render_payload_via_ledger(
+        store_dir=tmp_path, tool_name="search_reference_docs", payload=payload
+    )
+    assert "[context ledger]" in truncated  # default 8 KB budget truncates it
+
+    monkeypatch.setenv("LABRAT_MCP_LEDGER_MAX_BYTES", "64000")
+    survives = mcp_server._render_payload_via_ledger(
+        store_dir=tmp_path, tool_name="search_reference_docs", payload=payload
+    )
+    assert survives == payload  # 64 KB budget passes grounding through verbatim
+
+
+def test_ledger_max_bytes_invalid_env_falls_back_to_default(monkeypatch: Any) -> None:
+    """A non-integer env value must not crash the server — fall back to 8000."""
+    monkeypatch.setenv("LABRAT_MCP_LEDGER_MAX_BYTES", "not-a-number")
+    assert mcp_server._ledger_max_bytes() == 8000
+
+
 # ── _get_artifact_text (backs get_artifact retrieval) ───────────────────────
 
 

@@ -1522,10 +1522,16 @@ class DabSuite:
                         # tool results and exposes get_artifact for verbatim retrieval.
                         # Off by default — the env block below is byte-identical to
                         # today's when --agent-mcp-ledger is not passed.
+                        # Budget raised to 64 KB: grounding payloads
+                        # (search_reference_docs/describe_table, 8-22 KB) pass through
+                        # whole so the ledger never chops the schema/disambiguation
+                        # detail, while genuinely oversized run_sql result dumps (the
+                        # context-blowing case) still get bounded.
                         **(
                             {
                                 "LABRAT_MCP_LEDGER": "1",
                                 "LABRAT_MCP_RESULT_STORE_DIR": str(scratch_dir / "results"),
+                                "LABRAT_MCP_LEDGER_MAX_BYTES": "64000",
                             }
                             if self._agent_mcp_ledger
                             else {}

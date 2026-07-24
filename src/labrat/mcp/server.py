@@ -134,6 +134,24 @@ def _store_dir_from_env() -> Path | None:
     return Path(raw) if raw else None
 
 
+def _ledger_max_bytes() -> int:
+    """Byte budget above which a tool payload is stored and previewed.
+
+    Defaults to ``LedgerBudget.max_bytes`` (8000). ``LABRAT_MCP_LEDGER_MAX_BYTES``
+    overrides it — the DAB claude-mcp path raises it to 64000 so grounding
+    payloads (search_reference_docs/describe_table run 8-22 KB) pass through
+    whole while genuinely oversized run_sql dumps still get bounded. A missing
+    or non-integer value falls back to the default rather than crashing.
+    """
+    raw = os.environ.get("LABRAT_MCP_LEDGER_MAX_BYTES")
+    if raw is None:
+        return LedgerBudget().max_bytes
+    try:
+        return int(raw)
+    except ValueError:
+        return LedgerBudget().max_bytes
+
+
 def _render_payload_via_ledger(*, store_dir: Path, tool_name: str, payload: str) -> str:
     """Bound an oversized MCP tool payload: store the full text, return a preview block.
 
@@ -142,7 +160,7 @@ def _render_payload_via_ledger(*, store_dir: Path, tool_name: str, payload: str)
     aren't reachable here — we bound by bytes directly and stash the full
     string as a json artifact the model can pull back via get_artifact.
     """
-    budget = LedgerBudget()
+    budget = LedgerBudget(max_bytes=_ledger_max_bytes())
     if len(payload.encode("utf-8")) <= budget.max_bytes:
         return payload
     store = _get_result_store(store_dir)
