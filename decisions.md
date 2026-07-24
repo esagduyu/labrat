@@ -1045,3 +1045,55 @@ from the parse-robustness ablation). Comparability verified (GT/validators uncha
 Multi-day (5h session walls); running detached in the user's terminal. Memory: `reference_dab_sonnet_claude_mcp`.
 Bug fixed en route: `dab_setup.py` unquoted CREATE DATABASE lowercased patent_CPCDefinition; taint-gate-v2
 false-flagged CPC `/00` literals as paths — both fixed on master with tests.
+
+## 2026-07-24 — DAB claude-mcp feature-gap fixes: attached-catalog introspection, attach-only secondary DuckDBs, opt-in server-side MCP ledger
+
+Closed three gaps found while auditing why Sonnet's `claude-mcp` path (`reference_dab_sonnet_claude_mcp`)
+underperforms the same tools on `labrat-agent`: the catalog tools broke on any attached secondary DB,
+a dataset's second DuckDB file was silently dropped, and the Context Ledger never attached to the
+MCP path at all. Branch `feat/dab-claude-mcp-catalog-gaps`.
+
+**GAP 1 — attached-catalog introspection design.** `attach_database` now calls the new
+`DuckDBConnection.introspect_attached_catalog(alias)` after a successful `ATTACH` and stores the
+result at `ctx.catalogs[alias]`, plus registers `ctx.connections[alias]` against the **same** primary
+connection (attached tables are addressed through it as `alias.table`, not via a second live
+connection). The returned `Catalog` sets `schema_name=alias` on every `Table` so
+`Table.qualified_name` comes out as `alias.table` and resolves through `find_table` the way the
+catalog tools already expect. System schemas (`information_schema`, `pg_catalog`) are filtered out —
+an attached Postgres DB exposed 212 tables on `pancancer_atlas` without the filter, mostly catalog
+noise. Foreign keys are explicitly out of scope for attached catalogs (cross-/intra-attached FK
+introspection isn't worth the complexity for a benchmark-driven fix); attached tables just have
+`foreign_keys=[]`. `describe_table` also strips a leading `"<alias>."` prefix from its `table`
+argument before calling `find_table`, since agents naturally pass the dotted form they were just
+told to use. Introspection failure never fails the attach itself — it's wrapped in try/except and
+folds a `" (schema not indexed: ...)"` note into the attach message instead, so a partially-broken
+catalog can't regress the working ATTACH.
+
+**GAP 2 — secondary DuckDBs are attach-only on both drivers now.** Previously `labrat-agent` gave a
+dataset's second DuckDB client its own separate live `DuckDBConnection` (inconsistent with how
+SQLite/Postgres secondaries were handled), while `claude-mcp` had no path for a second DuckDB at all
+and silently dropped it (the `crmarenapro` "activities" table, concretely). Both drivers now emit
+every DuckDB client after the first as `AttachSpec(db_type="duckdb")` from `env.py`, so the agent
+`attach_database`s it into the primary DuckDB session on both drivers identically — DuckDB's
+`ATTACH ... (TYPE DUCKDB)` already does the right thing; we just needed to route through it instead
+of special-casing DuckDB-in-DuckDB. This trades away a second, independently-queryable connection for
+consistency and for GAP 1's catalog introspection actually firing on it.
+
+**GAP 3 — opt-in server-side MCP ledger + the `--agent-mcp-ledger` rename.** The `labrat-agent`
+driver's in-process `ContextLedger` never had an MCP-side equivalent, because the MCP server has no
+agent loop of its own to attach one to — so `claude-mcp` trials always saw raw, unbounded tool
+payloads. Ported the same bounding idea into `labrat.mcp.server`: `LABRAT_MCP_LEDGER=1` +
+`LABRAT_MCP_RESULT_STORE_DIR` turn on a `ResultStore`-backed bounding layer (oversized payloads become
+a `[context ledger]` preview + `artifact_ref`, retrievable via a synthetic `get_artifact` tool, 64k
+fetch bound + integer-offset paging) inside `_dispatch_and_render`/`_list_tool_schemas`. Both env vars
+unset (the default) keeps `_call_tool`/`_list_tools` byte-identical to today, verified by test. The
+suite flag is `--agent-mcp-ledger`, **not** `--agent-ledger` — that name was already taken by the
+pre-existing `labrat-agent` in-process ledger flag (default on), and the two ledgers are genuinely
+different things (in-process object vs. env-var-gated subprocess behavior) living on different
+drivers; reusing the name would have made one of the two flags silently mean two different things
+depending on `--driver`. `--agent-mcp-ledger` defaults **off** pending an ablation — same posture as
+Cartographer and the taxonomy lever when first landed.
+
+**Follow-up (same wave):** `get_artifact` dispatches are now logged through the same
+`_log_tool_call` path as every other tool call — the intercept originally returned before logging,
+so a ledger-on run's `mcp_tool_calls.jsonl` silently omitted every artifact retrieval.
