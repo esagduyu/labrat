@@ -45,7 +45,7 @@ class AttachSpec(BaseModel):
 
     alias: str
     path: str
-    db_type: Literal["sqlite", "postgres", "mysql"]
+    db_type: Literal["sqlite", "postgres", "mysql", "duckdb"]
 
 
 class MongoSpec(BaseModel):
@@ -90,8 +90,15 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
         db_type = str(spec.get("db_type", "")).lower()
         if db_type == "duckdb":
             db_path = dataset_dir / str(spec["db_path"])
-            connections[name] = DuckDBConnection(path=db_path)
-            file_backed_duckdb.append(name)
+            if not file_backed_duckdb:
+                connections[name] = DuckDBConnection(path=db_path)
+                file_backed_duckdb.append(name)
+            else:
+                # Secondary DuckDB — DuckDB can ATTACH another .duckdb file
+                # (TYPE DUCKDB). Route it through the same attach path as SQLite
+                # instead of dropping it.
+                attachable.append(AttachSpec(alias=name, path=str(db_path), db_type="duckdb"))
+                file_backed_duckdb.append(name)
         elif db_type == "sqlite":
             attachable.append(
                 AttachSpec(

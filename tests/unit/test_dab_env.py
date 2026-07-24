@@ -142,6 +142,25 @@ def test_introspect_env_catalogs_ignores_connections_without_introspect(tmp_path
     assert cast(Catalog, ctx.catalogs["x"]).schemas == []
 
 
+def test_secondary_duckdb_becomes_attachable(tmp_path: Path) -> None:
+    # NOTE: written with literal text (not the _write_config helper) because
+    # yaml.safe_dump's default sort_keys=True would alphabetize "activities"
+    # before "sales_pipeline" and silently flip which one becomes primary.
+    (tmp_path / "primary.duckdb").touch()
+    (tmp_path / "activities.duckdb").touch()
+    config = tmp_path / "db_config.yaml"
+    config.write_text(
+        "db_clients:\n"
+        "  sales_pipeline: {db_type: duckdb, db_path: primary.duckdb}\n"
+        "  activities: {db_type: duckdb, db_path: activities.duckdb}\n"
+    )
+    env = build_dab_task_env(config)
+    assert env.ctx.primary == "sales_pipeline"
+    aliases = {s.alias: s.db_type for s in env.attachable}
+    assert aliases == {"activities": "duckdb"}
+    assert env.attachable[0].path.endswith("activities.duckdb")
+
+
 def test_build_task_env_federation_host_when_no_duckdb(tmp_path: Path) -> None:
     (tmp_path / "aux.db").touch()
     config = tmp_path / "db_config.yaml"

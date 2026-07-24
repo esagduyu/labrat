@@ -1,13 +1,9 @@
 """attach_database populates ctx.catalogs/ctx.connections for the attached alias.
 
-NOTE: the brief's reference test attaches a DuckDB secondary via
-``db_type="duckdb"``, but the tool's ``_Input.db_type`` Literal is currently
-``["sqlite", "postgres", "mysql"]`` (the "duckdb" literal is added in Task 4).
-To keep this task scoped to Task 2's interface (ctx.catalogs/ctx.connections
-population) without widening db_type early, the secondary here is a SQLite
-file attached with ``db_type="sqlite"``. The assertions on
-``ctx.catalogs``/``ctx.connections`` are unchanged from the brief. Task 4 adds
-the "duckdb" literal plus a duckdb-type end-to-end test.
+NOTE: ``test_attach_registers_catalog_and_connection`` predates the "duckdb"
+``db_type`` literal (added in Task 4) and still attaches a SQLite secondary to
+cover that path; it is left as-is. ``test_attach_duckdb_type_end_to_end``
+below covers the ``db_type="duckdb"`` path added in Task 4.
 """
 
 import sqlite3
@@ -42,4 +38,29 @@ async def test_attach_registers_catalog_and_connection(tmp_path: Path) -> None:
     assert "clinical_database" in ctx.catalogs
     assert ctx.catalogs["clinical_database"].find_table("clinical_info") is not None
     assert ctx.connections["clinical_database"] is primary
+    primary.disconnect()
+
+
+async def test_attach_duckdb_type_end_to_end(tmp_path: Path) -> None:
+    secondary = tmp_path / "activities.duckdb"
+    c = DuckDBConnection(path=str(secondary), read_only=False)
+    c.connect()
+    c._connection.execute(  # pyright: ignore[reportPrivateUsage]
+        "CREATE TABLE VoiceCallTranscript__c (LeadId__c VARCHAR, Body__c VARCHAR)"
+    )
+    c.disconnect()
+
+    primary = DuckDBConnection(path=":memory:", read_only=False)
+    primary.connect()
+    ctx = ToolContext(
+        connections={"sales_pipeline": primary},
+        catalogs={"sales_pipeline": Catalog(database_name="sales_pipeline", schemas=[])},
+        primary="sales_pipeline",
+    )
+    tool = AttachDatabaseTool()
+    out = await tool.execute(
+        ctx, tool.input_model(path=str(secondary), alias="activities", db_type="duckdb")
+    )
+    assert out.ok
+    assert ctx.catalogs["activities"].find_table("VoiceCallTranscript__c") is not None
     primary.disconnect()

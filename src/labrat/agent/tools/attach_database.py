@@ -22,7 +22,7 @@ class _Input(BaseModel):
     alias: str = Field(
         description="Short SQL identifier used to reference attached tables (e.g. 'ext').",
     )
-    db_type: Literal["sqlite", "postgres", "mysql"] = Field(
+    db_type: Literal["sqlite", "postgres", "mysql", "duckdb"] = Field(
         description="Database type of the file being attached.",
     )
     database: str | None = Field(
