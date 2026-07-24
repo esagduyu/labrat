@@ -372,6 +372,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-mcp-ledger",
+        action="store_true",
+        default=None,
+        help=(
+            "Enable the server-side Context Ledger on the claude-mcp driver's MCP "
+            "server subprocess (sets LABRAT_MCP_LEDGER + LABRAT_MCP_RESULT_STORE_DIR "
+            "under the trial scratch dir; exposes the get_artifact tool). Distinct "
+            "from --agent-ledger, which is the in-process ledger on the labrat-agent "
+            "driver only. Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
         "--agent-taxonomy",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -595,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
         ("terminalize_timeouts", args.terminalize_timeouts),
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
+        ("agent_mcp_ledger", args.agent_mcp_ledger),
         ("agent_taxonomy", args.agent_taxonomy),
     ]:
         prior = existing_cfg.get(field)
@@ -629,6 +642,11 @@ def main(argv: list[str] | None = None) -> int:
         args.agent_cartograph
         if args.agent_cartograph is not None
         else existing_cfg.get("agent_cartograph", False)
+    )
+    effective_mcp_ledger: bool = bool(
+        args.agent_mcp_ledger
+        if args.agent_mcp_ledger is not None
+        else existing_cfg.get("agent_mcp_ledger", False)
     )
     effective_cartograph_semantics: bool = bool(
         args.cartograph_semantics
@@ -829,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
         terminalize_timeouts=effective_terminalize_timeouts,
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
+        agent_mcp_ledger=effective_mcp_ledger,
         agent_taxonomy=effective_taxonomy,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
@@ -892,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_reasoning": effective_reasoning,
         "agent_levers": effective_levers,
         "agent_ledger": effective_ledger,
+        "agent_mcp_ledger": effective_mcp_ledger,
         "agent_taxonomy": effective_taxonomy,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
