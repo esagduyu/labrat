@@ -1078,6 +1078,42 @@ async def test_claude_mcp_passes_local_embed_classify_backend(tmp_path: Path) ->
     assert server_env["LABRAT_MCP_LLM_CLASSIFY_BACKEND"] == "local-embed"
 
 
+async def test_claude_mcp_maps_agent_reasoning_to_cli_effort(tmp_path: Path) -> None:
+    """On the claude-mcp path agent_reasoning must map to the CLI's --effort flag
+    (the codex provider consumes it differently); None omits the flag entirely so
+    the CLI keeps its default."""
+    import subprocess
+
+    _make_real_duckdb_fixture(tmp_path)
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=b'{"result": "x", "num_turns": 1}', stderr=b""
+        )
+
+    # High-effort run: --effort high is appended.
+    suite_hi = DabSuite(dab_dir=tmp_path, driver="claude-mcp", agent_reasoning="high")
+    task = next(iter(suite_hi.tasks()))
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite_hi.run_trial(task, trial_num=0, scratch_dir=tmp_path / "s_hi")
+    cmd = captured["cmd"]
+    assert "--effort" in cmd and cmd[cmd.index("--effort") + 1] == "high"
+
+    # Default run: no --effort flag, so the CLI keeps its own default (medium).
+    suite_def = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite_def.run_trial(task, trial_num=0, scratch_dir=tmp_path / "s_def")
+    assert "--effort" not in captured["cmd"]
+
+
 async def test_claude_mcp_zero_tool_attempt_creates_empty_trace(tmp_path: Path) -> None:
     _make_real_duckdb_fixture(tmp_path)
     suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp")

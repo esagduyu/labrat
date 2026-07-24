@@ -1569,6 +1569,14 @@ class DabSuite:
             "json",
         ]
 
+        # Effort tier for the claude CLI. Unlike the codex provider (where
+        # agent_reasoning feeds build_provider), the claude-mcp path drives the
+        # CLI directly, so map agent_reasoning onto the CLI's --effort flag.
+        # None => omit the flag => CLI default (medium). This is how a
+        # high/max-effort Sonnet run is requested on the leaderboard path.
+        if self._agent_reasoning:
+            cmd += ["--effort", self._agent_reasoning]
+
         # Max-plan billing: strip ANTHROPIC_API_KEY so the CLI falls through to
         # OAuth credentials. Drop CLAUDECODE / CLAUDE_CODE_* so a nested call
         # under a Claude Code session doesn't try to phone home to the parent.
