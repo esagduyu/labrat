@@ -7,6 +7,7 @@ Every test asserts real behavior end-to-end (helper output, or the
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -367,3 +368,79 @@ async def test_dispatch_and_render_get_artifact_no_store_configured() -> None:
         log_dir=None,
     )
     assert result[0].text == "Error: no result store configured"
+
+
+# ── get_artifact must reach the same audit trace as every other tool call ───
+
+
+async def test_dispatch_and_render_get_artifact_logs_trace_line(tmp_path: Path) -> None:
+    """Regression: get_artifact used to return before _log_tool_call, so a
+    ledger-on run's mcp_tool_calls.jsonl silently omitted every artifact
+    retrieval. It must now log exactly like any other tool dispatch."""
+    store_dir = tmp_path / "store"
+    log_dir = tmp_path / "logs"
+    registry = _registry_with_stub()
+    ctx = ToolContext()
+
+    stored = await mcp_server._dispatch_and_render(
+        "stub_big",
+        {},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=store_dir,
+        log_dir=str(log_dir),
+    )
+    ref_line = next(
+        line for line in stored[0].text.splitlines() if line.startswith("artifact_ref: ")
+    )
+    ref = ref_line.removeprefix("artifact_ref: ")
+
+    fetched = await mcp_server._dispatch_and_render(
+        "get_artifact",
+        {"ref": ref},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=store_dir,
+        log_dir=str(log_dir),
+    )
+    assert fetched[0].text == "x" * 50_000
+
+    log_file = log_dir / "mcp_tool_calls.jsonl"
+    assert log_file.exists()
+    lines = log_file.read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    artifact_records = [r for r in records if r["tool"] == "get_artifact"]
+    assert len(artifact_records) == 1
+    rec = artifact_records[0]
+    assert rec["input"] == {"ref": ref}
+    assert rec["ok"] is True
+    assert rec["output"] == "x" * 50_000
+
+
+async def test_dispatch_and_render_get_artifact_logs_error_as_not_ok(tmp_path: Path) -> None:
+    """An unresolvable ref must log ok=False with the error text, same as any
+    other failed tool dispatch."""
+    log_dir = tmp_path / "logs"
+    registry = _registry_with_stub()
+    ctx = ToolContext()
+
+    result = await mcp_server._dispatch_and_render(
+        "get_artifact",
+        {"ref": "result://nonexistent-session/0000"},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path / "store",
+        log_dir=str(log_dir),
+    )
+    assert result[0].text.startswith("Error:")
+
+    log_file = log_dir / "mcp_tool_calls.jsonl"
+    lines = log_file.read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    assert len(records) == 1
+    assert records[0]["tool"] == "get_artifact"
+    assert records[0]["ok"] is False
+    assert records[0]["output"].startswith("Error:")

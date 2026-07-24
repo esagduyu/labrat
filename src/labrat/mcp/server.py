@@ -247,17 +247,27 @@ async def _dispatch_and_render(
     flag, not merely on ``store_dir`` being set.
     """
     if name == "get_artifact" and ledger_on:
+        t0 = time.monotonic()
         ref = str(arguments.get("ref", ""))
         if store_dir is None:
-            return [TextContent(type="text", text="Error: no result store configured")]
-        try:
-            offset = int(arguments.get("offset", 0) or 0)
-        except (TypeError, ValueError):
-            offset = 0
-        try:
-            text = _get_artifact_text(_get_result_store(store_dir), ref, offset=max(offset, 0))
-        except Exception as exc:
-            text = f"Error: {exc}"
+            text = "Error: no result store configured"
+        else:
+            try:
+                offset = int(arguments.get("offset", 0) or 0)
+            except (TypeError, ValueError):
+                offset = 0
+            try:
+                text = _get_artifact_text(_get_result_store(store_dir), ref, offset=max(offset, 0))
+            except Exception as exc:
+                text = f"Error: {exc}"
+        _log_tool_call(
+            log_dir,
+            name="get_artifact",
+            arguments=arguments,
+            ok=not text.startswith("Error:"),
+            output=text,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
         return [TextContent(type="text", text=text)]
 
     t0 = time.monotonic()
