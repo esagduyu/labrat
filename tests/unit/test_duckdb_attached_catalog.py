@@ -52,3 +52,32 @@ def test_introspect_attached_catalog_for_sqlite(tmp_path: Path) -> None:
     assert table is not None
     assert {c.name for c in table.columns} == {"gmap_id", "rating"}
     primary.disconnect()
+
+
+def test_introspect_attached_catalog_does_not_merge_columns_across_schemas(
+    tmp_path: Path,
+) -> None:
+    """A same-named table in two different schemas of the attached DB must keep its
+    own columns — regression test for a bug where duckdb_columns() was filtered only
+    by database_name + table_name (no schema_name), so columns from every schema
+    sharing that table name got merged into every same-named Table."""
+    secondary = tmp_path / "twoschemas.duckdb"
+    _make_duckdb(
+        secondary,
+        [
+            "CREATE SCHEMA other",
+            "CREATE TABLE main.t (a INTEGER, b VARCHAR)",
+            "CREATE TABLE other.t (x DOUBLE)",
+        ],
+    )
+    primary = DuckDBConnection(path=":memory:", read_only=False)
+    primary.connect()
+    primary.attach(str(secondary), "twoschemas_database", "duckdb")
+
+    catalog = primary.introspect_attached_catalog("twoschemas_database")
+
+    t_tables = [t for t in catalog.schemas[0].tables if t.name == "t"]
+    assert len(t_tables) == 2
+    column_name_sets = {frozenset(c.name for c in t.columns) for t in t_tables}
+    assert column_name_sets == {frozenset({"a", "b"}), frozenset({"x"})}
+    primary.disconnect()

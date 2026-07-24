@@ -199,13 +199,13 @@ class DuckDBConnection(Connection):
             [alias],
         ).fetchall()
         tables: list[Table] = []
-        for table_name, _schema_name in table_rows:
+        for table_name, schema_name in table_rows:
             col_rows = self._connection.execute(
                 "SELECT column_name, data_type, is_nullable "
                 "FROM duckdb_columns() "
-                "WHERE database_name = ? AND table_name = ? "
+                "WHERE database_name = ? AND schema_name = ? AND table_name = ? "
                 "ORDER BY column_index",
-                [alias, str(table_name)],
+                [alias, str(schema_name), str(table_name)],
             ).fetchall()
             columns = [
                 Column(
