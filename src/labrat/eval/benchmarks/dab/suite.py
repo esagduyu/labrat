@@ -341,8 +341,11 @@ def _dab_lever_lines() -> list[str]:
 
     Pure process/structure — no answer content, so safe on held-out datasets.
     Target the failure classes Cartographer doesn't cover: answer-from-memory
-    (force-query), implementation errors (repair via run_sql diagnostics), and
-    broad-fetch-then-tally (push aggregation into SQL).
+    (force-query), implementation errors (repair via run_sql diagnostics),
+    broad-fetch-then-tally (push aggregation into SQL), tie-band truncation
+    both ways (top-N under-emission and single-item over-emission), list
+    under-emission on 'each'/ranking questions, and proximity delivery (name
+    and value adjacent, not table-separated).
     """
     return [
         "Always derive the answer by querying the database — never answer from prior "
@@ -354,6 +357,16 @@ def _dab_lever_lines() -> list[str]:
         "For 'top N' / 'highest' questions, remember a bare LIMIT N silently truncates ties: "
         "if the Nth value can repeat, rank with ties (RANK()/DENSE_RANK() or fetch the full tie "
         "band) rather than LIMIT alone.",
+        "When a question asks for multiple items, uses 'each', or asks for a ranking, emit "
+        "every qualifying item — after computing, count the returned rows against the number "
+        "of distinct qualifying groups and make them match; never truncate to the first "
+        "category or a sample.",
+        "If a tie band covers a large fraction of the candidate set, or the question is "
+        "phrased for a single item ('the X', 'which single'), that signals the tie-break is "
+        "too loose — re-derive or tighten it rather than dumping the whole tied roster.",
+        "State each item and its requested value directly adjacent as plain tokens (name "
+        "then value), not in a markdown table or separated by other columns — keep the "
+        "value within a few characters of its label so it reads unambiguously.",
     ]
 
 
@@ -1488,6 +1501,15 @@ class DabSuite:
                         # (one mcp_tool_calls.jsonl line per dispatch) — first-class
                         # traces instead of reconstructing from ~/.claude after the fact.
                         "LABRAT_MCP_LOG_DIR": str(scratch_dir),
+                        # Route llm_classify to the requested backend over MCP.
+                        # "llm" self-errors here (no llm_fn); "local-embed" runs
+                        # the zero-token static-embedder classifier — the only
+                        # working classification path on claude-mcp.
+                        "LABRAT_MCP_LLM_CLASSIFY_BACKEND": self._llm_classify_backend,
+                        # Persist the static-embedder model cache across trials:
+                        # the cartograph hermetic HOME below would otherwise force
+                        # a fresh ~30MB model download every trial (HF rate limits).
+                        "HF_HOME": os.path.join(os.path.expanduser("~"), ".cache", "huggingface"),
                         **(
                             {
                                 "LABRAT_MAZE_DIR": str(maze_root),

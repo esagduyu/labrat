@@ -624,6 +624,168 @@ def test_agent_taxonomy_defaults_off_persists_and_rejects_resume_conflict(
         main([*base2, "--no-agent-taxonomy"])
 
 
+class _ResumeRerunSuite:
+    """Fake suite for resume-dedup tests (Fix 5): returns a pre-scripted result per
+    (task_id, trial_num) and records every dispatched call."""
+
+    name = "dab"
+
+    def __init__(self, task_ids: list[str], responses: dict[tuple[str, int], TrialResult]) -> None:
+        self._task_ids = task_ids
+        self._responses = responses
+        self.calls: list[tuple[str, int]] = []
+
+    def tasks(self) -> list[BenchmarkTask]:
+        return [_make_task(tid) for tid in self._task_ids]
+
+    async def run_trial(
+        self, task: BenchmarkTask, trial_num: int, scratch_dir: Path
+    ) -> TrialResult:
+        self.calls.append((task.id, trial_num))
+        return self._responses[(task.id, trial_num)]
+
+    def aggregate(self, results: list[TrialResult]) -> AggregateScore:
+        return AggregateScore(
+            overall=1.0,
+            per_task={},
+            n_tasks=len(self._task_ids),
+            n_trials=len(results),
+            n_passes=sum(1 for r in results if r.passed),
+        )
+
+
+def _infra_trial(task_id: str, trial_num: int, reason: str = "infra:rate_limit") -> TrialResult:
+    return TrialResult(
+        task_id=task_id,
+        trial_num=trial_num,
+        passed=False,
+        reason=reason,
+        latency_seconds=0.0,
+        artifact={"type": "text", "payload": "boom"},
+    )
+
+
+def test_resume_replaces_stale_infra_row_with_semantic_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix 5: a rerun that finally succeeds must REPLACE the old infra row, not
+    merely be appended alongside it — the final file has exactly one row for
+    the (task_id, trial_num) key."""
+    from scripts import eval_dab
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "resume-run"
+    output_dir.mkdir()
+
+    (output_dir / "trials.jsonl").write_text(_infra_trial("ds:1", 0).model_dump_json() + "\n")
+    (output_dir / "config.json").write_text(json.dumps({"driver": "raw-bash", "n_trials": 1}))
+
+    fresh_semantic = _make_trial("ds:1", 0, passed=True)
+    suite = _ResumeRerunSuite(["ds:1"], {("ds:1", 0): fresh_semantic})
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: suite)
+
+    rc = eval_dab.main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)])
+
+    assert rc == 0
+    assert suite.calls == [("ds:1", 0)]  # the infra row was NOT treated as completed
+    rows = [json.loads(line) for line in (output_dir / "trials.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["task_id"] == "ds:1"
+    assert rows[0]["trial_num"] == 0
+    assert rows[0]["reason"] is None
+    assert rows[0]["passed"] is True
+
+
+def test_resume_keeps_both_rows_when_rerun_is_still_infra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix 5 counterpart: a rerun that is STILL infra keeps the append-only audit
+    trail — both the old and new infra rows survive."""
+    from scripts import eval_dab
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "still-infra-run"
+    output_dir.mkdir()
+
+    (output_dir / "trials.jsonl").write_text(_infra_trial("ds:2", 0).model_dump_json() + "\n")
+    (output_dir / "config.json").write_text(json.dumps({"driver": "raw-bash", "n_trials": 1}))
+
+    new_infra = _infra_trial("ds:2", 0, reason="infra:agent_error")
+    suite = _ResumeRerunSuite(["ds:2"], {("ds:2", 0): new_infra})
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: suite)
+
+    rc = eval_dab.main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)])
+
+    assert rc == 0
+    rows = [json.loads(line) for line in (output_dir / "trials.jsonl").read_text().splitlines()]
+    assert len(rows) == 2
+    assert all(r["task_id"] == "ds:2" and r["trial_num"] == 0 for r in rows)
+    reasons = sorted(r["reason"] for r in rows)
+    assert reasons == ["infra:agent_error", "infra:rate_limit"]
+
+
+def test_resume_preserves_infra_rows_for_trials_not_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fix 5 must not over-delete: an infra row for a trial_num outside this run's
+    range (not re-attempted) stays exactly as it was."""
+    from scripts import eval_dab
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "partial-rerun"
+    output_dir.mkdir()
+
+    (output_dir / "trials.jsonl").write_text(
+        _infra_trial("ds:3", 0).model_dump_json()
+        + "\n"
+        + _infra_trial("ds:3", 1).model_dump_json()
+        + "\n"
+    )
+    # n_trials=1 restored from config.json -> only trial_num 0 is in range(1); trial_num 1
+    # is never touched by this run.
+    (output_dir / "config.json").write_text(json.dumps({"driver": "raw-bash", "n_trials": 1}))
+
+    fresh_semantic = _make_trial("ds:3", 0, passed=True)
+    suite = _ResumeRerunSuite(["ds:3"], {("ds:3", 0): fresh_semantic})
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: suite)
+
+    rc = eval_dab.main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)])
+
+    assert rc == 0
+    assert suite.calls == [("ds:3", 0)]
+    rows = [json.loads(line) for line in (output_dir / "trials.jsonl").read_text().splitlines()]
+    assert len(rows) == 2
+    by_trial = {r["trial_num"]: r for r in rows}
+    assert by_trial[0]["reason"] is None and by_trial[0]["passed"] is True
+    assert by_trial[1]["reason"] == "infra:rate_limit"  # untouched, still infra
+
+
+def test_resume_dedup_fix_does_not_change_normal_no_infra_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Normal (no prior infra) path is unaffected by Fix 5 — trials.jsonl content
+    is exactly what the plain append writer would have produced."""
+    from scripts import eval_dab
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "normal-run"
+
+    fresh_semantic = _make_trial("ds:4", 0, passed=True)
+    suite = _ResumeRerunSuite(["ds:4"], {("ds:4", 0): fresh_semantic})
+    monkeypatch.setattr(eval_dab, "DabSuite", lambda **_kwargs: suite)
+
+    rc = eval_dab.main(
+        ["--dab-dir", str(dab_dir), "--output-dir", str(output_dir), "--n-trials", "1"]
+    )
+
+    assert rc == 0
+    assert (output_dir / "trials.jsonl").read_text() == fresh_semantic.model_dump_json() + "\n"
+
+
 def test_llm_classify_backend_persists_and_rejects_resume_conflict(tmp_path: Path) -> None:
     from scripts.eval_dab import main
 

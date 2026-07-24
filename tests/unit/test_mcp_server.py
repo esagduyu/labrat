@@ -82,3 +82,34 @@ def test_build_context_profiles_path(tmp_path: Path, monkeypatch: Any) -> None:
     assert set(ctx.connections) == {"served"} and len(live) == 1
     for conn in live:
         conn.disconnect()
+
+
+def test_build_context_reads_llm_classify_backend_from_env(monkeypatch: Any) -> None:
+    """The claude-mcp path must be able to route llm_classify to local-embed —
+    the only classification backend that runs without an llm_fn over MCP."""
+    monkeypatch.setenv(
+        "LABRAT_MCP_CONNECTIONS", '{"__federation": {"db_type": "duckdb", "db_path": ":memory:"}}'
+    )
+    monkeypatch.setenv("LABRAT_MCP_PRIMARY", "__federation")
+    monkeypatch.setenv("LABRAT_MCP_LLM_CLASSIFY_BACKEND", "local-embed")
+    ctx, live = _build_context_from_env()
+    try:
+        assert ctx.llm_classify_backend == "local-embed"
+    finally:
+        for c in live:
+            c.disconnect()
+
+
+def test_build_context_llm_classify_backend_defaults_to_llm(monkeypatch: Any) -> None:
+    """Unset env → unchanged default 'llm' (byte-identical to prior behavior)."""
+    monkeypatch.setenv(
+        "LABRAT_MCP_CONNECTIONS", '{"__federation": {"db_type": "duckdb", "db_path": ":memory:"}}'
+    )
+    monkeypatch.setenv("LABRAT_MCP_PRIMARY", "__federation")
+    monkeypatch.delenv("LABRAT_MCP_LLM_CLASSIFY_BACKEND", raising=False)
+    ctx, live = _build_context_from_env()
+    try:
+        assert ctx.llm_classify_backend == "llm"
+    finally:
+        for c in live:
+            c.disconnect()
