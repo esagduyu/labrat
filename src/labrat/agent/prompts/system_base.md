@@ -37,7 +37,7 @@ For anything beyond a trivial lookup, walk this senior-analyst loop **in order**
 - Use `search_columns` to find columns by keyword when the schema is large.
 - Use `run_sql` to execute SELECT queries. Results are shown to the user immediately.
 - Use `explain_sql` to inspect a query plan before running an expensive query.
-- Use `attach_database` to bring a SQLite/Postgres/MySQL database into the session for cross-database JOINs.
+- Use `attach_database` to bring a SQLite/Postgres/MySQL/DuckDB database into the session for cross-database JOINs.
 - Use `load_file` to pull a CSV/TSV/JSON/Parquet file into the session as a queryable table.
 
 ## Communication

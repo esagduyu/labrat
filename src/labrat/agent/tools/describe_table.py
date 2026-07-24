@@ -221,8 +221,17 @@ class DescribeTableTool(Tool[_Input]):
         return _Input
 
     async def execute(self, ctx: ToolContext, args: _Input) -> _Output:
-        catalog = cast(Catalog, ctx.catalogs[args.database or ctx.primary])
-        table = catalog.find_table(args.table)
+        database = args.database
+        table_name = args.table
+        # Agents often pass the DuckDB-qualified "alias.table" form. If a dotted
+        # prefix names a known catalog, route there and match the bare table name.
+        if "." in table_name:
+            prefix, _, rest = table_name.partition(".")
+            if prefix in ctx.catalogs:
+                database = database or prefix
+                table_name = rest
+        catalog = cast(Catalog, ctx.catalogs[database or ctx.primary])
+        table = catalog.find_table(table_name)
         if table is None:
             raise ValueError(f"Table {args.table!r} not found in catalog")
 
@@ -248,7 +257,7 @@ class DescribeTableTool(Tool[_Input]):
             columns=columns,
             foreign_keys=fks,
             row_count=table.row_count,
-            column_hints=self._column_hints(ctx, args.database, table),
+            column_hints=self._column_hints(ctx, database, table),
         )
 
     def _column_hints(self, ctx: ToolContext, database: str | None, table: Table) -> list[str]:

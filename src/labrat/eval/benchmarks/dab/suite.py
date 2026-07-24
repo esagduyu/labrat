@@ -196,8 +196,8 @@ def _build_labrat_agent_system_prompt(
         "wrong join keys and fan-out that makes aggregates double-count)",
         "  run_sql — execute one SQL statement (DuckDB dialect; primary connection by default)",
         "  explain_sql — show the query plan without executing",
-        "  attach_database — pull a SQLite/Postgres/MySQL file into the primary DuckDB "
-        "session for cross-database JOINs",
+        "  attach_database — pull a SQLite/Postgres/MySQL/DuckDB file into the primary "
+        "DuckDB session for cross-database JOINs",
         "  load_file — load a CSV/TSV/JSON/Parquet file into the session as a table",
         "  load_mongo_collection — materialize a MongoDB collection into a DuckDB "
         "table on the primary connection (nested fields become STRUCTs; address with dot)",
@@ -629,6 +629,7 @@ class DabSuite:
         terminalize_timeouts: bool = False,
         agent_levers: bool = True,
         agent_ledger: bool = True,
+        agent_mcp_ledger: bool = False,
         agent_taxonomy: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
@@ -682,6 +683,13 @@ class DabSuite:
         # ContextLedger is likewise historically on through run_agent_task's
         # default; make it explicit so DAB runs can ablate and resume it safely.
         self._agent_ledger = agent_ledger
+        # Opt-in server-side Context Ledger (Task 5: LABRAT_MCP_LEDGER +
+        # LABRAT_MCP_RESULT_STORE_DIR, exposes get_artifact) for the claude-mcp
+        # driver's MCP server subprocess. Distinct from `agent_ledger` above, which
+        # is the in-process ContextLedger on the labrat-agent driver only — the two
+        # drivers have no shared runtime, so this needs its own flag. Off by default,
+        # mirroring `cartograph`.
+        self._agent_mcp_ledger = agent_mcp_ledger
         self._agent_taxonomy = agent_taxonomy
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
@@ -1510,6 +1518,18 @@ class DabSuite:
                         # the cartograph hermetic HOME below would otherwise force
                         # a fresh ~30MB model download every trial (HF rate limits).
                         "HF_HOME": os.path.join(os.path.expanduser("~"), ".cache", "huggingface"),
+                        # Opt-in server-side Context Ledger (Task 5): summarizes large
+                        # tool results and exposes get_artifact for verbatim retrieval.
+                        # Off by default — the env block below is byte-identical to
+                        # today's when --agent-mcp-ledger is not passed.
+                        **(
+                            {
+                                "LABRAT_MCP_LEDGER": "1",
+                                "LABRAT_MCP_RESULT_STORE_DIR": str(scratch_dir / "results"),
+                            }
+                            if self._agent_mcp_ledger
+                            else {}
+                        ),
                         **(
                             {
                                 "LABRAT_MAZE_DIR": str(maze_root),
@@ -1548,7 +1568,10 @@ class DabSuite:
         # keeps Bash/WebFetch/Task even under bypassPermissions and can read the
         # benchmark's answer keys off disk or fetch external labels (the 2026-06-03
         # contamination). --disallowedTools takes precedence and is the hard block;
-        # --allowedTools scopes the rest to the MCP server.
+        # --allowedTools scopes the rest to the MCP server. "mcp__labrat" is a
+        # server-level prefix that matches every tool the labrat server exposes,
+        # including get_artifact (Task 5) when --agent-mcp-ledger turns it on — no
+        # per-tool enumeration needed here.
         cmd = [
             "claude",
             "--print",

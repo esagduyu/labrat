@@ -1078,6 +1078,71 @@ async def test_claude_mcp_passes_local_embed_classify_backend(tmp_path: Path) ->
     assert server_env["LABRAT_MCP_LLM_CLASSIFY_BACKEND"] == "local-embed"
 
 
+async def test_claude_mcp_mcp_ledger_off_by_default(tmp_path: Path) -> None:
+    """Default OFF: with --agent-mcp-ledger absent, the mcp_config env block must
+    be byte-identical to today — no LABRAT_MCP_LEDGER / LABRAT_MCP_RESULT_STORE_DIR
+    keys at all (not just falsy)."""
+    import json as _json
+
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "scratch_ledger_off"
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        return SimpleNamespace(returncode=0, stdout=b'{"result": "x", "num_turns": 1}', stderr=b"")
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    server_env = _json.loads((scratch / "mcp-config.json").read_text())["mcpServers"]["labrat"][
+        "env"
+    ]
+    assert "LABRAT_MCP_LEDGER" not in server_env
+    assert "LABRAT_MCP_RESULT_STORE_DIR" not in server_env
+
+
+async def test_claude_mcp_mcp_ledger_opt_in_sets_env_and_allows_get_artifact(
+    tmp_path: Path,
+) -> None:
+    """--agent-mcp-ledger sets the two Task-5 env vars under the trial scratch dir,
+    and get_artifact stays reachable via the existing server-level --allowedTools
+    prefix (mcp__labrat) — no per-tool enumeration needed."""
+    import json as _json
+
+    _make_real_duckdb_fixture(tmp_path)
+    suite = DabSuite(dab_dir=tmp_path, driver="claude-mcp", agent_mcp_ledger=True)
+    task = next(iter(suite.tasks()))
+    scratch = tmp_path / "scratch_ledger_on"
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout=b'{"result": "x", "num_turns": 1}', stderr=b"")
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite.run_trial(task, trial_num=0, scratch_dir=scratch)
+
+    server_env = _json.loads((scratch / "mcp-config.json").read_text())["mcpServers"]["labrat"][
+        "env"
+    ]
+    assert server_env["LABRAT_MCP_LEDGER"] == "1"
+    assert server_env["LABRAT_MCP_RESULT_STORE_DIR"] == str(scratch.resolve() / "results")
+
+    # get_artifact is exposed under the "labrat" MCP server, and --allowedTools
+    # scopes by server-level prefix ("mcp__labrat"), so no separate allow entry
+    # is needed for it to be reachable.
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--allowedTools") + 1] == "mcp__labrat"
+
+
 async def test_claude_mcp_maps_agent_reasoning_to_cli_effort(tmp_path: Path) -> None:
     """On the claude-mcp path agent_reasoning must map to the CLI's --effort flag
     (the codex provider consumes it differently); None omits the flag entirely so

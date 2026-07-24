@@ -10,11 +10,15 @@ Real DAB db_config.yaml format:
       sql_file: <path>                           # postgres
 
 Design (Phase 4):
-  - DuckDB clients become real `DuckDBConnection`s in `ctx.connections`.
-  - SQLite clients are NOT separate connections — they are exposed as `AttachSpec`s
-    so the agent calls `attach_database` to bring them into the primary DuckDB
-    session and JOIN via `alias.table_name`.
-  - Postgres / MongoDB clients remain skipped until later phases.
+  - The FIRST DuckDB client becomes a real `DuckDBConnection` primary in
+    `ctx.connections`.
+  - Every other client — SQLite, a second (or later) DuckDB file, or Postgres — is
+    NOT a separate connection; it is exposed as an `AttachSpec` so the agent calls
+    `attach_database` to pull it into the primary DuckDB session (DuckDB can
+    ATTACH another `.duckdb` file via `TYPE DUCKDB`, same as SQLite/Postgres) and
+    JOIN via `alias.table_name`.
+  - MongoDB clients aren't ATTACH-able; they are exposed as `MongoSpec`s instead,
+    and the agent materializes individual collections via `load_mongo_collection`.
 """
 
 from __future__ import annotations
@@ -34,18 +38,19 @@ logger = logging.getLogger(__name__)
 
 
 class AttachSpec(BaseModel):
-    """A non-DuckDB database the agent can pull into the primary session via attach_database.
+    """A secondary database the agent can pull into the primary session via attach_database.
 
-    ``path`` is the argument the ``attach_database`` tool will pass to DuckDB's
-    ATTACH — a filesystem path for sqlite, a libpq connection string for postgres
-    (e.g. ``host=localhost dbname=foo``), etc.
+    Covers SQLite, Postgres, MySQL, and secondary DuckDB files — anything DuckDB's
+    ATTACH can mount. ``path`` is the argument the ``attach_database`` tool will pass
+    to DuckDB's ATTACH — a filesystem path for sqlite/duckdb, a libpq connection
+    string for postgres (e.g. ``host=localhost dbname=foo``), etc.
     """
 
     model_config = ConfigDict(frozen=True)
 
     alias: str
     path: str
-    db_type: Literal["sqlite", "postgres", "mysql"]
+    db_type: Literal["sqlite", "postgres", "mysql", "duckdb"]
 
 
 class MongoSpec(BaseModel):
@@ -74,8 +79,9 @@ class DabTaskEnv(BaseModel):
 def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
     """Parse db_config.yaml and return a DabTaskEnv.
 
-    Primary connection = first DuckDB entry. SQLite entries become AttachSpecs.
-    Postgres / MongoDB entries are dropped silently until adapters land.
+    Primary connection = first DuckDB entry. Every other entry — SQLite, a second
+    DuckDB file, or Postgres — becomes an AttachSpec. MongoDB entries become
+    MongoSpecs (not ATTACH-able; materialized via ``load_mongo_collection``).
     """
     dataset_dir = db_config_path.parent
     config = yaml.safe_load(db_config_path.read_text())
@@ -90,8 +96,15 @@ def build_dab_task_env(db_config_path: Path) -> DabTaskEnv:
         db_type = str(spec.get("db_type", "")).lower()
         if db_type == "duckdb":
             db_path = dataset_dir / str(spec["db_path"])
-            connections[name] = DuckDBConnection(path=db_path)
-            file_backed_duckdb.append(name)
+            if not file_backed_duckdb:
+                connections[name] = DuckDBConnection(path=db_path)
+                file_backed_duckdb.append(name)
+            else:
+                # Secondary DuckDB — DuckDB can ATTACH another .duckdb file
+                # (TYPE DUCKDB). Route it through the same attach path as SQLite
+                # instead of dropping it.
+                attachable.append(AttachSpec(alias=name, path=str(db_path), db_type="duckdb"))
+                file_backed_duckdb.append(name)
         elif db_type == "sqlite":
             attachable.append(
                 AttachSpec(
