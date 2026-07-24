@@ -196,8 +196,8 @@ def _build_labrat_agent_system_prompt(
         "wrong join keys and fan-out that makes aggregates double-count)",
         "  run_sql — execute one SQL statement (DuckDB dialect; primary connection by default)",
         "  explain_sql — show the query plan without executing",
-        "  attach_database — pull a SQLite/Postgres/MySQL file into the primary DuckDB "
-        "session for cross-database JOINs",
+        "  attach_database — pull a SQLite/Postgres/MySQL/DuckDB file into the primary "
+        "DuckDB session for cross-database JOINs",
         "  load_file — load a CSV/TSV/JSON/Parquet file into the session as a table",
         "  load_mongo_collection — materialize a MongoDB collection into a DuckDB "
         "table on the primary connection (nested fields become STRUCTs; address with dot)",

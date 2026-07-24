@@ -61,9 +61,10 @@ class DuckDBConnection(Connection):
     def attach(self, path: str, alias: str, db_type: str) -> None:
         """ATTACH another database into this DuckDB session so cross-DB JOINs work.
 
-        ``db_type`` is the DuckDB extension name: 'sqlite', 'postgres', or 'mysql'.
-        The relevant extension must be installed/loadable. After attach, tables in
-        the attached DB are addressable as ``alias.table_name`` from this connection.
+        ``db_type`` is DuckDB's ATTACH ``TYPE``: 'sqlite', 'postgres', 'mysql', or
+        'duckdb' (a second DuckDB file — no extension needed; the others require
+        the relevant extension installed/loadable). After attach, tables in the
+        attached DB are addressable as ``alias.table_name`` from this connection.
         """
         if not alias.replace("_", "").isalnum():
             raise ValueError(f"alias must be alphanumeric/underscore: {alias!r}")

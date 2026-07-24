@@ -50,7 +50,16 @@ async def test_attach_duckdb_type_end_to_end(tmp_path: Path) -> None:
     )
     c.disconnect()
 
-    primary = DuckDBConnection(path=":memory:", read_only=False)
+    # Real DAB primaries are read-only, file-backed DuckDB connections
+    # (build_dab_task_env's `DuckDBConnection(path=db_path)` defaults read_only=True) —
+    # exercise that configuration rather than an in-memory writable primary. DuckDB
+    # allows ATTACH from a read-only session (verified empirically).
+    primary_path = tmp_path / "sales_pipeline.duckdb"
+    setup = DuckDBConnection(path=str(primary_path), read_only=False)
+    setup.connect()
+    setup.disconnect()
+
+    primary = DuckDBConnection(path=str(primary_path), read_only=True)
     primary.connect()
     ctx = ToolContext(
         connections={"sales_pipeline": primary},

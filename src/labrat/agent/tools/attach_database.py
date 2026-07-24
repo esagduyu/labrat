@@ -1,8 +1,8 @@
-"""attach_database tool: ATTACH a SQLite/Postgres/MySQL database into the DuckDB session.
+"""attach_database tool: ATTACH a SQLite/Postgres/MySQL/DuckDB database into the DuckDB session.
 
 Enables cross-database JOINs in a single connection — e.g., when a dataset stores
-some tables in DuckDB and others in SQLite, ATTACH makes the SQLite tables
-addressable as ``alias.table_name`` from the primary DuckDB connection.
+some tables in DuckDB and others in SQLite (or a second DuckDB file), ATTACH makes
+those tables addressable as ``alias.table_name`` from the primary DuckDB connection.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from labrat.db.duckdb_engine import DuckDBConnection
 
 class _Input(BaseModel):
     path: str = Field(
-        description="Filesystem path (SQLite) or connection string (Postgres/MySQL).",
+        description=("Filesystem path (SQLite/DuckDB) or connection string (Postgres/MySQL)."),
     )
     alias: str = Field(
         description="Short SQL identifier used to reference attached tables (e.g. 'ext').",
@@ -49,8 +49,8 @@ class AttachDatabaseTool(Tool[_Input]):
     @property
     def description(self) -> str:
         return (
-            "Attach a SQLite/Postgres/MySQL database into the primary DuckDB session. "
-            "After attach, tables in the attached database can be referenced as "
+            "Attach a SQLite/Postgres/MySQL/DuckDB database into the primary DuckDB "
+            "session. After attach, tables in the attached database can be referenced as "
             "`alias.table_name` from any subsequent run_sql call against the primary "
             "connection. Use this to JOIN across databases without leaving DuckDB."
         )
