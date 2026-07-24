@@ -49,6 +49,7 @@ import asyncio
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from mcp.server import NotificationOptions, Server
@@ -59,10 +60,99 @@ from mcp.types import TextContent, Tool
 from labrat.agent.data_tools import build_data_tools_registry
 from labrat.agent.tool_trace import append_tool_trace
 from labrat.agent.tools.base import ToolContext, ToolRegistry
+from labrat.agent.tools.serialization import ModelVisibleToolResult, render
 from labrat.db.base import Connection
 from labrat.mcp.config import resolve_from_env
+from labrat.results.store import ResultStore, cap_bytes
+from labrat.runtime.context_ledger import LedgerBudget
 
 _TOOL_LOG_FILENAME = "mcp_tool_calls.jsonl"
+
+# One ResultStore per store_dir for the life of the process. ResultStore mints
+# a random session id per instance and keeps its artifact index in memory only
+# (see labrat/results/store.py) — a fresh instance per call would get a new
+# session each time and could never resolve a ref written by an earlier
+# instance. Caching by directory lets get_artifact resolve refs written
+# earlier in the same server process.
+_result_stores: dict[str, ResultStore] = {}
+
+
+def _get_result_store(store_dir: Path) -> ResultStore:
+    key = str(store_dir)
+    store = _result_stores.get(key)
+    if store is None:
+        store = ResultStore(store_dir)
+        _result_stores[key] = store
+    return store
+
+
+def _store_dir_from_env() -> Path | None:
+    """Parse ``LABRAT_MCP_RESULT_STORE_DIR``; unset/empty -> None.
+
+    NOTE: ``Path(os.environ.get(...)) or None`` is a no-op guard — pathlib.Path
+    defines neither ``__bool__`` nor ``__len__``, so instances are always
+    truthy and the ``or`` branch never fires; ``Path("")`` (normalises to
+    ``Path(".")``) would silently become the ledger's store directory even
+    with the env var unset. Guard on the raw string instead.
+    """
+    raw = os.environ.get("LABRAT_MCP_RESULT_STORE_DIR")
+    return Path(raw) if raw else None
+
+
+def _render_payload_via_ledger(*, store_dir: Path, tool_name: str, payload: str) -> str:
+    """Bound an oversized MCP tool payload: store the full text, return a preview block.
+
+    MCP already serialized the tool value to a string by the time this is
+    called, so the ledger's typed table/json/trace hooks (ContextLedger.record)
+    aren't reachable here — we bound by bytes directly and stash the full
+    string as a json artifact the model can pull back via get_artifact.
+    """
+    budget = LedgerBudget()
+    if len(payload.encode("utf-8")) <= budget.max_bytes:
+        return payload
+    store = _get_result_store(store_dir)
+    ref = store.put_json(payload, kind="json")
+    mv = ModelVisibleToolResult(
+        summary=f"{tool_name}: {len(payload.encode('utf-8'))}-byte payload stored; "
+        f"pull full via get_artifact({ref}).",
+        preview=cap_bytes(payload, budget.max_bytes),
+        artifact_ref=ref,
+        truncated=True,
+    )
+    return render(mv)
+
+
+def _list_tool_schemas(registry: ToolRegistry, *, ledger_on: bool) -> list[Tool]:
+    """Registry schemas as MCP ``Tool`` objects, plus the synthetic get_artifact
+    tool when the ledger is enabled. ``ledger_on=False`` reproduces exactly
+    today's list — the OFF-path listing guarantee."""
+    out: list[Tool] = []
+    for tool in registry.tools:
+        schema = tool.anthropic_schema()
+        out.append(
+            Tool(
+                name=schema["name"],
+                description=schema.get("description", ""),
+                inputSchema=schema["input_schema"],
+            )
+        )
+    if ledger_on:
+        out.append(
+            Tool(
+                name="get_artifact",
+                description=(
+                    "Retrieve a stored tool-result artifact by ref (e.g. "
+                    "'result://<session>/0000'). Returns a bounded preview of "
+                    "the full payload the ledger stored."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {"ref": {"type": "string"}},
+                    "required": ["ref"],
+                },
+            )
+        )
+    return out
 
 
 def _log_tool_call(
@@ -89,6 +179,70 @@ def _log_tool_call(
     )
 
 
+async def _dispatch_and_render(
+    name: str,
+    arguments: dict[str, Any],
+    ctx: ToolContext,
+    registry: ToolRegistry,
+    *,
+    ledger_on: bool,
+    store_dir: Path | None,
+    log_dir: str | None,
+) -> list[TextContent]:
+    """Core of MCP ``_call_tool``, factored out of the ``@server.call_tool()``
+    closure so tests can drive it directly without going through the mcp SDK's
+    request-handler plumbing.
+
+    ``ledger_on=False`` reproduces exactly today's behavior byte-for-byte: the
+    get_artifact intercept and the ledger-bounding call are both gated on the
+    flag, not merely on ``store_dir`` being set.
+    """
+    if name == "get_artifact" and ledger_on:
+        ref = str(arguments.get("ref", ""))
+        if store_dir is None:
+            return [TextContent(type="text", text="Error: no result store configured")]
+        try:
+            text = _get_result_store(store_dir).preview(ref)
+        except Exception as exc:
+            text = f"Error: {exc}"
+        return [TextContent(type="text", text=text)]
+
+    t0 = time.monotonic()
+    dispatch = await registry.dispatch(name, arguments, ctx)
+    if not dispatch.ok:
+        error_text = f"Error: {dispatch.error}"
+        _log_tool_call(
+            log_dir,
+            name=name,
+            arguments=arguments,
+            ok=False,
+            output=error_text,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
+        return [TextContent(type="text", text=error_text)]
+    value = dispatch.value
+    payload: str
+    dumper = getattr(value, "model_dump_json", None)
+    if callable(dumper):
+        payload = str(dumper())
+    else:
+        try:
+            payload = json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            payload = str(value)
+    if ledger_on and store_dir is not None:
+        payload = _render_payload_via_ledger(store_dir=store_dir, tool_name=name, payload=payload)
+    _log_tool_call(
+        log_dir,
+        name=name,
+        arguments=arguments,
+        ok=True,
+        output=payload,
+        latency_ms=(time.monotonic() - t0) * 1000,
+    )
+    return [TextContent(type="text", text=payload)]
+
+
 def _build_context_from_env() -> tuple[ToolContext, list[Connection]]:
     """Parse env vars into a ToolContext + the list of live connections to clean up."""
     rc = resolve_from_env(os.environ)
@@ -109,19 +263,16 @@ def _build_context_from_env() -> tuple[ToolContext, list[Connection]]:
 def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
     server: Server[Any, Any] = Server("labrat")
 
+    # Read once at server-build time — matches the existing log_dir pattern
+    # below. Opt-in: LABRAT_MCP_LEDGER unset (the default) keeps ledger_on
+    # False, so _list_tool_schemas/_dispatch_and_render both take their
+    # byte-identical-to-today branch.
+    ledger_on = os.environ.get("LABRAT_MCP_LEDGER") == "1"
+    store_dir = _store_dir_from_env()
+
     @server.list_tools()
     async def _list_tools() -> list[Tool]:  # pyright: ignore[reportUnusedFunction]
-        out: list[Tool] = []
-        for tool in registry.tools:
-            schema = tool.anthropic_schema()
-            out.append(
-                Tool(
-                    name=schema["name"],
-                    description=schema.get("description", ""),
-                    inputSchema=schema["input_schema"],
-                )
-            )
-        return out
+        return _list_tool_schemas(registry, ledger_on=ledger_on)
 
     log_dir = os.environ.get("LABRAT_MCP_LOG_DIR")
 
@@ -129,38 +280,15 @@ def _build_server(ctx: ToolContext, registry: ToolRegistry) -> Server[Any, Any]:
     async def _call_tool(  # pyright: ignore[reportUnusedFunction]
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
-        t0 = time.monotonic()
-        dispatch = await registry.dispatch(name, arguments, ctx)
-        if not dispatch.ok:
-            error_text = f"Error: {dispatch.error}"
-            _log_tool_call(
-                log_dir,
-                name=name,
-                arguments=arguments,
-                ok=False,
-                output=error_text,
-                latency_ms=(time.monotonic() - t0) * 1000,
-            )
-            return [TextContent(type="text", text=error_text)]
-        value = dispatch.value
-        payload: str
-        dumper = getattr(value, "model_dump_json", None)
-        if callable(dumper):
-            payload = str(dumper())
-        else:
-            try:
-                payload = json.dumps(value, default=str)
-            except (TypeError, ValueError):
-                payload = str(value)
-        _log_tool_call(
-            log_dir,
-            name=name,
-            arguments=arguments,
-            ok=True,
-            output=payload,
-            latency_ms=(time.monotonic() - t0) * 1000,
+        return await _dispatch_and_render(
+            name,
+            arguments,
+            ctx,
+            registry,
+            ledger_on=ledger_on,
+            store_dir=store_dir,
+            log_dir=log_dir,
         )
-        return [TextContent(type="text", text=payload)]
 
     return server
 
