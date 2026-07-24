@@ -78,14 +78,19 @@ def test_cache_write_failure_is_nonfatal(tmp_path: Path) -> None:
 
 
 def test_get_default_embedder_fails_open_without_extra(monkeypatch: pytest.MonkeyPatch) -> None:
-    import builtins
+    # get_default_embedder() loads model2vec via importlib.import_module; simulate
+    # the optional `semantic` extra being absent regardless of whether it is
+    # actually installed in this environment (it is once local-embed classify is
+    # in use). Patching importlib.import_module — not builtins.__import__ — is
+    # required: a cached model2vec in sys.modules bypasses builtins.__import__.
+    import importlib
 
-    real_import = builtins.__import__
+    real_import_module = importlib.import_module
 
     def _no_model2vec(name: str, *args: object, **kwargs: object) -> object:
         if name == "model2vec":
             raise ImportError("model2vec is not installed")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+        return real_import_module(name, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(builtins, "__import__", _no_model2vec)
+    monkeypatch.setattr(importlib, "import_module", _no_model2vec)
     assert get_default_embedder() is None
