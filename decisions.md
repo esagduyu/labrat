@@ -1016,3 +1016,32 @@ The GPT-5.6 Luna Max submission was accepted as-is (no adjustment, no footnote):
 0.6088, #18 first Sonnet 0.5138), giving the public board three LabRat points that
 tell the provider-aware grounding story end-to-end. Positioning language lives in
 README §DataAgentBench and docs/competitive-analysis-2026-07-16.md §8.
+
+## 2026-07-23 — DAB existing-tool fixes shipped; Sonnet-5 full run launched
+
+From the 270-trial Terra-vs-Luna answer-by-answer analysis (`docs/terra-luna-synthesis-2026-07-20.md`),
+the −4.4pp Terra gap was mostly n=5 noise + SHARED failures (existing-tool gaps neither config fixes),
+not a taxonomy regression. So we fixed the tools rather than adding features. Merged to master
+(Fable whole-branch reviewed → P1 grounding false-positives fixed; Sonnet-5 smoke-validated):
+
+1. **Column-disambiguation grounding** (`link_schema`/`describe_table`) — deterministic code/name-pair
+   + value-based hierarchy hints in tool output; fires ONLY on genuine ambiguity (zero hints on
+   normal id+name / group / numeric-PK tables — proven byte-identical). Autopsy lever D, moat-aligned.
+2. **local-NLI `llm_classify` backend wired through claude-mcp** — the only classify path that works
+   over MCP (llm_fn is None there). Needs `uv sync --extra semantic`; `HF_HOME` pinned so the hermetic
+   HOME doesn't re-download the model per trial.
+3. **Three untuned `_dab_lever_lines`** — enumeration-completeness, tie-band sanity, adjacent-token
+   delivery (extracted from the net-negative taxonomy lever's good micro-rules; keeps us UNTUNED).
+4. **Harness resume-dedup** — a semantic re-run replaces the prior `infra:` row (was appending → >5
+   rows/query).
+
+**Decision: pursue better UNTUNED, not a DAB-tuned prompt.** The board's new "Tuned prompt" column marks
+every entry above us; our #2-untuned position is the differentiator, and Sentinel's #1 tuned prompt is
+one sentence — validating the minimal-lever approach. The taxonomy lever stays default-off (net-negative,
+−4.4pp full-12).
+
+**Sonnet-5 full-270 run launched** (`claude-mcp`, Max plan, no API — Sonnet is the +18pp model lever
+from the parse-robustness ablation). Comparability verified (GT/validators unchanged since our #6 base).
+Multi-day (5h session walls); running detached in the user's terminal. Memory: `reference_dab_sonnet_claude_mcp`.
+Bug fixed en route: `dab_setup.py` unquoted CREATE DATABASE lowercased patent_CPCDefinition; taint-gate-v2
+false-flagged CPC `/00` literals as paths — both fixed on master with tests.
