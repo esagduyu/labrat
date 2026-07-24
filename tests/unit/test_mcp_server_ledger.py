@@ -53,6 +53,36 @@ def _registry_with_stub() -> ToolRegistry:
     return registry
 
 
+# Placed past LedgerBudget.max_bytes (8000, the inline preview's cap) but
+# well within _ARTIFACT_FETCH_MAX_BYTES (64_000) -- proves get_artifact
+# reaches content the inline ledger preview cannot.
+_MARKER = "MARKER_BEYOND_8000_BYTES"
+
+
+class _MarkerResult:
+    def model_dump_json(self) -> str:
+        return ("a" * 8500) + _MARKER + ("b" * 100)
+
+
+class _StubMarkerTool(AgentTool[_EmptyInput]):
+    """Stub tool whose payload has a marker beyond the inline preview budget."""
+
+    @property
+    def name(self) -> str:
+        return "stub_marker"
+
+    @property
+    def description(self) -> str:
+        return "stub tool with a marker beyond the inline preview budget"
+
+    @property
+    def input_model(self) -> type[_EmptyInput]:
+        return _EmptyInput
+
+    async def execute(self, ctx: ToolContext, args: _EmptyInput) -> object:
+        return _MarkerResult()
+
+
 # ── _render_payload_via_ledger (helper-level unit) ──────────────────────────
 
 
@@ -75,6 +105,26 @@ def test_render_payload_via_ledger_passthrough_under_budget(tmp_path: Path) -> N
         payload="small payload",
     )
     assert text == "small payload"
+
+
+# ── _get_artifact_text (backs get_artifact retrieval) ───────────────────────
+
+
+def test_get_artifact_text_is_verbatim_not_double_json_encoded(tmp_path: Path) -> None:
+    payload = ("a" * 8500) + _MARKER + ("b" * 100)
+    store = mcp_server._get_result_store(tmp_path)
+    ref = store.put_json(payload, kind="json")
+    text = mcp_server._get_artifact_text(store, ref)
+    assert text == payload
+    assert not text.startswith('"')
+
+
+def test_get_artifact_text_offset_slices_from_position(tmp_path: Path) -> None:
+    payload = "a" * 100 + "b" * 100
+    store = mcp_server._get_result_store(tmp_path)
+    ref = store.put_json(payload, kind="json")
+    text = mcp_server._get_artifact_text(store, ref, offset=100)
+    assert text == "b" * 100
 
 
 # ── _store_dir_from_env (fixes the `Path("") or None` truthiness trap) ─────
@@ -188,7 +238,120 @@ async def test_dispatch_and_render_get_artifact_roundtrip(tmp_path: Path) -> Non
         store_dir=tmp_path,
         log_dir=None,
     )
-    assert fetched[0].text.count("x") > 100
+    # Verbatim, not double-JSON-encoded (no wrapping quotes/backslash escapes).
+    assert fetched[0].text == "x" * 50_000
+
+
+async def test_dispatch_and_render_get_artifact_returns_content_beyond_inline_preview(
+    tmp_path: Path,
+) -> None:
+    """Load-bearing regression for the reviewer's Important finding: the
+    inline ledger preview is capped at LedgerBudget.max_bytes (8000), so the
+    marker (placed at byte ~8500) must NOT appear in the stored block, but
+    MUST be reachable via get_artifact — otherwise get_artifact adds no
+    information beyond what was already in context."""
+    registry = ToolRegistry()
+    registry.register(_StubMarkerTool())
+    ctx = ToolContext()
+    stored = await mcp_server._dispatch_and_render(
+        "stub_marker",
+        {},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path,
+        log_dir=None,
+    )
+    text = stored[0].text
+    assert _MARKER not in text
+    ref_line = next(line for line in text.splitlines() if line.startswith("artifact_ref: "))
+    ref = ref_line.removeprefix("artifact_ref: ")
+
+    fetched = await mcp_server._dispatch_and_render(
+        "get_artifact",
+        {"ref": ref},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path,
+        log_dir=None,
+    )
+    fetched_text = fetched[0].text
+    assert _MARKER in fetched_text
+    # Verbatim retrieval: no double-JSON-encoding artifacts.
+    assert not fetched_text.startswith('"')
+    assert fetched_text == ("a" * 8500) + _MARKER + ("b" * 100)
+
+
+async def test_dispatch_and_render_get_artifact_offset_pages_further(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(_StubMarkerTool())
+    ctx = ToolContext()
+    stored = await mcp_server._dispatch_and_render(
+        "stub_marker",
+        {},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path,
+        log_dir=None,
+    )
+    ref_line = next(
+        line for line in stored[0].text.splitlines() if line.startswith("artifact_ref: ")
+    )
+    ref = ref_line.removeprefix("artifact_ref: ")
+
+    fetched = await mcp_server._dispatch_and_render(
+        "get_artifact",
+        {"ref": ref, "offset": 8500 + len(_MARKER)},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path,
+        log_dir=None,
+    )
+    assert fetched[0].text == "b" * 100
+    assert _MARKER not in fetched[0].text
+
+
+async def test_dispatch_and_render_get_artifact_unknown_ref_returns_error(tmp_path: Path) -> None:
+    """Store IS configured, but the ref doesn't resolve -> error text branch."""
+    registry = _registry_with_stub()
+    ctx = ToolContext()
+    result = await mcp_server._dispatch_and_render(
+        "get_artifact",
+        {"ref": "result://nonexistent-session/0000"},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path,
+        log_dir=None,
+    )
+    assert result[0].text.startswith("Error:")
+
+
+async def test_dispatch_and_render_ledger_write_failure_falls_back_to_raw_payload(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A ResultStore write failure (e.g. a full disk) must never crash the
+    dispatch — it degrades to the raw, unbounded payload."""
+
+    def _boom(self: Any, obj: object, kind: str = "json") -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mcp_server.ResultStore, "put_json", _boom)
+    registry = _registry_with_stub()
+    ctx = ToolContext()
+    result = await mcp_server._dispatch_and_render(
+        "stub_big",
+        {},
+        ctx,
+        registry,
+        ledger_on=True,
+        store_dir=tmp_path,
+        log_dir=None,
+    )
+    assert result[0].text == "x" * 50_000
 
 
 async def test_dispatch_and_render_get_artifact_no_store_configured() -> None:

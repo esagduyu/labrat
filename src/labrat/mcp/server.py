@@ -10,6 +10,12 @@ standard data tools, and serves them as MCP tools:
 - ``LABRAT_MCP_PROFILES`` — comma-separated profile names, resolved through
   ``labrat.profile.manager`` so any of the seven adapters can be mounted
   with keyring-backed secrets. Connection keys are profile names.
+- ``LABRAT_MCP_LEDGER`` (opt-in, ``"1"`` to enable) + ``LABRAT_MCP_RESULT_STORE_DIR``
+  — the server-side Context Ledger: oversized tool payloads are bounded to a
+  ``[context ledger] ...`` preview block and the full text is stashed as a
+  ``ResultStore`` artifact, retrievable via the synthetic ``get_artifact``
+  tool (only listed when the ledger is on). Both unset (the default) keeps
+  ``_call_tool``/``_list_tools`` byte-identical to the no-ledger path.
 
 At least one of the two must be set. ``ToolContext.read_only`` is derived,
 not user-set directly: it's False unless every ``LABRAT_MCP_CONNECTIONS``
@@ -68,6 +74,13 @@ from labrat.runtime.context_ledger import LedgerBudget
 
 _TOOL_LOG_FILENAME = "mcp_tool_calls.jsonl"
 
+# get_artifact's fetch budget is deliberately far above LedgerBudget.max_bytes
+# (the inline ledger-block preview's cap, 8000 by default): if it matched, the
+# tool would add no information over the preview already in context, and the
+# ledger summary's "pull full via get_artifact" promise would be unfulfillable
+# for anything beyond the first 8000 bytes.
+_ARTIFACT_FETCH_MAX_BYTES = 64_000
+
 # One ResultStore per store_dir for the life of the process. ResultStore mints
 # a random session id per instance and keeps its artifact index in memory only
 # (see labrat/results/store.py) — a fresh instance per call would get a new
@@ -84,6 +97,28 @@ def _get_result_store(store_dir: Path) -> ResultStore:
         store = ResultStore(store_dir)
         _result_stores[key] = store
     return store
+
+
+def _get_artifact_text(
+    store: ResultStore, ref: str, *, offset: int = 0, max_bytes: int = _ARTIFACT_FETCH_MAX_BYTES
+) -> str:
+    """Fetch a stored artifact's text for get_artifact, well beyond the inline
+    ledger preview's budget (``_ARTIFACT_FETCH_MAX_BYTES`` vs
+    ``LedgerBudget.max_bytes``), optionally starting at a character ``offset``
+    for simple pagination.
+
+    Uses ``ResultStore.get()`` (which JSON-*decodes* the stored payload) rather
+    than ``ResultStore.preview()`` (which re-reads the raw on-disk JSON text).
+    ``_render_payload_via_ledger`` stores the raw MCP payload string via
+    ``put_json``, so ``.preview()`` would return it quote-wrapped and
+    backslash-escaped (double JSON encoding); ``.get()`` round-trips back to
+    the original string verbatim.
+    """
+    obj = store.get(ref)
+    text = obj if isinstance(obj, str) else json.dumps(obj, default=str)
+    if offset > 0:
+        text = text[offset:]
+    return cap_bytes(text, max_bytes)
 
 
 def _store_dir_from_env() -> Path | None:
@@ -114,7 +149,8 @@ def _render_payload_via_ledger(*, store_dir: Path, tool_name: str, payload: str)
     ref = store.put_json(payload, kind="json")
     mv = ModelVisibleToolResult(
         summary=f"{tool_name}: {len(payload.encode('utf-8'))}-byte payload stored; "
-        f"pull full via get_artifact({ref}).",
+        f"get_artifact(ref={ref!r}) returns up to {_ARTIFACT_FETCH_MAX_BYTES} bytes "
+        "(pass offset to page further).",
         preview=cap_bytes(payload, budget.max_bytes),
         artifact_ref=ref,
         truncated=True,
@@ -142,12 +178,25 @@ def _list_tool_schemas(registry: ToolRegistry, *, ledger_on: bool) -> list[Tool]
                 name="get_artifact",
                 description=(
                     "Retrieve a stored tool-result artifact by ref (e.g. "
-                    "'result://<session>/0000'). Returns a bounded preview of "
-                    "the full payload the ledger stored."
+                    "'result://<session>/0000'), returning up to "
+                    f"{_ARTIFACT_FETCH_MAX_BYTES} bytes of the full payload the "
+                    "ledger stored — well beyond the inline ledger preview. Pass "
+                    "an integer `offset` to page through payloads longer than "
+                    "that."
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {"ref": {"type": "string"}},
+                    "properties": {
+                        "ref": {"type": "string"},
+                        "offset": {
+                            "type": "integer",
+                            "description": (
+                                "Character offset to start the returned text "
+                                "from, for paging past the first "
+                                f"{_ARTIFACT_FETCH_MAX_BYTES} bytes (default 0)."
+                            ),
+                        },
+                    },
                     "required": ["ref"],
                 },
             )
@@ -202,7 +251,11 @@ async def _dispatch_and_render(
         if store_dir is None:
             return [TextContent(type="text", text="Error: no result store configured")]
         try:
-            text = _get_result_store(store_dir).preview(ref)
+            offset = int(arguments.get("offset", 0) or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            text = _get_artifact_text(_get_result_store(store_dir), ref, offset=max(offset, 0))
         except Exception as exc:
             text = f"Error: {exc}"
         return [TextContent(type="text", text=text)]
@@ -231,7 +284,15 @@ async def _dispatch_and_render(
         except (TypeError, ValueError):
             payload = str(value)
     if ledger_on and store_dir is not None:
-        payload = _render_payload_via_ledger(store_dir=store_dir, tool_name=name, payload=payload)
+        try:
+            payload = _render_payload_via_ledger(
+                store_dir=store_dir, tool_name=name, payload=payload
+            )
+        except Exception:
+            # A ResultStore write failure (e.g. a full/unwritable disk) must
+            # never crash the dispatch — degrade to the raw (unbounded)
+            # payload rather than losing the tool result entirely.
+            pass
     _log_tool_call(
         log_dir,
         name=name,
