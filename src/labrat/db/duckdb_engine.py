@@ -178,6 +178,57 @@ class DuckDBConnection(Connection):
 
         return Catalog(database_name=db_name, schemas=schemas)
 
+    def introspect_attached_catalog(self, alias: str) -> Catalog:
+        """Introspect one ATTACHed database's tables into a Catalog scoped to ``alias``.
+
+        ``introspect_catalog`` only sees the current (primary) catalog — DuckDB's
+        information_schema is catalog-local — so an ATTACHed secondary is invisible to
+        it. This reads ``duckdb_tables()``/``duckdb_columns()`` filtered by
+        ``database_name = alias`` and builds a Catalog whose tables carry
+        ``schema_name = alias`` so ``Table.qualified_name`` is ``alias.table`` and
+        resolves through this (primary) connection. Foreign keys are omitted.
+        """
+        # NOTE (proven in the 2026-07-24 smoke): an attached POSTGRES db exposes
+        # information_schema/pg_catalog tables under the alias too (212 tables on
+        # pancancer_atlas), so filter system schemas or the agent drowns in noise.
+        table_rows = self._connection.execute(
+            "SELECT table_name, schema_name FROM duckdb_tables() "
+            "WHERE database_name = ? "
+            "AND schema_name NOT IN ('information_schema', 'pg_catalog') "
+            "ORDER BY table_name",
+            [alias],
+        ).fetchall()
+        tables: list[Table] = []
+        for table_name, _schema_name in table_rows:
+            col_rows = self._connection.execute(
+                "SELECT column_name, data_type, is_nullable "
+                "FROM duckdb_columns() "
+                "WHERE database_name = ? AND table_name = ? "
+                "ORDER BY column_index",
+                [alias, str(table_name)],
+            ).fetchall()
+            columns = [
+                Column(
+                    name=str(cn),
+                    data_type=str(dt),
+                    nullable=bool(nn),
+                    default=None,
+                )
+                for (cn, dt, nn) in col_rows
+            ]
+            tables.append(
+                Table(
+                    name=str(table_name),
+                    schema_name=alias,
+                    columns=columns,
+                    foreign_keys=[],
+                )
+            )
+        return Catalog(
+            database_name=alias,
+            schemas=[Schema(name="main", tables=tables)],
+        )
+
     def _introspect_schema(self, schema_name: str) -> list[Table]:
         table_rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
