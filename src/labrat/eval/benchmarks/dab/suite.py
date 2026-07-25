@@ -373,21 +373,22 @@ def _dab_lever_lines() -> list[str]:
         "value within a few characters of its label so it reads unambiguously.",
         "A keyword or LIKE filter on free text matches spelling, not meaning, and silently "
         "drops rows that qualify by synonym, word form, or a match stated in another column; "
-        "when such a filter drives the answer and the candidate set is small, enumerate and "
-        "judge the rows (or use llm_classify) rather than trusting the pattern. Before "
-        "comparing or extracting values encoded as text (dates, times, ranges), first sample "
-        "the column to learn every format present and handle all of them — a single-format "
-        "parse silently drops the rest.",
+        "when such a filter drives the answer and the candidate set is small (roughly a few "
+        "hundred rows or fewer), enumerate and judge the rows (or use llm_classify) rather "
+        "than trusting the pattern — widening how you match (synonyms, word forms, other "
+        "columns), never the question's stated criterion for inclusion. Before comparing or "
+        "extracting values encoded as text (dates, times, ranges), first sample the column to "
+        "learn every format present and handle all of them — a single-format parse silently "
+        "drops the rest.",
         "Deliver a value exactly as it is stored: copy the cell's characters byte-for-byte "
-        "without reformatting, re-spacing, normalizing separators, or otherwise tidying it "
-        "(for example, do not rewrite a stored '5–11PM' as '5PM–11PM'). If the answer is a "  # noqa: RUF001
-        "value taken from a cell, echo that cell's exact token.",
+        "without reformatting, re-spacing, normalizing separators or dashes, or otherwise "
+        "tidying it. If the answer is a value taken from a cell, echo that cell's exact token.",
         "When a question needs a chosen methodology or definition (a moving average, a rate, "
         "a cutoff, a tie-break), pin one concrete convention up front, state it in a short "
-        "clause, and apply it consistently — do not let the method drift between attempts. "
-        "Then, if the result is a set (ties, or 'all that qualify'), enumerate the full set "
-        "under that fixed convention rather than stopping at the first item or a partial "
-        "group.",
+        "clause, and apply it consistently — revise it only in response to an explicit sanity "
+        "signal (such as a tie band covering most of the candidate set), never silently "
+        "between attempts. If the result is a set, enumerate the full set under that fixed "
+        "convention.",
     ]
 
 

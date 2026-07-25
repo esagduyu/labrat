@@ -70,7 +70,7 @@ def test_free_text_completeness_lever_present() -> None:
 def test_verbatim_value_lever_present() -> None:
     text = " ".join(_dab_lever_lines())
     assert "byte-for-byte" in text
-    assert "5–11PM" in text or "5-11PM" in text  # noqa: RUF001
+    assert "exact token" in text
 
 
 def test_convention_pin_lever_present() -> None:
