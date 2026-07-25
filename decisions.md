@@ -1097,3 +1097,44 @@ Cartographer and the taxonomy lever when first landed.
 **Follow-up (same wave):** `get_artifact` dispatches are now logged through the same
 `_log_tool_call` path as every other tool call — the intercept originally returned before logging,
 so a ledger-on run's `mcp_tool_calls.jsonl` silently omitted every artifact retrieval.
+
+## 2026-07-25 — Ledger budget knob, high-effort Sonnet-5 result, and gap-closing levers
+
+**Ledger budget is now configurable, and DAB raises it to 64 KB.** The server-side ledger bounded
+any payload over `LedgerBudget.max_bytes` (8000). A live Sonnet-5 smoke showed that truncated our
+`search_reference_docs`/`describe_table` grounding (measured 8–22 KB) and the agent did not reliably
+call `get_artifact` to recover the tail — the ledger was fighting the grounding it was meant to
+complement. Added `LABRAT_MCP_LEDGER_MAX_BYTES` (default 8000 = byte-identical when unset); the DAB
+`--agent-mcp-ledger` path sets it to **64000**, above the largest grounding payload so grounding
+passes through whole while genuinely oversized `run_sql` dumps (68–313 KB, the context-blowing case)
+still get bounded. A "maximum" budget was rejected: it makes the ledger a no-op (never fires) and
+re-admits context bloat — the sweet spot is just above the biggest grounding payload.
+
+**High-effort Sonnet-5 full run: keep Luna as the leaderboard entry.** A complete 270-trial
+claude-sonnet-5 run at `--agent-reasoning high` (with cartograph+hints+levers+local-embed+mcp-ledger
++ the catalog fixes) scored **70.31% stratified** — below Luna's 74.18% and even the earlier
+medium-effort 72.90%. More effort did not help; the behavioral signature is that Sonnet shortcuts
+(12 tool calls / 54s median per trial vs Luna's 36 / 304s). Decision: do not submit Sonnet-high;
+keep the accepted GPT-5.6-Luna-Max entry. Full task-by-task analysis vs Luna is in
+`docs/dab-sonnet5-vs-luna-gap-analysis.md` — the entire ~4pp gap is 7 tasks in 3 themes, and several
+"weak" tasks (pancancer:1, deps_dev:1) are shared-hard failures Luna also misses, so they are not
+gaps. GAP-2 (crmarenapro:1) reached Luna parity; GAP-1 restored grounding but pancancer:1 stays 0/5
+for both models.
+
+**Gap-closing levers (branch `feat/dab-gap-levers`, deliberately unmerged).** Three new
+`_dab_lever_lines` target the three gap themes: free-text match/parse completeness (widen matching
+recall, never the stated criterion), byte-verbatim value delivery, and convention-pinning
+(reconciled with the existing tie-band lever rather than contradicting it). Held to the same bar as
+every lever: **untuned/general, not reverse-engineered from the failing tasks** — the taxonomy pack
+went net-negative from exactly that overfit shape. A smoke n=3 A/B improved 4 of 5 gap tasks with no
+regression on 3 parity tasks, but that is a directional signal on the derived-from set, not scaled
+validation, so the branch stays unmerged until a full 270-run confirms net-positive across all
+tasks. **A first draft leaked a held-out ground-truth token (`5–11PM`) into a lever example** — a
+Fable review caught it before it could ship in a submission prompt; the standing rule is now to grep
+any concrete example value in a lever against the DAB ground truth and confirm it is absent.
+
+**`test_app_renders` made deterministic.** The TUI snapshot test booted the real `LabRatApp`, which
+connects to the developer's ambient first profile and its live DB, baking machine-local state into
+the committed SVG (so it only ever matched the capture machine and was skipped in CI). It now forces
+an empty profile store so the app takes its deterministic first-run (onboarding) path, and the
+CI-skip was dropped — it runs like the other TUI snapshots.

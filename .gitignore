@@ -181,3 +181,6 @@ docs/superpowers/specs/2026-06-01-codex-subscription-provider-design.md
 
 # Competitive-intelligence docs stay local-only (user decision 2026-07-16)
 docs/competitive-*.md
+
+# subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/
