@@ -39,8 +39,8 @@ def test_top_n_with_ties_lever_present() -> None:
     assert any("truncates ties" in ln for ln in _dab_lever_lines())
 
 
-def test_lever_lines_now_number_seven() -> None:
-    assert len(_dab_lever_lines()) == 7
+def test_lever_lines_now_number_ten() -> None:
+    assert len(_dab_lever_lines()) == 10
 
 
 def test_enumeration_completeness_lever_present() -> None:
@@ -59,6 +59,24 @@ def test_adjacent_token_delivery_lever_present() -> None:
     text = " ".join(_dab_lever_lines())
     assert "directly adjacent as plain tokens" in text
     assert "markdown table" in text
+
+
+def test_free_text_completeness_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "matches spelling, not meaning" in text
+    assert "llm_classify" in text
+
+
+def test_verbatim_value_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "byte-for-byte" in text
+    assert "5–11PM" in text or "5-11PM" in text  # noqa: RUF001
+
+
+def test_convention_pin_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "pin one concrete convention" in text
+    assert "full set under that fixed convention" in text
 
 
 def test_lever_lines_are_untuned_no_dataset_names_or_answer_content() -> None:

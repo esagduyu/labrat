@@ -344,8 +344,12 @@ def _dab_lever_lines() -> list[str]:
     (force-query), implementation errors (repair via run_sql diagnostics),
     broad-fetch-then-tally (push aggregation into SQL), tie-band truncation
     both ways (top-N under-emission and single-item over-emission), list
-    under-emission on 'each'/ranking questions, and proximity delivery (name
-    and value adjacent, not table-separated).
+    under-emission on 'each'/ranking questions, proximity delivery (name
+    and value adjacent, not table-separated), free-text match/parse
+    completeness (synonym-aware filtering and multi-format value parsing),
+    byte-verbatim value delivery (no reformatting a stored value), and
+    convention-pinning (commit to one methodology and enumerate the full
+    resulting set).
     """
     return [
         "Always derive the answer by querying the database — never answer from prior "
@@ -367,6 +371,23 @@ def _dab_lever_lines() -> list[str]:
         "State each item and its requested value directly adjacent as plain tokens (name "
         "then value), not in a markdown table or separated by other columns — keep the "
         "value within a few characters of its label so it reads unambiguously.",
+        "A keyword or LIKE filter on free text matches spelling, not meaning, and silently "
+        "drops rows that qualify by synonym, word form, or a match stated in another column; "
+        "when such a filter drives the answer and the candidate set is small, enumerate and "
+        "judge the rows (or use llm_classify) rather than trusting the pattern. Before "
+        "comparing or extracting values encoded as text (dates, times, ranges), first sample "
+        "the column to learn every format present and handle all of them — a single-format "
+        "parse silently drops the rest.",
+        "Deliver a value exactly as it is stored: copy the cell's characters byte-for-byte "
+        "without reformatting, re-spacing, normalizing separators, or otherwise tidying it "
+        "(for example, do not rewrite a stored '5–11PM' as '5PM–11PM'). If the answer is a "  # noqa: RUF001
+        "value taken from a cell, echo that cell's exact token.",
+        "When a question needs a chosen methodology or definition (a moving average, a rate, "
+        "a cutoff, a tie-break), pin one concrete convention up front, state it in a short "
+        "clause, and apply it consistently — do not let the method drift between attempts. "
+        "Then, if the result is a set (ties, or 'all that qualify'), enumerate the full set "
+        "under that fixed convention rather than stopping at the first item or a partial "
+        "group.",
     ]
 
 
