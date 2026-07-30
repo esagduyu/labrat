@@ -47,6 +47,7 @@ async def run_agent_task(
     on_tool_call: Callable[[str, dict[str, Any], bool, str, float], None] | None = None,
     enable_ledger: bool = True,
     ledger_dir: Path | None = None,
+    ledger_max_bytes: int | None = None,
 ) -> AgentTaskResult:
     """Run a single agent task and return the assistant's final text + tool count.
 
@@ -91,6 +92,7 @@ async def run_agent_task(
         max_verify_rounds=max_verify_rounds,
         enable_ledger=enable_ledger,
         ledger_dir=ledger_dir,
+        ledger_max_bytes=ledger_max_bytes,
         max_turns=max_turns,
         max_tool_calls=max_tool_calls,
     )

@@ -630,6 +630,7 @@ class DabSuite:
         agent_levers: bool = True,
         agent_ledger: bool = True,
         agent_mcp_ledger: bool = False,
+        agent_ledger_max_bytes: int | None = None,
         agent_taxonomy: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
@@ -690,6 +691,7 @@ class DabSuite:
         # drivers have no shared runtime, so this needs its own flag. Off by default,
         # mirroring `cartograph`.
         self._agent_mcp_ledger = agent_mcp_ledger
+        self._agent_ledger_max_bytes = agent_ledger_max_bytes
         self._agent_taxonomy = agent_taxonomy
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
@@ -1832,6 +1834,7 @@ class DabSuite:
                 on_tool_call=_trace,
                 enable_ledger=self._agent_ledger,
                 ledger_dir=scratch_dir,
+                ledger_max_bytes=self._agent_ledger_max_bytes,
             )
             if cartograph_root is not None:
                 (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)

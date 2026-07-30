@@ -384,6 +384,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-ledger-max-bytes",
+        type=int,
+        default=None,
+        help=(
+            "Model-visible byte cap for the IN-PROCESS Context Ledger on the "
+            "labrat-agent driver (default 8000). The claude-mcp server-side ledger got "
+            "raised to 64000 on 2026-07-24 because 8 KB truncates search_reference_docs "
+            "/ describe_table grounding (8-22 KB); that fix never reached this path, "
+            "which is the one the accepted 74.18%% entry runs. For ablation."
+        ),
+    )
+    parser.add_argument(
         "--agent-taxonomy",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -608,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
         ("agent_mcp_ledger", args.agent_mcp_ledger),
+        ("agent_ledger_max_bytes", args.agent_ledger_max_bytes),
         ("agent_taxonomy", args.agent_taxonomy),
     ]:
         prior = existing_cfg.get(field)
@@ -848,6 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
         agent_mcp_ledger=effective_mcp_ledger,
+        agent_ledger_max_bytes=args.agent_ledger_max_bytes,
         agent_taxonomy=effective_taxonomy,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
@@ -912,6 +926,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_levers": effective_levers,
         "agent_ledger": effective_ledger,
         "agent_mcp_ledger": effective_mcp_ledger,
+        "agent_ledger_max_bytes": args.agent_ledger_max_bytes,
         "agent_taxonomy": effective_taxonomy,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"

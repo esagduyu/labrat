@@ -81,3 +81,32 @@ def test_build_agent_session_respects_caller_llm_fn(tmp_path: Path) -> None:
         enable_ledger=False,
     )
     assert ctx.llm_fn is my_llm  # caller injection wins
+
+
+def test_ledger_budget_defaults_to_8000_and_is_overridable(tmp_path: Path) -> None:
+    """The in-process ledger on the labrat-agent path was hardcoded to the 8000-byte
+    LedgerBudget default with no override surface, while the claude-mcp server-side
+    ledger got raised to 64000 on 2026-07-24 precisely because 8 KB truncates
+    search_reference_docs / describe_table grounding (those run 8-22 KB).
+
+    The accepted 74.18% Luna entry runs this path and made 398 search_reference_docs
+    calls into an 8 KB cap, with no get_artifact tool to recover the remainder.
+    See docs/dab-sonnet5-vs-luna-gap-analysis.md §(g).
+    """
+    from labrat.agent.providers.anthropic_direct import AnthropicProvider
+
+    def _loop(**kw: object):
+        return build_agent_session(
+            ctx=ToolContext(
+                connections={"main": object()}, catalogs={"main": object()}, primary="main"
+            ),
+            registry=ToolRegistry(),
+            provider=AnthropicProvider(model="claude-sonnet-4-6"),
+            ledger_dir=tmp_path,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    assert _loop()._ledger is not None
+    assert _loop()._ledger._budget.max_bytes == 8000  # unchanged default
+    assert _loop(ledger_max_bytes=64000)._ledger._budget.max_bytes == 64000
+    assert _loop(ledger_max_bytes=64000)._ledger._budget.max_rows == 50  # rows untouched

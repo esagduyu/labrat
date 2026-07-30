@@ -23,7 +23,7 @@ from labrat.agent.tools.base import ToolContext, ToolRegistry
 from labrat.agent.verifier import LLMVerifier, provider_llm_fn
 from labrat.profile.model import Profile
 from labrat.results.store import ResultStore
-from labrat.runtime.context_ledger import ContextLedger
+from labrat.runtime.context_ledger import ContextLedger, LedgerBudget
 
 PINNED_DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -70,6 +70,7 @@ def build_agent_session(
     max_verify_rounds: int = 2,
     enable_ledger: bool = True,
     ledger_dir: Path | None = None,
+    ledger_max_bytes: int | None = None,
     max_turns: int | None = None,
     max_tool_calls: int | None = None,
 ) -> AgentLoop:
@@ -107,7 +108,12 @@ def build_agent_session(
             if ledger_dir is not None
             else Path(tempfile.mkdtemp(prefix="labrat-ledger-"))
         )
-        ledger = ContextLedger(ResultStore(root))
+        budget = LedgerBudget(max_bytes=ledger_max_bytes) if ledger_max_bytes is not None else None
+        ledger = (
+            ContextLedger(ResultStore(root), budget=budget)
+            if budget is not None
+            else ContextLedger(ResultStore(root))
+        )
 
     verifier: LLMVerifier | None = None
     if verify:

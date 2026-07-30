@@ -151,3 +151,25 @@ async def test_on_tool_call_still_gets_full_payload_by_default(tmp_path: Path) -
         ledger_dir=tmp_path,
     )
     assert outputs == [BIG_TEXT]  # DAB trace-validity invariant holds ledger-on
+
+
+async def test_ledger_max_bytes_raises_the_model_visible_cap(tmp_path: Path) -> None:
+    """A 20 KB tool result is truncated by the 8000-byte default but survives intact
+    when the budget is raised — the labrat-agent equivalent of the 64 KB fix that
+    2026-07-24 applied only to the claude-mcp server-side ledger.
+
+    Real payloads this bites: search_reference_docs / describe_table grounding runs
+    8-22 KB, and the accepted 74.18% Luna entry made 398 such calls into the 8 KB cap.
+    """
+    ctx, registry, provider = _setup()
+    await run_agent_task(
+        prompt="go",
+        ctx=ctx,
+        registry=registry,
+        provider=provider,
+        system_prompt="s",
+        ledger_dir=tmp_path,
+        ledger_max_bytes=64_000,
+    )
+    content = _tool_result_content(provider.captured[1])
+    assert BIG_TEXT in content, "20 KB payload should survive a 64 KB budget intact"
