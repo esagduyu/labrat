@@ -35,7 +35,20 @@ def answer_shape_lines() -> list[str]:
 
 
 def validator_shape_lines() -> list[str]:
-    return []
+    """Pack B — where in the text the answer must sit.
+
+    Scoring reads position, not just content: a correct value placed too far from its
+    label, or too late in the reply, has repeatedly scored zero.
+    """
+    return [
+        "Put each value immediately after the thing it describes, with nothing in "
+        "between — write the label then the number, not the label followed by a phrase "
+        "and then the number.",
+        "State the answer in the very first sentence of your reply, then show your "
+        "work, then restate the answer on the last line. Do not open with methodology.",
+        "For a numeric answer give the full-precision value and a rounded form next to "
+        "each other, so either can be read.",
+    ]
 
 
 def analytical_convention_lines() -> list[str]:

@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from labrat.eval.benchmarks.dab.informed_packs import all_pack_lines, answer_shape_lines
+from labrat.eval.benchmarks.dab.informed_packs import (
+    all_pack_lines,
+    answer_shape_lines,
+    validator_shape_lines,
+)
 
 DAB = Path.home() / "repos" / "DataAgentBench"
 
@@ -24,14 +28,14 @@ _STOPWORDS = frozenset(
     count counts derive derived different directly during either emit emitted enough
     every exactly example except explicit extract extracted field fields first
     following format formats-group group groups identifier identifiers immediately
-    include included instead itself label labels matching method never number
-    numbers order others output outputs period periods precision present preserve
-    question questions ranking rather report reported requested result results
-    rounded
+    include included instead itself label labels matching method never number numeric
+    numbers order other others output outputs period periods phrase precision present
+    preserve question questions ranking rather report reported requested result
+    results rounded
     separator separators should simply single source specific state stated string
-    strings structure table tables temp their there these those through together
-    toward under unless using value values verbatim where whether which while whole
-    within without""".split()
+    strings structure table tables temp their there these thing those through
+    together toward under unless using value values verbatim where whether which
+    while whole within without write""".split()
 )
 
 
@@ -44,6 +48,17 @@ def test_answer_shape_pack_covers_its_three_measured_failures() -> None:
     assert "every" in text and "group" in text  # enumerate all groups
     assert "order" in text  # ranking order
     assert len(answer_shape_lines()) == 3
+
+
+def test_validator_shape_pack_covers_adjacency_head_and_precision() -> None:
+    """Derived from: googlelocal:2 (value must sit immediately after the name),
+    stockindex:1/2 (answer must appear in the head of the output), stockindex:3
+    (proximity), and repeated rounding mismatches."""
+    text = " ".join(validator_shape_lines()).lower()
+    assert "immediately" in text  # adjacency
+    assert "first" in text  # head placement
+    assert "precision" in text  # full + rounded
+    assert len(validator_shape_lines()) == 3
 
 
 def test_no_pack_rule_contains_a_numeral() -> None:
