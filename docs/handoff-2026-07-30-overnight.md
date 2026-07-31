@@ -72,7 +72,7 @@ dilution run:
 
 ---
 
-## 3. Opus 5 scout — RUNNING
+## 3. Opus 5 scout — ~~RUNNING~~ SUPERSEDED (killed at 13/108, see §7)
 
 - Worktree: `/Users/ege/repos/labrat-wt-opusscout` (**detached HEAD at `3b1199d`** so it
   cannot drift while feature work continues elsewhere).
@@ -132,11 +132,11 @@ spec. **Scope for the morning:** an `ema` helper is the highest-value single pie
 targets `patents:2`, the one task no prompt lever has ever moved, by *computing* the
 convention instead of asking the model to hold one.
 
-**Ablation not run — this is the one place I could not follow the plan.** Item 1's
+**Ablation not run — still true, and it now matters more: the answer gate is ON in the launched full run without ever being ablated (§7).** Item 1's
 ablation needs Max-plan budget, and the Opus scout is using it. Running both concurrently
 risks exit-4 walls corrupting both. Sequential is the only safe option.
 
-**Why I did not launch the full Opus run.** You said to launch if confident, and I am
+**~~Why I did not launch the full Opus run.~~ SUPERSEDED by §7 — you instructed the full run; it is now launched.** Original reasoning, kept for the record: You said to launch if confident, and I am
 not, for a specific reason: the whole point of the scout is to choose the config for the
 full run, and launching the full run before reading it would spend the expensive budget
 on an unvalidated configuration. There is also an open question the scout answers — if
