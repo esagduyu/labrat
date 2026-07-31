@@ -39,7 +39,7 @@ _STOPWORDS = frozenset(
     count counts derive derived different directly during either emit emitted enough
     every exactly example except explicit extract extracted field fields first
     following format formats-group group groups identifier identifiers immediately
-    include included instead itself label labels matching method moving never
+    include included instead itself label labels match matching method moving never
     normalize number numeric numbers order others output outputs period periods
     phrase precision present preserve punctuation question questions ranking rather
     report reported requested result results rounded
@@ -96,9 +96,17 @@ def test_analytical_conventions_pack_covers_the_four_recurring_choices() -> None
 def test_analytical_conventions_use_precise_technical_vocabulary() -> None:
     """Dodging gate tokens once pushed these rules into vague paraphrase ("fragment
     test" for substring, "trailing blank gaps" for whitespace), which a model cannot
-    reliably map onto the operations meant. Pin the precise terms."""
+    reliably map onto the operations meant. "match rate" additionally matches the
+    verify_join tool's own field name, so the instruction and the tool agree."""
     text = " ".join(analytical_convention_lines()).lower()
-    for term in ("substring", "whitespace", "punctuation", "word-boundary", "temp table"):
+    for term in (
+        "substring",
+        "whitespace",
+        "punctuation",
+        "word-boundary",
+        "temp table",
+        "match rate",
+    ):
         assert term in text
 
 

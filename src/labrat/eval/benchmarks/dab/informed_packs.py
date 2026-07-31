@@ -63,7 +63,7 @@ def analytical_convention_lines() -> list[str]:
         "every period from the first to the last, counting periods with no data as "
         "zero rather than skipping them.",
         "Normalize obviously corrupted join keys before joining — stray leading "
-        "punctuation, trailing whitespace, differing case — and verify the overlap "
+        "punctuation, trailing whitespace, differing case — and verify the match "
         "rate before trusting the result.",
         "When a value you need is embedded in a free-form text field, extract it ONCE "
         "into a temp table using word-boundary matching, then join on that temp table. "
