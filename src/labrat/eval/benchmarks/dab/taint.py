@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from labrat.eval.benchmarks.dab.taint_structural import TaintFinding, scan_records
-from labrat.maze.scent_audit import detect_contamination
+from labrat.maze.scent_audit import CONTAMINATION_PATTERNS, detect_contamination
 
 CLEAN = "clean"
 CHEATING = "external-oracle-cheating"
@@ -78,6 +78,52 @@ def resolve_trial_trace(
 
 def classify_trial(text: str) -> str:
     return CHEATING if detect_contamination(text) else CLEAN
+
+
+# Needles that are ordinary analyst vocabulary, not evidence of access. An analyst who
+# hand-labels a validation sample legitimately calls it "ground truth". The FILE-shaped
+# forms ("ground_truth", "validate.py") and the accusatory ones ("answer key", "gold
+# answer") are NOT ambiguous and are never downgraded.
+_PROSE_ONLY_NEEDLES = ("ground truth", "ground-truth")
+
+
+def _has_unambiguous_needle(text: str) -> bool:
+    """True when the text matches a contamination needle OTHER than the prose forms."""
+    low = text.lower()
+    return any(
+        needle in low
+        for needle, _tag in CONTAMINATION_PATTERNS
+        if needle not in _PROSE_ONLY_NEEDLES
+    )
+
+
+def classify_trial_corroborated(text: str, structural_findings: int) -> str:
+    """Classify a trial, requiring corroboration when the ONLY signal is prose.
+
+    ``detect_contamination`` is a substring matcher, and its bluntness is what makes it
+    hard to evade — it stays. But two of its needles, "ground truth" and "ground-truth",
+    are ordinary methodological vocabulary: on 2026-07-31 two trials were condemned for
+    saying they had "hand-labeled 250 randomly drawn articles as ground truth" to score
+    their own classifier. The structural scan found nothing on either trace and the only
+    benchmark path touched was the dataset the harness itself attaches, yet the shard
+    was blocked from writing its submission and burned hours of retries.
+
+    So a match on those two prose forms ALONE now needs corroboration — either a
+    structural finding (an answer-shaped path/file/URL actually used) or any other
+    needle in the list. This is deliberately narrow and is NOT a whitelist:
+
+    * ``ground_truth`` (underscore — a filename) still condemns on its own.
+    * ``validate.py``, ``answer key``, ``gold answer`` still condemn on their own.
+    * ``load_dataset`` / ``huggingface`` / a named label corpus still condemn on their own.
+    * Any trial that genuinely reads an answer-key path trips the structural scanner
+      and is condemned regardless of its wording.
+    """
+    tag = detect_contamination(text)
+    if tag is None:
+        return CLEAN
+    if structural_findings == 0 and not _has_unambiguous_needle(text):
+        return CLEAN
+    return CHEATING
 
 
 def parse_trace_records(text: str) -> list[dict[str, Any]]:
@@ -303,7 +349,15 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
             structural_findings.extend(scan_trace_text(text))
         if trace_error:
             verdict = AUDIT_ERROR
-        elif reason.startswith("contaminated:") or structural_findings:
+        elif structural_findings or (
+            reason.startswith("contaminated:") and reason != "contaminated:answer_key"
+        ):
+            # Structural evidence (an answer-shaped path/file/URL actually used) or an
+            # external-label source condemns outright. A runtime
+            # "contaminated:answer_key" reason does NOT, on its own: that detector is
+            # the same substring matcher, and "ground truth" is ordinary analyst
+            # vocabulary. It falls through to the corroborated check below, which
+            # re-condemns it the moment any structural evidence exists.
             verdict = CHEATING
             # P3-5: surface the first few structural findings so a gate
             # offender is actionable without re-running the scan by hand.
@@ -315,7 +369,7 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
                     file=sys.stderr,
                 )
         else:
-            verdict = classify_trial("\n".join(parts))
+            verdict = classify_trial_corroborated("\n".join(parts), len(structural_findings))
         verdicts[key] = _merge_verdict(verdicts.get(key), verdict)
 
     (trials_jsonl.parent / "taint.json").write_text(

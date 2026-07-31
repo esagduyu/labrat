@@ -556,7 +556,13 @@ def _build_claude_mcp_prompt(
             "Question:",
             task.prompt,
             "",
-            "When confident, respond with the final answer on the last line.",
+            # Answer placement: lead with it AND close with it. Some validators read
+            # only the head of the output (llm_output[:200]); the previous
+            # last-line-only wording cost a task 4/5 on 2026-07-31 where every failing
+            # trial had the CORRECT answer, just past the window. No validator is
+            # harmed by the answer appearing twice.
+            "Begin your reply with the answer in the first sentence, then show your "
+            "work, and restate the final answer on the last line.",
         ]
     )
     # max_tool_calls is advisory under claude-mcp (the CLI has no native cap);

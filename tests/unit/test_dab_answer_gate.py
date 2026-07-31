@@ -126,3 +126,21 @@ def test_gate_does_not_encode_a_reverse_engineered_grader_window() -> None:
     src = inspect.getsource(answer_gate)
     assert "llm_lower" not in src
     assert "validate.py" not in src
+
+
+# --- row preservation on the table correction ---------------------------------------
+#
+# Measured harm, 2026-07-31 Opus run: of 22 table_delivery corrections, the two that
+# cost trials both LOST ROWS. The model had produced a complete opening-hours table;
+# the gate told it to restate as adjacent plain tokens; collapsing to prose dropped
+# days ("Missing hours [Thursday, Closed]" / "[Saturday, 5-11PM]"). The verbatim value
+# tokens survived intact -- it is row loss, not token corruption.
+
+
+def test_table_correction_demands_every_row_be_kept() -> None:
+    from labrat.eval.benchmarks.dab.answer_gate import Violation, format_violations
+
+    msg = format_violations([Violation("table_delivery", "items are in a markdown table")])
+    low = msg.lower()
+    assert "every" in low and "row" in low, "must forbid dropping rows"
+    assert "abbreviat" in low, "must forbid abbreviating labels when collapsing a table"

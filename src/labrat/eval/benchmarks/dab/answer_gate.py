@@ -153,5 +153,10 @@ def format_violations(violations: list[Violation]) -> str:
         "your findings, and do not re-run the analysis:"
     ]
     lines += [f"  - {v.detail}" for v in violations]
-    lines.append("Restate the final answer on the last line.")
+    lines.append(
+        "Reproduce EVERY row and every item you already had — do not drop, merge, "
+        "summarise or abbreviate any entry or its label while restating. Collapsing a "
+        "table has previously lost rows; keeping all of them matters more than brevity."
+    )
+    lines.append("Lead with the answer in your first sentence, and restate it on the last line.")
     return "\n".join(lines)
