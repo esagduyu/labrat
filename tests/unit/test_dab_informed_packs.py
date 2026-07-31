@@ -66,6 +66,15 @@ def test_validator_shape_pack_covers_adjacency_head_and_precision() -> None:
     assert len(validator_shape_lines()) == 3
 
 
+def test_validator_shape_pack_instructs_adjacency_not_mere_co_occurrence() -> None:
+    """Rule 3 targets a proximity failure: a correct value placed too far from its
+    label scores zero. Wording that only implies co-occurrence ("together") satisfies
+    a naive keyword check while losing the instruction, so pin the adjacency phrasing."""
+    text = " ".join(validator_shape_lines()).lower()
+    assert "side by side" in text or "immediately" in text
+    assert "precision" in text
+
+
 def test_no_pack_rule_contains_a_numeral() -> None:
     """A concrete number inside a form-only rule is a content risk the string-matching
     gate cannot judge on principle: a numeral cannot be classified as form vs content by
