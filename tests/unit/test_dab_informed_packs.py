@@ -11,8 +11,12 @@ from labrat.eval.benchmarks.dab.informed_packs import all_pack_lines
 
 DAB = Path.home() / "repos" / "DataAgentBench"
 
-# Tokens worth checking: anything that looks like a value rather than prose.
-_CANDIDATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./>@-]{4,}")
+# Value-shaped tokens (containing a digit or a separator) are checked from 3 chars up:
+# ground truth is full of short values like "0.33", "12.5", "2024", "ID-9". Purely
+# alphabetic tokens keep a 5-char floor so ordinary English does not drown the signal.
+_VALUE_SHAPED = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./>@%-]{2,}")
+_HAS_VALUE_MARK = re.compile(r"[\d_./>@%-]")
+_ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # Ordinary English and our own vocabulary — not evidence of leakage.
 _STOPWORDS = frozenset(
     """about above after against already always another answer because before
@@ -29,14 +33,33 @@ _STOPWORDS = frozenset(
 )
 
 
-def _tokens() -> set[str]:
+def _tokens_from(lines: list[str]) -> set[str]:
     out: set[str] = set()
-    for line in all_pack_lines():
-        for m in _CANDIDATE.finditer(line):
+    for line in lines:
+        for m in _VALUE_SHAPED.finditer(line):
+            tok = m.group(0)
+            if not _HAS_VALUE_MARK.search(tok):
+                continue
+            if tok.lower() not in _STOPWORDS:
+                out.add(tok)
+        for m in _ALPHA_WORD.finditer(line):
             tok = m.group(0)
             if tok.lower() not in _STOPWORDS:
                 out.add(tok)
     return out
+
+
+def _tokens() -> set[str]:
+    return _tokens_from(all_pack_lines())
+
+
+def test_token_extractor_catches_short_value_shapes() -> None:
+    """Regression: a 5-char floor let '0.33' — a literal ground-truth value for one of
+    the benchmark tasks — pass the gate untouched. Short value-shaped tokens must be
+    extracted, or the gate passes vacuously on exactly the leaks it exists to catch."""
+    toks = _tokens_from(["values like 0.33 and 12.5 and 2024 and ID-9 and 45.6%"])
+    for expected in ("0.33", "12.5", "2024", "ID-9"):
+        assert expected in toks, f"{expected} must be extracted; got {sorted(toks)}"
 
 
 @pytest.mark.skipif(not DAB.exists(), reason="DataAgentBench checkout not present")
