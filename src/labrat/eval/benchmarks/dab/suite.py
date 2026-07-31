@@ -328,12 +328,49 @@ def _safe_name(name: str) -> str:
     return cleaned or "dataset"
 
 
-def _cartographer_prompt_line() -> str:
+def _cartographer_prompt_line(*, reconcile_with_profiling: bool = False) -> str:
+    """Scent-first grounding line.
+
+    ``reconcile_with_profiling`` exists because the stock wording ends "before
+    profiling or writing SQL", which tells the model NOT to profile — the exact
+    opposite of ``_mcp_tool_guidance_lines``. When both are on they are sequenced
+    rather than left contradicting each other.
+    """
+    if reconcile_with_profiling:
+        return (
+            "A curated reference doc for this database has been pre-generated. Call "
+            "search_reference_docs(question) FIRST for grounding (table grain, verified "
+            "join keys, observed dimension values), then call profile_dataset once for "
+            "the live schema, before writing SQL."
+        )
     return (
         "A curated reference doc for this database has been pre-generated. Call "
         "search_reference_docs(question) FIRST for grounding (table grain, verified join "
         "keys, observed dimension values) before profiling or writing SQL."
     )
+
+
+def _mcp_tool_guidance_lines() -> list[str]:
+    """Imperative naming of tools the claude-mcp opening message otherwise omits.
+
+    Across the 2026-07-24 Sonnet run these were called exactly zero times in 270
+    trials while the labrat-agent path used them heavily. Naming them in the appended
+    system prompt lifted profile_dataset only to 0.29 calls/trial; naming them HERE,
+    in the opening user message, lifted it to 0.92 and workflow to 3.62 — the channel
+    traces show actually steering tool choice. Score effect measured at 0.0pp
+    (19/24 vs 20/24, Fisher p=1.0), so this is carried for the tool-exercise and
+    trace value, not as a scoring lever. See docs/dab-sonnet5-vs-luna-gap-analysis.md
+    sections (f) and (i).
+    """
+    return [
+        "Call profile_dataset once before writing SQL: one call returns every table's "
+        "columns, types, row counts, foreign keys and sample rows, which is cheaper and "
+        "more reliable than rediscovering the schema through repeated queries.",
+        "Track your plan with workflow — mark each step 'doing' when you start it and "
+        "'done' when you finish. It never blocks and keeps your plan visible across turns.",
+        "Use column_stats to check a column's range, nulls and distinct values before you "
+        "filter on it, and check_sql to validate a query before running it.",
+    ]
 
 
 def _dab_lever_lines() -> list[str]:
@@ -468,6 +505,7 @@ def _build_claude_mcp_prompt(
     include_cartographer_line: bool,
     max_tool_calls: int | None,
     include_levers: bool = True,
+    include_tool_guidance: bool = False,
 ) -> str:
     """Build the claude-mcp driver's opening user message.
 
@@ -486,7 +524,11 @@ def _build_claude_mcp_prompt(
         "keys match and won't fan out.",
     ]
     if include_cartographer_line:
-        prompt_lines.insert(1, _cartographer_prompt_line())
+        prompt_lines.insert(
+            1, _cartographer_prompt_line(reconcile_with_profiling=include_tool_guidance)
+        )
+    if include_tool_guidance:
+        prompt_lines.extend(_mcp_tool_guidance_lines())
     if include_levers:
         prompt_lines.extend(_dab_lever_lines())
     if env_spec.attachable:
@@ -653,6 +695,7 @@ class DabSuite:
         agent_ledger: bool = True,
         agent_mcp_ledger: bool = False,
         agent_answer_gate: bool = False,
+        agent_mcp_tool_prompt: bool = False,
         agent_taxonomy: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
@@ -714,6 +757,7 @@ class DabSuite:
         # mirroring `cartograph`.
         self._agent_mcp_ledger = agent_mcp_ledger
         self._agent_answer_gate = agent_answer_gate
+        self._agent_mcp_tool_prompt = agent_mcp_tool_prompt
         self._agent_taxonomy = agent_taxonomy
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
@@ -1584,6 +1628,7 @@ class DabSuite:
             include_cartographer_line=maze_root is not None,
             max_tool_calls=self._agent_max_tool_calls,
             include_levers=self._agent_levers,
+            include_tool_guidance=self._agent_mcp_tool_prompt,
         )
         if extra_instructions:
             prompt = f"{prompt}\n\n{extra_instructions}"

@@ -72,3 +72,26 @@ def test_prompt_lists_secondary_duckdb(tmp_path: Path) -> None:
     )
     assert "Secondary databases you can bring in via attach_database" in p
     assert f"secondary / {tmp_path / 'secondary.duckdb'} / duckdb" in p
+
+
+def test_tool_guidance_off_by_default() -> None:
+    p = _build_claude_mcp_prompt(
+        "main", _env(), _task(), include_cartographer_line=False, max_tool_calls=None
+    )
+    for tool in ("profile_dataset", "workflow", "column_stats", "check_sql"):
+        assert tool not in p
+
+
+def test_tool_guidance_names_the_zero_call_tools_and_reconciles_cartographer() -> None:
+    p = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        _task(),
+        include_cartographer_line=True,
+        max_tool_calls=None,
+        include_tool_guidance=True,
+    )
+    for tool in ("profile_dataset", "workflow", "column_stats", "check_sql"):
+        assert tool in p
+    assert "before profiling" not in p
+    assert p.index("search_reference_docs") < p.index("profile_dataset")
