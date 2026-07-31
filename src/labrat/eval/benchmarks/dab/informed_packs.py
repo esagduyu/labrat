@@ -27,8 +27,8 @@ def answer_shape_lines() -> list[str]:
         "same entity, report the coded form, unless the question explicitly asks for "
         "the name. Give the name alongside it only as secondary context.",
         "When the result is per-group — per category, per type, per code, per period — "
-        "emit EVERY group you computed, not just the leading one. If you computed "
-        "twenty groups, your answer contains twenty groups.",
+        "emit EVERY group you computed, not just the leading one. However many groups "
+        "you computed, that many groups appear in your answer.",
         "Present items in the order the question asks for. If it asks for a ranking, "
         "emit them in rank order and keep that order in the final answer line.",
     ]

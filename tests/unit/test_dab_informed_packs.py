@@ -19,7 +19,7 @@ _HAS_VALUE_MARK = re.compile(r"[\d_./>@%-]")
 _ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # Ordinary English and our own vocabulary — not evidence of leakage.
 _STOPWORDS = frozenset(
-    """about above after against already always another answer because before
+    """about above after against already always another answer appear because before
     between category coded column columns compute computed contains context correct
     count counts derive derived different directly during either emit emitted enough
     every exactly example except explicit extract extracted field fields first
@@ -44,6 +44,14 @@ def test_answer_shape_pack_covers_its_three_measured_failures() -> None:
     assert "every" in text and "group" in text  # enumerate all groups
     assert "order" in text  # ranking order
     assert len(answer_shape_lines()) == 3
+
+
+def test_no_pack_rule_contains_a_numeral() -> None:
+    """A concrete number inside a form-only rule is a content risk the string-matching
+    gate cannot judge on principle: a numeral cannot be classified as form vs content by
+    shape alone, so it must never appear at all, regardless of whether this particular
+    digit happens to collide with the corpus today."""
+    assert not any(ch.isdigit() for line in all_pack_lines() for ch in line)
 
 
 def _tokens_from(lines: list[str]) -> set[str]:
@@ -72,10 +80,10 @@ def _tokens_from(lines: list[str]) -> set[str]:
                 out.add(tok)
         for m in _ALPHA_WORD.finditer(line):
             tok = m.group(0)
-            probe = tok.rstrip(".,;:")  # sentence punctuation is not part of a value
-            if probe.lower() in _STOPWORDS:
-                continue
-            out.add(probe or tok)
+            # No rstrip here: _ALPHA_WORD matches letters only, so a match can never
+            # carry trailing punctuation. The value-shaped loop above DOES need it.
+            if tok.lower() not in _STOPWORDS:
+                out.add(tok)
     return out
 
 
