@@ -16,7 +16,9 @@ Written for review on waking. Everything below is committed; nothing is merged t
 | Item 1 — deterministic answer gate | **BUILT + tested**, default OFF (`34160a5`) |
 | Item 2 — deterministic helpers | **NOT built** — deliberate, see *Judgement calls* |
 | Ablation of item 1 | **NOT run** — blocked on Max-plan contention, see below |
-| Full Opus 5 run | **NOT launched** — see *Why I did not launch it* |
+| Full Opus 5 run | **LAUNCHED** — 270 trials, all non-harmful features on (see §7) |
+| DataAgentBench sync | **DONE** — now at `9ed8bdde3`; GT unchanged since 2026-06-12 |
+| Opus scout (n=2) | **KILLED at 13/108** — superseded, see §7 |
 
 ---
 
@@ -170,3 +172,68 @@ exist yet. Launching now would likely mean running it twice.
 > **Gotcha:** do not edit the scout worktree while it runs — `eval_dab.py` is re-invoked
 > per dataset shard, so a mid-run edit silently changes the code under later shards.
 > That is why the scout is on a detached HEAD.
+
+
+---
+
+## 7. LATE UPDATE — plan changed on your instruction
+
+You asked me to sync DataAgentBench and launch the full 270-trial run with as many
+features as possible. Done. What changed from the plan above:
+
+**DataAgentBench synced** `af0bb9448` → `9ed8bdde3`. The two new commits touch only
+`README.md` and `docs/data/leaderboards.json` — **no ground truth, no validators**, so
+every comparison in this document and in the gap analysis remains valid. Ground truth is
+still unchanged since `c4724d2b1` (2026-06-12). Board now: 30 entries, **LabRat rank 8**,
+top six all `benchmark-informed`, best `general-purpose` is Spacedock at 0.7433 (we are
+0.15pp behind it).
+
+> **False alarm worth recording:** `git status` showed five `.bson` benchmark files as
+> modified with sizes like "36545577 -> 133 bytes", which looks exactly like destroyed
+> benchmark data. It is not. The repo uses Git LFS for `*.bson`, so `git diff` runs the
+> LFS clean filter and reports the ~130-byte *pointer* against HEAD's stored content. The
+> working-tree files are intact (verified: real BSON records, full 36 MB, mtime Jun 24).
+> Our eval runs have never mutated benchmark data. Do not "restore" these files.
+
+**Opus scout killed at 13/108.** Its config predated the tool-prompt and answer gate, so
+it could not validate the config you actually wanted, and Opus burns ~5× Max budget.
+Finishing it would have spent budget on a non-matching experiment. Partial data is kept
+and resumable at `labrat-wt-opusscout/runs/opus-scout-shards/`.
+
+**Full 270-trial Opus run LAUNCHED** — worktree `/Users/ege/repos/labrat-wt-opusfull`
+(detached at `fd1638d`), log `opus-full270.log`, shards under `runs/opus-full270-shards/`.
+
+### Where I did not follow "as many features as possible" literally
+
+Three features are OFF on purpose, because the measurements say they cost score or
+budget, and a lower score is bad marketing too:
+
+| off | why |
+|---|---|
+| `--agent-mcp-system-prompt` | 17/24 vs 20/24; dominated by the opening-message variant, which is ON |
+| `--agent-consensus` | 0.0pp at **3.3× wall-clock**; the vote changed 1 answer in 24. On 270 Opus trials this is very expensive for nothing |
+| `--agent-taxonomy` | net-negative, and independently verified to be a **no-op on the claude-mcp driver** — it would add nothing but a misleading config line |
+| `--cartograph-semantics` | −3.7pp |
+
+Everything else is ON, including `--agent-mcp-tool-prompt`, which measured **0.0pp on
+score (p=1.0)** but lifts `profile_dataset` from 0.00 to 0.92 calls/trial and `workflow`
+from 0.00 to 3.62. That is precisely the "show the tools working" feature — it costs
+nothing measurable and makes the traces demonstrate the suite.
+
+**The answer gate is ON but was never ablated.** I validated the whole stack on a cheap
+3-trial Sonnet smoke first (all passed; gate ran, found no violations, made no
+corrections; `trials.jsonl` durable at 644; real taint verdicts; tool guidance engaged).
+That is a smoke test, not an ablation. The gate is bounded to one presentation-only pass
+and falls back to the original answer on any failure, so the downside is capped — but if
+the run underperforms, **the answer gate is the first thing to suspect**, since it is the
+only unmeasured component in the stack.
+
+### Reading the run
+
+```
+L=/Users/ege/repos/labrat-wt-opusfull/opus-full270.log
+grep -cE '^\[[a-z_0-9]+:[0-9]+ trial [0-9]+\] (PASS|FAIL|INFRA)' $L   # progress /270
+```
+Shards land cheap→expensive, so a partial run still gives a readable per-dataset picture.
+`trials.jsonl` is now trustworthy (the orphaning fix is holding in production), so the
+log parser is a fallback rather than the primary source.
