@@ -138,6 +138,32 @@ def test_informed_packs_off_path_is_byte_identical_to_no_new_kwargs() -> None:
     assert with_flags_off == without_new_kwargs
 
 
+def test_claude_mcp_off_path_matches_the_frozen_pre_packs_baseline() -> None:
+    """Anchors the unflagged prompt to its state before the informed packs landed.
+
+    Captured from commit f6b9461 (the commit immediately before the packs were wired)
+    by building this exact prompt in a temporary worktree. A completed 270-trial
+    benchmark run is only comparable to future runs if this path never drifts, so any
+    edit that changes the default prompt must fail here and be a deliberate decision.
+
+    If this test fails, do NOT update the hash to make it pass unless you intend to
+    invalidate comparisons against that baseline run.
+    """
+    import hashlib
+
+    prompt = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        BenchmarkTask(id="pancancer_atlas:1", benchmark="dab", prompt="Q"),
+        include_cartographer_line=True,
+        max_tool_calls=None,
+    )
+    assert (
+        hashlib.sha256(prompt.encode()).hexdigest()
+        == "a59349f11ed7213781c503c7668a2d5b80d8ce20f88a31d53501396fdf203688"
+    )
+
+
 def test_informed_datasets_pulls_lines_for_the_task_dataset() -> None:
     task = BenchmarkTask(
         id="github_repos:2", benchmark="dab", prompt="DESCRIPTION...\n\nHow many files?"
