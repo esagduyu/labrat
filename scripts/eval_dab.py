@@ -428,6 +428,19 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-answer-gate",
+        action="store_true",
+        default=None,
+        help=(
+            "Deterministic answer-shape gate on the claude-mcp driver: checks the final "
+            "answer for delivery failures we have measured costing otherwise-correct "
+            "trials (requested-count shortfall, list delivered as a markdown table, "
+            "fraction answered as a percentage) and makes ONE presentation-only "
+            "corrective pass. The corrective call carries no MCP config and blocks all "
+            "native tools, so it cannot reach a database. Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
         "--agent-taxonomy",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -652,6 +665,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
         ("agent_mcp_ledger", args.agent_mcp_ledger),
+        ("agent_answer_gate", args.agent_answer_gate),
         ("agent_taxonomy", args.agent_taxonomy),
     ]:
         prior = existing_cfg.get(field)
@@ -691,6 +705,11 @@ def main(argv: list[str] | None = None) -> int:
         args.agent_mcp_ledger
         if args.agent_mcp_ledger is not None
         else existing_cfg.get("agent_mcp_ledger", False)
+    )
+    effective_answer_gate: bool = bool(
+        args.agent_answer_gate
+        if args.agent_answer_gate is not None
+        else existing_cfg.get("agent_answer_gate", False)
     )
     effective_cartograph_semantics: bool = bool(
         args.cartograph_semantics
@@ -892,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
         agent_mcp_ledger=effective_mcp_ledger,
+        agent_answer_gate=effective_answer_gate,
         agent_taxonomy=effective_taxonomy,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
@@ -956,6 +976,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_levers": effective_levers,
         "agent_ledger": effective_ledger,
         "agent_mcp_ledger": effective_mcp_ledger,
+        "agent_answer_gate": effective_answer_gate,
         "agent_taxonomy": effective_taxonomy,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"

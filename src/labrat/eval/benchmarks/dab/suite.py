@@ -652,6 +652,7 @@ class DabSuite:
         agent_levers: bool = True,
         agent_ledger: bool = True,
         agent_mcp_ledger: bool = False,
+        agent_answer_gate: bool = False,
         agent_taxonomy: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
@@ -712,6 +713,7 @@ class DabSuite:
         # drivers have no shared runtime, so this needs its own flag. Off by default,
         # mirroring `cartograph`.
         self._agent_mcp_ledger = agent_mcp_ledger
+        self._agent_answer_gate = agent_answer_gate
         self._agent_taxonomy = agent_taxonomy
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
@@ -1685,7 +1687,77 @@ class DabSuite:
 
         # num_turns counts assistant rounds; tool calls = rounds beyond the final answer.
         tool_calls = max(0, num_turns - 1)
+        if self._agent_answer_gate and final_text.strip():
+            final_text = await self._apply_answer_gate(task.prompt, final_text, scratch_dir)
         return DriverOutcome(final_text, tool_calls, latency)
+
+    async def _apply_answer_gate(self, question: str, final_text: str, scratch_dir: Path) -> str:
+        """Run deterministic shape checks; on a violation, make ONE corrective pass.
+
+        The corrective call is presentation-only by construction: it passes no
+        ``--mcp-config`` and blocks every native tool, so it cannot reach a database,
+        the filesystem or the network. It can only restate what the model already
+        produced. That is what makes it safe to run without re-auditing for
+        contamination — there is no new evidence path for an answer to come from.
+
+        Bounded to a single attempt. If the corrective call fails or returns nothing,
+        the original answer stands: a delivery check must never be able to destroy an
+        otherwise-good answer.
+        """
+        import shutil
+        import subprocess
+
+        from labrat.eval.benchmarks.dab.answer_gate import check_answer, format_violations
+
+        violations = check_answer(question=question, answer=final_text)
+        log = scratch_dir / "answer_gate.json"
+        if not violations:
+            log.write_text(json.dumps({"violations": [], "corrected": False}, indent=2))
+            return final_text
+
+        prompt = (
+            f"{question}\n\nYour previous answer:\n{final_text}\n\n{format_violations(violations)}"
+        )
+        cmd = [
+            "claude",
+            "--print",
+            "--model",
+            self._agent_model,
+            "--permission-mode",
+            "bypassPermissions",
+            "--disallowedTools",
+            _BLOCKED_NATIVE_TOOLS,
+            "--output-format",
+            "json",
+            "-p",
+            prompt,
+        ]
+        corrected = ""
+        if shutil.which("claude"):
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("ANTHROPIC_API_KEY", "CLAUDECODE") and not k.startswith("CLAUDE_CODE")
+            }
+            try:
+                proc = await asyncio.to_thread(
+                    subprocess.run, cmd, capture_output=True, timeout=300, env=env
+                )
+                data = json.loads(proc.stdout.decode(errors="replace") or "{}")
+                if isinstance(data, dict) and "result" in data:
+                    corrected = str(data["result"])  # type: ignore[arg-type]
+            except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+                corrected = ""
+        log.write_text(
+            json.dumps(
+                {
+                    "violations": [{"code": v.code, "detail": v.detail} for v in violations],
+                    "corrected": bool(corrected.strip()),
+                },
+                indent=2,
+            )
+        )
+        return corrected if corrected.strip() else final_text
 
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
