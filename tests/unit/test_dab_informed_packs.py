@@ -34,21 +34,29 @@ _STOPWORDS = frozenset(
 
 
 def _tokens_from(lines: list[str]) -> set[str]:
+    """Extract candidate tokens to check against the ground-truth corpus.
+
+    The two scans run INDEPENDENTLY and their results union, which means a
+    hyphenated compound also yields its alphabetic parts ("well-known" -> also
+    "known"). That is deliberate over-blocking, not an oversight. Suppressing the
+    sub-parts was tried and reverted: it made a real corpus term glued to prose by a
+    separator ("Astrocytoma-related") invisible to the blob check, because only the
+    whole compound was tested and the compound is not in the corpus.
+
+    For a BLOCKING contamination gate a missed leak is catastrophic and a noisy build
+    is merely annoying, so this errs toward flagging too much. If a pack line trips it
+    on innocent prose, reword the rule or add the specific word to _STOPWORDS — do not
+    reintroduce span suppression.
+    """
     out: set[str] = set()
     for line in lines:
-        consumed: list[tuple[int, int]] = []
         for m in _VALUE_SHAPED.finditer(line):
             tok = m.group(0)
             if not _HAS_VALUE_MARK.search(tok):
-                # Not value-shaped after all: leave this span open to the alpha
-                # scan below, or pure-alpha ground-truth labels stop being checked.
                 continue
-            consumed.append(m.span())
             if tok.lower() not in _STOPWORDS:
                 out.add(tok)
         for m in _ALPHA_WORD.finditer(line):
-            if any(start <= m.start() < end for start, end in consumed):
-                continue
             tok = m.group(0)
             if tok.lower() not in _STOPWORDS:
                 out.add(tok)
@@ -68,14 +76,14 @@ def test_token_extractor_catches_short_value_shapes() -> None:
         assert expected in toks, f"{expected} must be extracted; got {sorted(toks)}"
 
 
-def test_hyphenated_compounds_do_not_spawn_extra_alpha_tokens() -> None:
-    """A hyphenated compound is one token, not three. Independent scans previously
-    re-extracted 'known' and 'insensitive' from 'well-known'/'case-insensitive',
-    inflating the false-positive surface against the ground-truth corpus."""
-    toks = _tokens_from(["Use a well-known convention for case-insensitive matching."])
-    assert "well-known" in toks
-    assert "known" not in toks
-    assert "insensitive" not in toks
+def test_corpus_term_glued_to_prose_is_still_caught() -> None:
+    """A real corpus term joined to other words by a separator must still be checked.
+    Span suppression once made 'Astrocytoma-related' a single token that missed the
+    corpus entirely, hiding a genuine leak. Both the compound AND its alphabetic parts
+    must be extracted."""
+    toks = _tokens_from(["Report the Astrocytoma-related tumor grade."])
+    assert "Astrocytoma" in toks
+    assert "Astrocytoma-related" in toks
 
 
 def test_pure_alpha_tokens_are_still_checked() -> None:
