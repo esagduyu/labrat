@@ -46,8 +46,8 @@ def validator_shape_lines() -> list[str]:
         "and then the number.",
         "State the answer in the very first sentence of your reply, then show your "
         "work, then restate the answer on the last line. Do not open with methodology.",
-        "For a numeric answer give the full-precision value and a rounded form next to "
-        "each other, so either can be read.",
+        "For a numeric answer give the full-precision value and a rounded form "
+        "together, so either can be read.",
     ]
 
 

@@ -22,6 +22,11 @@ _VALUE_SHAPED = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./>@%-]{2,}")
 _HAS_VALUE_MARK = re.compile(r"[\d_./>@%-]")
 _ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # Ordinary English and our own vocabulary — not evidence of leakage.
+#
+# Adding a word here permanently blinds the gate to it. Before adding one, grep the
+# corpus for its CONTEXT, not just whether it is ordinary English: "other" looked
+# generic but is literal answer content in two datasets (a category value and part of
+# a classification title). Prefer rewording the rule over adding an entry.
 _STOPWORDS = frozenset(
     """about above after against already always another answer appear because before
     between category coded column columns compute computed contains context correct
@@ -29,7 +34,7 @@ _STOPWORDS = frozenset(
     every exactly example except explicit extract extracted field fields first
     following format formats-group group groups identifier identifiers immediately
     include included instead itself label labels matching method never number numeric
-    numbers order other others output outputs period periods phrase precision present
+    numbers order others output outputs period periods phrase precision present
     preserve question questions ranking rather report reported requested result
     results rounded
     separator separators should simply single source specific state stated string
