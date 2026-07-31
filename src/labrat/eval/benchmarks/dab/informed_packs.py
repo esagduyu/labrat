@@ -52,7 +52,26 @@ def validator_shape_lines() -> list[str]:
 
 
 def analytical_convention_lines() -> list[str]:
-    return []
+    """Pack C — recurring analytical choices, stated once so they stop being re-chosen.
+
+    These are the decisions our trials made differently on every attempt: how to seed a
+    smoothed average, whether empty periods count, how to treat dirty join keys, and how
+    to pull values out of prose without an O(n^2) join.
+    """
+    return [
+        "For a smoothed value or running mean, seed on the first observation and "
+        "include every period from the first to the last, counting periods with no "
+        "data as zero rather than skipping them.",
+        "Tidy up obviously corrupted join keys before joining — stray leading marks, "
+        "trailing blank gaps, differing case — and verify the overlap rate before "
+        "trusting the result.",
+        "When a value you need is embedded in a free-form text field, extract it "
+        "ONCE into a temp table using word-boundary matching, then join on that temp "
+        "table. Never join two large tables on a fragment test.",
+        "An identifier may be a composite built from several parts joined by a "
+        "separator. Keep the whole composite string as the identifier and reproduce "
+        "it in full; do not report only its leading part.",
+    ]
 
 
 def per_dataset_lines(dataset: str) -> list[str]:

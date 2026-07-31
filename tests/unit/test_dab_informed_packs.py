@@ -9,6 +9,7 @@ import pytest
 
 from labrat.eval.benchmarks.dab.informed_packs import (
     all_pack_lines,
+    analytical_convention_lines,
     answer_shape_lines,
     validator_shape_lines,
 )
@@ -73,6 +74,18 @@ def test_validator_shape_pack_instructs_adjacency_not_mere_co_occurrence() -> No
     text = " ".join(validator_shape_lines()).lower()
     assert "side by side" in text or "immediately" in text
     assert "precision" in text
+
+
+def test_analytical_conventions_pack_covers_the_four_recurring_choices() -> None:
+    """Derived from: patents:2 (smoothed-average seeding and empty periods),
+    deps_dev_v1:1 (composite path identifiers), deps_dev_v1:2 (prose-embedded value
+    extraction and substring-join blowup), and corrupted join keys."""
+    text = " ".join(analytical_convention_lines()).lower()
+    assert "moving average" in text or "smoothed" in text
+    assert "join" in text
+    assert "temp table" in text
+    assert "composite" in text or "separator" in text
+    assert len(analytical_convention_lines()) == 4
 
 
 def test_no_pack_rule_contains_a_numeral() -> None:
