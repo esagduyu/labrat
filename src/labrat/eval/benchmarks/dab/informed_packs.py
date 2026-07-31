@@ -76,13 +76,13 @@ def analytical_convention_lines() -> list[str]:
 
 _PER_DATASET: dict[str, tuple[str, ...]] = {
     "github_repos": (
-        "For a question about a named file, the population is the rows where that file "
-        "was actually sampled into the table — not every repository. Check the sampled "
-        "population size before computing a proportion over it.",
+        "For a question about a named file, the population is the rows where that "
+        "file was actually sampled into the table — not every repository.",
     ),
     "pancancer_atlas": (
-        "Report the coded classification identifier column rather than its "
-        "human-readable label, and emit one row per code.",
+        "This dataset carries both a coded morphology identifier column and a "
+        "free-text type label for the same concept; check which one the question is "
+        "asking about.",
     ),
     "deps_dev_v1": (
         "Dependency identifiers here are composite paths joined by a separator. "

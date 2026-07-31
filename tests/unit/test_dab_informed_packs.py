@@ -25,15 +25,21 @@ _HAS_VALUE_MARK = re.compile(r"[\d_./>@%-]")
 _ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # Ordinary English and our own vocabulary — not evidence of leakage.
 #
-# Adding a word here permanently blinds the gate to it. Vetting standard, in order:
-#   grep -rn <word> ~/repos/DataAgentBench/query_*/query*/ground_truth.csv
-#   - hit in a DATA row      -> graded answer content. NEVER suppress; reword the rule.
-#                               ("other" is a category value; "histology" sits inside one.)
-#   - hit only in a HEADER   -> schema. The model can already see column names, so a rule
-#                               naming one reveals nothing. Safe.
-#   - hit only outside the 12 official datasets -> corpus-glob noise. Safe.
-#   - hit only in validate.py, never in ground_truth.csv -> validator code/prose,
-#     not graded content. Safe.
+# Adding a word here permanently blinds the gate to it. Vet with BOTH corpora the gate
+# scans — ground_truth.csv AND validate.py — under ~/repos/DataAgentBench:
+#   grep -rn <word> ~/repos/DataAgentBench/query_*/query*/{ground_truth.csv,validate.py}
+# Then classify the hit:
+#   - the word IS a graded value, or a standalone word inside one -> NEVER suppress;
+#     reword the rule. ("other" is a category value; "histology" sits inside one.)
+#   - the word only appears as an incidental substring inside a longer graded string
+#     (e.g. "group" inside a company name) -> safe; a real leak would surface as the
+#     distinctive part, not the common fragment.
+#   - header-only hit -> safe ONLY IF the word also occurs in that query's question text
+#     or db_description*.txt. GT headers here are invented answer-shape names
+#     (total_readmes, mutation_percentage) that exist in no table, so "it is just a
+#     column name" is NOT sufficient on its own.
+#   - hit only outside the datasets in informed_packs._DATASETS -> corpus-glob noise; safe.
+#   - hit only in validate.py -> validator code/prose; safe.
 # Prefer rewording over suppressing whenever the rule survives it intact.
 _STOPWORDS = frozenset(
     """about above after against already always another answer appear article because
