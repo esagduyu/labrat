@@ -465,6 +465,44 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--informed-shape",
+        action="store_true",
+        default=None,
+        help=(
+            "Pack A: how the answer should be shaped (coded identifier over name, "
+            "emit every group, respect requested order). Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
+        "--informed-validator",
+        action="store_true",
+        default=None,
+        help=(
+            "Pack B: where in the text the answer must sit (label-then-value "
+            "adjacency, lead-and-restate the answer, full-precision + rounded). "
+            "Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
+        "--informed-conventions",
+        action="store_true",
+        default=None,
+        help=(
+            "Pack C: recurring analytical conventions (moving-average seeding, "
+            "join-key normalization, text-value extraction, composite identifiers). "
+            "Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
+        "--informed-datasets",
+        action="store_true",
+        default=None,
+        help=(
+            "Pack D: per-dataset structural quirks (github_repos, pancancer_atlas, "
+            "deps_dev_v1, agnews). Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
         "--max-turns",
         type=int,
         default=None,
@@ -681,6 +719,10 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_answer_gate", args.agent_answer_gate),
         ("agent_mcp_tool_prompt", args.agent_mcp_tool_prompt),
         ("agent_taxonomy", args.agent_taxonomy),
+        ("informed_shape", args.informed_shape),
+        ("informed_validator", args.informed_validator),
+        ("informed_conventions", args.informed_conventions),
+        ("informed_datasets", args.informed_datasets),
     ]:
         prior = existing_cfg.get(field)
         if cli_val is not None and prior is not None and cli_val != prior:
@@ -906,6 +948,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_taxonomy is not None
         else existing_cfg.get("agent_taxonomy", False)
     )
+    effective_informed_shape: bool = bool(
+        args.informed_shape
+        if args.informed_shape is not None
+        else existing_cfg.get("informed_shape", False)
+    )
+    effective_informed_validator: bool = bool(
+        args.informed_validator
+        if args.informed_validator is not None
+        else existing_cfg.get("informed_validator", False)
+    )
+    effective_informed_conventions: bool = bool(
+        args.informed_conventions
+        if args.informed_conventions is not None
+        else existing_cfg.get("informed_conventions", False)
+    )
+    effective_informed_datasets: bool = bool(
+        args.informed_datasets
+        if args.informed_datasets is not None
+        else existing_cfg.get("informed_datasets", False)
+    )
     effective_n_trials: int = (
         args.n_trials if args.n_trials is not None else existing_cfg.get("n_trials", 5)
     )
@@ -933,6 +995,10 @@ def main(argv: list[str] | None = None) -> int:
         agent_answer_gate=effective_answer_gate,
         agent_mcp_tool_prompt=effective_mcp_tool_prompt,
         agent_taxonomy=effective_taxonomy,
+        informed_shape=effective_informed_shape,
+        informed_validator=effective_informed_validator,
+        informed_conventions=effective_informed_conventions,
+        informed_datasets=effective_informed_datasets,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
         cartograph_semantics_model=effective_cartograph_semantics_model,
@@ -999,6 +1065,10 @@ def main(argv: list[str] | None = None) -> int:
         "agent_answer_gate": effective_answer_gate,
         "agent_mcp_tool_prompt": effective_mcp_tool_prompt,
         "agent_taxonomy": effective_taxonomy,
+        "informed_shape": effective_informed_shape,
+        "informed_validator": effective_informed_validator,
+        "informed_conventions": effective_informed_conventions,
+        "informed_datasets": effective_informed_datasets,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
         ),

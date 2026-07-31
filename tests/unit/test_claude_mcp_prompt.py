@@ -97,6 +97,62 @@ def test_tool_guidance_names_the_zero_call_tools_and_reconciles_cartographer() -
     assert p.index("search_reference_docs") < p.index("profile_dataset")
 
 
+def test_informed_packs_are_off_by_default_and_composable() -> None:
+    off = _build_claude_mcp_prompt(
+        "main", _env(), _task(), include_cartographer_line=False, max_tool_calls=None
+    )
+    assert "coded form" not in off
+    assert "very first sentence" not in off
+
+    on = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        _task(),
+        include_cartographer_line=False,
+        max_tool_calls=None,
+        informed_shape=True,
+        informed_validator=True,
+    )
+    assert "coded form" in on
+    assert "very first sentence" in on
+
+
+def test_informed_packs_off_path_is_byte_identical_to_no_new_kwargs() -> None:
+    """The four informed-pack flags must not move the prompt at all when unset — a
+    completed 270-trial benchmark run is only comparable if the unflagged path is
+    untouched. Compare against a call that doesn't even pass the new kwargs."""
+    with_flags_off = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        _task(),
+        include_cartographer_line=False,
+        max_tool_calls=None,
+        informed_shape=False,
+        informed_validator=False,
+        informed_conventions=False,
+        informed_datasets=False,
+    )
+    without_new_kwargs = _build_claude_mcp_prompt(
+        "main", _env(), _task(), include_cartographer_line=False, max_tool_calls=None
+    )
+    assert with_flags_off == without_new_kwargs
+
+
+def test_informed_datasets_pulls_lines_for_the_task_dataset() -> None:
+    task = BenchmarkTask(
+        id="github_repos:2", benchmark="dab", prompt="DESCRIPTION...\n\nHow many files?"
+    )
+    p = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        task,
+        include_cartographer_line=False,
+        max_tool_calls=None,
+        informed_datasets=True,
+    )
+    assert "actually sampled into the table" in p
+
+
 def test_prompt_asks_for_the_answer_up_front_as_well_as_last() -> None:
     """2026-07-31: `stockindex:1` scored 1/5 on the Opus run — all four failures had the
     CORRECT answer on the last line, but that validator reads only `llm_output[:200]`.

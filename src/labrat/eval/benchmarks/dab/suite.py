@@ -35,6 +35,12 @@ from labrat.eval.benchmarks.dab.env import (
     build_profiling_connections,
     introspect_env_catalogs,
 )
+from labrat.eval.benchmarks.dab.informed_packs import (
+    analytical_convention_lines,
+    answer_shape_lines,
+    per_dataset_lines,
+    validator_shape_lines,
+)
 from labrat.eval.types import (
     AggregateScore,
     BenchmarkReport,
@@ -179,7 +185,15 @@ def _rate_limit_meta(exc: Exception) -> dict[str, int]:
 
 
 def _build_labrat_agent_system_prompt(
-    env: DabTaskEnv, *, include_levers: bool = True, include_taxonomy: bool = False
+    env: DabTaskEnv,
+    *,
+    include_levers: bool = True,
+    include_taxonomy: bool = False,
+    informed_shape: bool = False,
+    informed_validator: bool = False,
+    informed_conventions: bool = False,
+    informed_datasets: bool = False,
+    dataset: str | None = None,
 ) -> str:
     parts = [
         "You are a data analyst. Answer the question by querying the available databases "
@@ -238,6 +252,14 @@ def _build_labrat_agent_system_prompt(
         parts.append("")
         parts.append("Answer discipline:")
         parts.extend(f"  - {line}" for line in _taxonomy_lines())
+    if informed_shape:
+        parts.extend(answer_shape_lines())
+    if informed_validator:
+        parts.extend(validator_shape_lines())
+    if informed_conventions:
+        parts.extend(analytical_convention_lines())
+    if informed_datasets:
+        parts.extend(per_dataset_lines(dataset or ""))
     return "\n".join(parts)
 
 
@@ -506,6 +528,10 @@ def _build_claude_mcp_prompt(
     max_tool_calls: int | None,
     include_levers: bool = True,
     include_tool_guidance: bool = False,
+    informed_shape: bool = False,
+    informed_validator: bool = False,
+    informed_conventions: bool = False,
+    informed_datasets: bool = False,
 ) -> str:
     """Build the claude-mcp driver's opening user message.
 
@@ -531,6 +557,14 @@ def _build_claude_mcp_prompt(
         prompt_lines.extend(_mcp_tool_guidance_lines())
     if include_levers:
         prompt_lines.extend(_dab_lever_lines())
+    if informed_shape:
+        prompt_lines.extend(answer_shape_lines())
+    if informed_validator:
+        prompt_lines.extend(validator_shape_lines())
+    if informed_conventions:
+        prompt_lines.extend(analytical_convention_lines())
+    if informed_datasets:
+        prompt_lines.extend(per_dataset_lines(task.id.split(":")[0]))
     if env_spec.attachable:
         prompt_lines.append("")
         prompt_lines.append(
@@ -703,6 +737,10 @@ class DabSuite:
         agent_answer_gate: bool = False,
         agent_mcp_tool_prompt: bool = False,
         agent_taxonomy: bool = False,
+        informed_shape: bool = False,
+        informed_validator: bool = False,
+        informed_conventions: bool = False,
+        informed_datasets: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
         cartograph_semantics_model: str = "claude-sonnet-4-6",
@@ -765,6 +803,14 @@ class DabSuite:
         self._agent_answer_gate = agent_answer_gate
         self._agent_mcp_tool_prompt = agent_mcp_tool_prompt
         self._agent_taxonomy = agent_taxonomy
+        # Benchmark-informed prompt packs (Tasks 2-5): each pack is independently
+        # toggled, default OFF, so an unflagged run's prompt is byte-identical to
+        # today's. Consumed by both _build_claude_mcp_prompt and
+        # _build_labrat_agent_system_prompt so the two drivers stay in lockstep.
+        self._informed_shape = informed_shape
+        self._informed_validator = informed_validator
+        self._informed_conventions = informed_conventions
+        self._informed_datasets = informed_datasets
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
         self._cartograph = cartograph
@@ -1635,6 +1681,10 @@ class DabSuite:
             max_tool_calls=self._agent_max_tool_calls,
             include_levers=self._agent_levers,
             include_tool_guidance=self._agent_mcp_tool_prompt,
+            informed_shape=self._informed_shape,
+            informed_validator=self._informed_validator,
+            informed_conventions=self._informed_conventions,
+            informed_datasets=self._informed_datasets,
         )
         if extra_instructions:
             prompt = f"{prompt}\n\n{extra_instructions}"
@@ -1912,6 +1962,11 @@ class DabSuite:
                 env,
                 include_levers=self._agent_levers,
                 include_taxonomy=self._agent_taxonomy,
+                informed_shape=self._informed_shape,
+                informed_validator=self._informed_validator,
+                informed_conventions=self._informed_conventions,
+                informed_datasets=self._informed_datasets,
+                dataset=task.id.split(":")[0],
             )
             if self._llm_classify_row_budget is not None:
                 system_prompt = (

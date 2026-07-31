@@ -142,6 +142,44 @@ def test_taxonomy_on_appends_answer_discipline_section() -> None:
         assert line in prompt
 
 
+def test_informed_packs_off_by_default_and_prompt_byte_identical() -> None:
+    base = _build_labrat_agent_system_prompt(_env())
+    explicit_off = _build_labrat_agent_system_prompt(
+        _env(),
+        informed_shape=False,
+        informed_validator=False,
+        informed_conventions=False,
+        informed_datasets=False,
+    )
+    assert base == explicit_off
+    assert "coded form" not in base
+    assert "very first sentence" not in base
+
+
+def test_informed_packs_on_append_their_lines() -> None:
+    from labrat.eval.benchmarks.dab.informed_packs import (
+        analytical_convention_lines,
+        answer_shape_lines,
+        validator_shape_lines,
+    )
+
+    prompt = _build_labrat_agent_system_prompt(
+        _env(),
+        informed_shape=True,
+        informed_validator=True,
+        informed_conventions=True,
+    )
+    for line in answer_shape_lines() + validator_shape_lines() + analytical_convention_lines():
+        assert line in prompt
+
+
+def test_informed_datasets_pulls_lines_for_the_given_dataset() -> None:
+    prompt = _build_labrat_agent_system_prompt(
+        _env(), informed_datasets=True, dataset="github_repos"
+    )
+    assert "actually sampled into the table" in prompt
+
+
 def test_taxonomy_text_is_benchmark_agnostic() -> None:
     from labrat.eval.benchmarks.dab.suite import _taxonomy_lines
 
