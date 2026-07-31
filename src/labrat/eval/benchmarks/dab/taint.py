@@ -325,6 +325,17 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
 
 
 def gate(verdicts: dict[str, str]) -> tuple[bool, list[str]]:
-    """Reject every verdict other than explicitly ``clean``."""
+    """Reject every verdict other than explicitly ``clean``.
+
+    Fails CLOSED on an empty verdict set. ``audit_run`` derives verdicts by
+    iterating ``trials.jsonl``, so an unwritten or truncated trials file yields
+    ``{}`` — which used to pass the gate and let ``submission.json`` be written
+    from a run where **nothing was audited**. That is precisely the shape of the
+    2026-06 answer-key retraction, so an audit covering zero trials is treated as
+    a failure, not a pass (observed live 2026-07-30 on shards whose trials.jsonl
+    was orphaned mid-run).
+    """
+    if not verdicts:
+        return (False, ["__empty_audit__"])
     offenders = sorted(k for k, verdict in verdicts.items() if verdict != CLEAN)
     return (not offenders, offenders)

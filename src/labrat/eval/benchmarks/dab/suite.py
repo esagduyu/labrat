@@ -347,9 +347,15 @@ def _dab_lever_lines() -> list[str]:
     under-emission on 'each'/ranking questions, proximity delivery (name
     and value adjacent, not table-separated), free-text match/parse
     completeness (synonym-aware filtering and multi-format value parsing),
-    byte-verbatim value delivery (no reformatting a stored value), and
-    convention-pinning (commit to one methodology and enumerate the full
-    resulting set).
+    and byte-verbatim value delivery (no reformatting a stored value).
+
+    NOTE: a convention-pinning lever was removed 2026-07-30. It never moved its
+    only target (patents:2: 0/5 -> 0/3 full run, 0/3 smoke) and both saturated-task
+    regressions in the dilution run were convention-flavoured — github_repos:3
+    pinned "Shell as PRIMARY language" and answered 0 where passing runs read
+    "Shell in the language mix"; yelp:1 locked a wrong averaging basis. A zero
+    result is exactly the sanity signal that should force a rethink, and the lever
+    told the model to hold its convention absent such a signal.
     """
     return [
         "Always derive the answer by querying the database — never answer from prior "
@@ -383,12 +389,6 @@ def _dab_lever_lines() -> list[str]:
         "Deliver a value exactly as it is stored: copy the cell's characters byte-for-byte "
         "without reformatting, re-spacing, normalizing separators or dashes, or otherwise "
         "tidying it. If the answer is a value taken from a cell, echo that cell's exact token.",
-        "When a question needs a chosen methodology or definition (a moving average, a rate, "
-        "a cutoff, a tie-break), pin one concrete convention up front, state it in a short "
-        "clause, and apply it consistently — revise it only in response to an explicit sanity "
-        "signal (such as a tie band covering most of the candidate set), never silently "
-        "between attempts. If the result is a set, enumerate the full set under that fixed "
-        "convention.",
     ]
 
 

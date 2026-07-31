@@ -477,3 +477,29 @@ def test_audit_run_keeps_sanctioned_absolute_attach_clean(tmp_path: Path) -> Non
     verdicts = audit_run(trials_jsonl, scratch_dir)
 
     assert verdicts["yelp:1:0"] == CLEAN
+
+
+# --- Fail-closed gate ---------------------------------------------------------------
+#
+# 2026-07-30: several dilution/effort-curve shards wrote an EMPTY trials.jsonl (the
+# file at the path was replaced after _run_interim opened its append handle, so every
+# row landed on an orphaned inode). audit_run iterates the file's lines, so it produced
+# {} — and gate({}) returned "pass with no offenders". The contamination gate therefore
+# passed VACUOUSLY and submission.json was still written, on a run where zero trials
+# had been audited. Given the 58.0% answer-key retraction, an audit that silently
+# audits nothing is worse than one that errors.
+
+
+def test_gate_fails_closed_on_empty_audit() -> None:
+    from labrat.eval.benchmarks.dab.taint import gate
+
+    ok, offenders = gate({})
+    assert not ok, "an audit covering zero trials must never pass"
+    assert offenders, "the failure must name why it was rejected"
+
+
+def test_gate_still_passes_a_real_clean_audit() -> None:
+    from labrat.eval.benchmarks.dab.taint import CLEAN, gate
+
+    ok, offenders = gate({"d:1:0": CLEAN, "d:1:1": CLEAN})
+    assert ok and not offenders

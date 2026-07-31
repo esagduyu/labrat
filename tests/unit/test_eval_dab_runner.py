@@ -806,3 +806,58 @@ def test_llm_classify_backend_persists_and_rejects_resume_conflict(tmp_path: Pat
 
     with pytest.raises(SystemExit, match=r"Resume conflict.*llm-classify-backend"):
         main([*base, "--llm-classify-backend", "llm"])
+
+
+# --- Durable trial-row writing ------------------------------------------------------
+#
+# 2026-07-30 defect: _run_interim held ONE append handle open for the whole shard.
+# On many shards the file at that path was replaced mid-run, so every f.write()+flush()
+# landed on an orphaned inode and trials.jsonl ended 0 bytes (mtime = shard start,
+# perms 600) while report.md/submission.json were correct because they derive from the
+# in-memory list. Incidence: 10/12 shards on one arm, 12/12 on another, 2/12 on a third.
+# Recovery required parsing the console log. Re-opening per row re-resolves the path.
+
+
+def _row(task_id: str, trial_num: int):
+    from labrat.eval.types import TrialResult
+
+    return TrialResult(
+        task_id=task_id,
+        trial_num=trial_num,
+        passed=True,
+        reason=None,
+        latency_seconds=1.0,
+        tool_calls=1,
+        cost_usd=0.0,
+        artifact={},
+        meta={},
+    )
+
+
+def test_append_trial_row_survives_the_file_being_replaced(tmp_path) -> None:
+    from scripts.eval_dab import _append_trial_row
+
+    p = tmp_path / "trials.jsonl"
+    _append_trial_row(p, _row("d:1", 0))
+    # Reproduce the observed failure mode: the path is re-created under us.
+    p.unlink()
+    p.touch(mode=0o600)
+    _append_trial_row(p, _row("d:1", 1))
+    _append_trial_row(p, _row("d:1", 2))
+
+    lines = [x for x in p.read_text().splitlines() if x.strip()]
+    assert len(lines) == 2, "rows after the replacement must land at the path"
+
+
+def test_verify_trials_file_self_heals_a_truncated_file(tmp_path) -> None:
+    """If the on-disk file has fewer rows than we recorded, rewrite it from memory
+    rather than shipping a run whose trials.jsonl silently lost rows."""
+    from scripts.eval_dab import _verify_trials_file
+
+    p = tmp_path / "trials.jsonl"
+    p.write_text("")  # the observed end state
+    recorded = [_row("d:1", 0), _row("d:1", 1), _row("d:2", 0)]
+    healed = _verify_trials_file(p, recorded)
+
+    assert healed is True
+    assert len([x for x in p.read_text().splitlines() if x.strip()]) == 3
