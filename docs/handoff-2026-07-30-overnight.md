@@ -237,3 +237,63 @@ grep -cE '^\[[a-z_0-9]+:[0-9]+ trial [0-9]+\] (PASS|FAIL|INFRA)' $L   # progress
 Shards land cheap→expensive, so a partial run still gives a readable per-dataset picture.
 `trials.jsonl` is now trustworthy (the orphaning fix is holding in production), so the
 log parser is a fallback rather than the primary source.
+
+---
+
+## 8. LIVE FINDING — our closing prompt line is fighting two validators
+
+Spotted while the Opus run was in flight, from its `stockindex` shard.
+
+`stockindex:1` came back **1/5 for Opus** against 5/5 (Sonnet) and 4/5 (Luna). All four
+failures produced the **correct** answer, `399001.SZ`, and put it on the last line. The
+scorer rejected them anyway:
+
+```
+Target '399001.SZ' not stated as primary answer (not in first 200 chars).
+```
+
+`~/repos/DataAgentBench/query_stockindex/query1/validate.py` reads:
+
+```python
+head = llm_output[:200].lower()          # answer must appear in the FIRST 200 chars
+```
+
+Our claude-mcp opening prompt ends with *"When confident, respond with the final answer on
+the last line."* (`suite.py`, `_build_claude_mcp_prompt`). Opus writes longer analytical
+preambles than Sonnet, so the answer lands past character 200 and a correct trial scores
+zero. **Our own instruction is causing the loss.**
+
+**The answer gate is exonerated here** — it logged `{"violations":[],"corrected":false}`
+on all 15 `stockindex` trials, so it neither caused nor could have caught this.
+
+### Blast radius (measured, not estimated)
+
+Of 104 validators in the benchmark: **2 scan a head window** (`llm_output[:200]` —
+`stockindex` query1 and query2) and **6 scan a proximity window** after a name
+(`idx + len(name)` style, including the `googlelocal:2` 10-character case). So this is
+worth roughly **4 trials ≈ +2.2pp stratified**, concentrated in one dataset — material,
+but not run-threatening.
+
+### Why I did NOT kill the run to fix it
+
+1. The fix is unmeasured. Swapping a known 2.2pp loss for an unvalidated prompt change
+   across all 54 tasks is a bad trade at 1am.
+2. We are only ~24% in, and the remaining 76% answers the bigger question — whether Opus
+   is competitive at all. On the four datasets finished so far it is tracking **behind**:
+   Opus 0.7750 vs Sonnet 0.8000 vs Luna 0.8083 on the same datasets.
+3. If Opus finishes below Sonnet, this fix is moot anyway.
+4. A partial re-run of just the `stockindex` shard with a different prompt would mix
+   configs inside one submission, which is a comparability and integrity problem.
+
+### The fix, for whenever it is wanted
+
+Make the closing line satisfy BOTH validator styles rather than one: state the answer in
+the opening sentence **and** restate it on the last line. No validator can be harmed by
+the answer appearing twice, and "lead with the conclusion, then support it" is defensible
+as general analytical writing rather than scorer-fitting — unlike encoding the literal
+200- or 10-character window, which is the separate decision flagged in §4.
+
+**Also worth noting:** this is the second time a *correct* Sonnet/Opus answer has scored
+zero purely on placement (the first being `googlelocal:2`, where the numbers were exactly
+right but sat outside the validator's 10-character window). Delivery, not analysis, is
+where these trials are going.
