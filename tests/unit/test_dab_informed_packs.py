@@ -11,6 +11,7 @@ from labrat.eval.benchmarks.dab.informed_packs import (
     all_pack_lines,
     analytical_convention_lines,
     answer_shape_lines,
+    per_dataset_lines,
     validator_shape_lines,
 )
 
@@ -24,28 +25,30 @@ _HAS_VALUE_MARK = re.compile(r"[\d_./>@%-]")
 _ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # Ordinary English and our own vocabulary — not evidence of leakage.
 #
-# Adding a word here permanently blinds the gate to it. Before adding one, grep the
-# corpus for its CONTEXT, not just whether it is ordinary English: "other" looked
-# generic but is literal answer content in two datasets (a category value and part of
-# a classification title). Prefer rewording the rule over adding an entry.
-#
-# Vetting standard: a word is safe to suppress only if it appears ZERO times in any
-# query_*/query*/ground_truth.csv — i.e. it collides with validator code or prose, not
-# with graded answer content. Words present in ground truth (e.g. "average", "natural",
-# "treat") must be worked around in the rule text instead, never suppressed.
+# Adding a word here permanently blinds the gate to it. Vetting standard, in order:
+#   grep -rn <word> ~/repos/DataAgentBench/query_*/query*/ground_truth.csv
+#   - hit in a DATA row      -> graded answer content. NEVER suppress; reword the rule.
+#                               ("other" is a category value; "histology" sits inside one.)
+#   - hit only in a HEADER   -> schema. The model can already see column names, so a rule
+#                               naming one reveals nothing. Safe.
+#   - hit only outside the 12 official datasets -> corpus-glob noise. Safe.
+#   - hit only in validate.py, never in ground_truth.csv -> validator code/prose,
+#     not graded content. Safe.
+# Prefer rewording over suppressing whenever the rule survives it intact.
 _STOPWORDS = frozenset(
-    """about above after against already always another answer appear because before
-    between category coded column columns compute computed contains context correct
-    count counts derive derived different directly during either emit emitted enough
-    every exactly example except explicit extract extracted field fields first
-    following format formats-group group groups identifier identifiers immediately
-    include included instead itself label labels match matching method moving never
-    normalize number numeric numbers order others output outputs period periods
-    phrase precision present preserve punctuation question questions ranking rather
-    report reported requested result results rounded
-    separator separators should simply single source specific state stated string
-    strings structure substring table tables temp their there these thing those
-    through together toward under unless using value values verbatim where whether
+    """about above after against already always another answer appear article because
+    before between category check coded column columns compute computed contains
+    context correct count counts derive derived different directly during either
+    emit emitted enough every exactly example except explicit extract extracted
+    field fields first following format formats-group group groups identifier
+    identifiers immediately include included instead itself label labels match
+    matching method moving named never normalize number numeric numbers order
+    others output outputs period periods phrase precision present preserve
+    proportion punctuation question questions ranking rather report reported
+    requested result results rounded separator separators should simply single
+    source specific state stated string strings structure substring table tables
+    temp their there these thing those through together toward under unless
+    using validate value values verbatim where whether
     which while whitespace whole within without write""".split()
 )
 
@@ -108,6 +111,21 @@ def test_analytical_conventions_use_precise_technical_vocabulary() -> None:
         "match rate",
     ):
         assert term in text
+
+
+def test_per_dataset_pack_returns_rules_only_for_covered_datasets() -> None:
+    """Highest-variance pack and the most likely to be dropped after ablation.
+    Naming a dataset is permitted; naming its answer is not — the contamination gate
+    enforces that."""
+    assert per_dataset_lines("github_repos"), "covered dataset must yield rules"
+    assert per_dataset_lines("pancancer_atlas")
+    assert per_dataset_lines("bookreview") == [], "uncovered dataset yields nothing"
+    assert per_dataset_lines("nonexistent_dataset") == []
+
+
+def test_per_dataset_pack_states_population_scoping_for_file_questions() -> None:
+    text = " ".join(per_dataset_lines("github_repos")).lower()
+    assert "population" in text or "sampled" in text
 
 
 def test_no_pack_rule_contains_a_numeral() -> None:

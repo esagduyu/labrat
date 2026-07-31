@@ -74,8 +74,36 @@ def analytical_convention_lines() -> list[str]:
     ]
 
 
+_PER_DATASET: dict[str, tuple[str, ...]] = {
+    "github_repos": (
+        "For a question about a named file, the population is the rows where that file "
+        "was actually sampled into the table — not every repository. Check the sampled "
+        "population size before computing a proportion over it.",
+    ),
+    "pancancer_atlas": (
+        "Report the coded classification identifier column rather than its "
+        "human-readable label, and emit one row per code.",
+    ),
+    "deps_dev_v1": (
+        "Dependency identifiers here are composite paths joined by a separator. "
+        "Reproduce the identifier exactly as stored, separators included.",
+    ),
+    "agnews": (
+        "There is no stored category column; the category must be derived from the "
+        "article text itself. Classify rather than keyword-match, and validate the "
+        "classifier on a hand-checked sample before trusting its counts.",
+    ),
+}
+
+
 def per_dataset_lines(dataset: str) -> list[str]:
-    return []
+    """Pack D — rules naming a dataset and its structural quirks.
+
+    Deliberately narrow: each rule states how the data is SHAPED, never what the
+    answer is. This is the pack most likely to be dropped after ablation — a
+    competitor running this style scores 0.6137, so it is not a guaranteed win.
+    """
+    return list(_PER_DATASET.get(dataset, ()))
 
 
 def all_pack_lines() -> list[str]:
