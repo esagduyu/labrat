@@ -22,12 +22,12 @@ _STOPWORDS = frozenset(
     """about above after against already always another answer because before
     between category coded column columns compute computed contains context correct
     count counts derive derived different directly during either emit emitted enough
-    every exactly example except explicit extract extracted field fields first for
+    every exactly example except explicit extract extracted field fields first
     following format formats-group group groups identifier identifiers immediately
-    include included instead itself label labels line matching method name never
-    number numbers one order others output outputs period periods precision present
-    preserve question questions ranking rather report reported requested result
-    results rounded
+    include included instead itself label labels matching method never number
+    numbers order others output outputs period periods precision present preserve
+    question questions ranking rather report reported requested result results
+    rounded
     separator separators should simply single source specific state stated string
     strings structure table tables temp their there these those through together
     toward under unless using value values verbatim where whether which while whole
@@ -64,13 +64,12 @@ def _tokens_from(lines: list[str]) -> set[str]:
     out: set[str] = set()
     for line in lines:
         for m in _VALUE_SHAPED.finditer(line):
-            tok = m.group(0)
-            if not _HAS_VALUE_MARK.search(tok):
+            tok = m.group(0).rstrip(".,;:")  # strip BEFORE the value-mark test:
+            if not tok or not _HAS_VALUE_MARK.search(tok):
+                # a trailing period does not make a word value-shaped
                 continue
-            probe = tok.rstrip(".,;:")  # sentence punctuation is not part of a value
-            if probe.lower() in _STOPWORDS:
-                continue
-            out.add(probe or tok)
+            if tok.lower() not in _STOPWORDS:
+                out.add(tok)
         for m in _ALPHA_WORD.finditer(line):
             tok = m.group(0)
             probe = tok.rstrip(".,;:")  # sentence punctuation is not part of a value
@@ -91,6 +90,15 @@ def test_sentence_final_words_are_filtered_by_the_plain_stopword() -> None:
 def test_stripping_does_not_damage_interior_punctuation() -> None:
     toks = _tokens_from(["values 0.33 and 12.5 end the line."])
     assert "0.33" in toks and "12.5" in toks
+
+
+def test_trailing_period_does_not_make_a_short_word_value_shaped() -> None:
+    """A sentence-final period once satisfied the value-mark test, turning every 3+
+    character word ending a sentence into a value-shaped token. Bare short words then
+    matched the corpus as substrings and had to be stopworded, growing blind spots in
+    the gate for words like 'for' and 'line'."""
+    assert _tokens_from(["Group the rows for."]) == _tokens_from(["Group the rows for"])
+    assert "for" not in _tokens_from(["Group the rows for."])
 
 
 def _tokens() -> set[str]:
