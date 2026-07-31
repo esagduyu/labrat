@@ -28,20 +28,25 @@ _ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # corpus for its CONTEXT, not just whether it is ordinary English: "other" looked
 # generic but is literal answer content in two datasets (a category value and part of
 # a classification title). Prefer rewording the rule over adding an entry.
+#
+# Vetting standard: a word is safe to suppress only if it appears ZERO times in any
+# query_*/query*/ground_truth.csv — i.e. it collides with validator code or prose, not
+# with graded answer content. Words present in ground truth (e.g. "average", "natural",
+# "treat") must be worked around in the rule text instead, never suppressed.
 _STOPWORDS = frozenset(
     """about above after against already always another answer appear because before
     between category coded column columns compute computed contains context correct
     count counts derive derived different directly during either emit emitted enough
     every exactly example except explicit extract extracted field fields first
     following format formats-group group groups identifier identifiers immediately
-    include included instead itself label labels matching method never number numeric
-    numbers order others output outputs period periods phrase precision present
-    preserve question questions ranking rather report reported requested result
-    results rounded
+    include included instead itself label labels matching method moving never
+    normalize number numeric numbers order others output outputs period periods
+    phrase precision present preserve punctuation question questions ranking rather
+    report reported requested result results rounded
     separator separators should simply single source specific state stated string
-    strings structure table tables temp their there these thing those through
-    together toward under unless using value values verbatim where whether which
-    while whole within without write""".split()
+    strings structure substring table tables temp their there these thing those
+    through together toward under unless using value values verbatim where whether
+    which while whitespace whole within without write""".split()
 )
 
 
@@ -86,6 +91,15 @@ def test_analytical_conventions_pack_covers_the_four_recurring_choices() -> None
     assert "temp table" in text
     assert "composite" in text or "separator" in text
     assert len(analytical_convention_lines()) == 4
+
+
+def test_analytical_conventions_use_precise_technical_vocabulary() -> None:
+    """Dodging gate tokens once pushed these rules into vague paraphrase ("fragment
+    test" for substring, "trailing blank gaps" for whitespace), which a model cannot
+    reliably map onto the operations meant. Pin the precise terms."""
+    text = " ".join(analytical_convention_lines()).lower()
+    for term in ("substring", "whitespace", "punctuation", "word-boundary", "temp table"):
+        assert term in text
 
 
 def test_no_pack_rule_contains_a_numeral() -> None:
