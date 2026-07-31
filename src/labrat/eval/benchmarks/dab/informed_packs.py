@@ -16,7 +16,22 @@ from __future__ import annotations
 
 
 def answer_shape_lines() -> list[str]:
-    return []
+    """Pack A — how the answer should be shaped.
+
+    Targets three measured failures: an entity reported by human-readable name where
+    the coded form was expected; a per-group result collapsed to a single winner; and
+    a ranked list emitted out of order.
+    """
+    return [
+        "When a table offers both a coded identifier and a human-readable name for the "
+        "same entity, report the coded form, unless the question explicitly asks for "
+        "the name. Give the name alongside it only as secondary context.",
+        "When the result is per-group — per category, per type, per code, per period — "
+        "emit EVERY group you computed, not just the leading one. If you computed "
+        "twenty groups, your answer contains twenty groups.",
+        "Present items in the order the question asks for. If it asks for a ranking, "
+        "emit them in rank order and keep that order in the final answer line.",
+    ]
 
 
 def validator_shape_lines() -> list[str]:
