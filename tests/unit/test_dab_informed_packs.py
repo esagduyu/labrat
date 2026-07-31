@@ -29,11 +29,12 @@ _ALPHA_WORD = re.compile(r"[A-Za-z]{5,}")
 # scans — ground_truth.csv AND validate.py — under ~/repos/DataAgentBench:
 #   grep -rn <word> ~/repos/DataAgentBench/query_*/query*/{ground_truth.csv,validate.py}
 # Then classify the hit:
-#   - the word IS a graded value, or a standalone word inside one -> NEVER suppress;
-#     reword the rule. ("other" is a category value; "histology" sits inside one.)
-#   - the word only appears as an incidental substring inside a longer graded string
-#     (e.g. "group" inside a company name) -> safe; a real leak would surface as the
-#     distinctive part, not the common fragment.
+#   - the word is the graded value entire, or is topically distinctive of the answer
+#     (it names the concept the answers are about) -> NEVER suppress; reword the rule.
+#     ("other" IS a category value; "histology" names what the pancancer answers are.)
+#   - the word appears inside a longer graded string but does not identify it
+#     ("group" in a company name, "state" in a patent title, "after" in a patent
+#     title) -> safe; a real leak surfaces as the distinctive part, not the common one.
 #   - header-only hit -> safe ONLY IF the word also occurs in that query's question text
 #     or db_description*.txt. GT headers here are invented answer-shape names
 #     (total_readmes, mutation_percentage) that exist in no table, so "it is just a
@@ -50,7 +51,7 @@ _STOPWORDS = frozenset(
     identifiers immediately include included instead itself label labels match
     matching method moving named never normalize number numeric numbers order
     others output outputs period periods phrase precision present preserve
-    proportion punctuation question questions ranking rather report reported
+    punctuation question questions ranking rather report reported
     requested result results rounded separator separators should simply single
     source specific state stated string strings structure substring table tables
     temp their there these thing those through together toward under unless
