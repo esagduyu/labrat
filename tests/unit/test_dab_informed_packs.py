@@ -36,13 +36,19 @@ _STOPWORDS = frozenset(
 def _tokens_from(lines: list[str]) -> set[str]:
     out: set[str] = set()
     for line in lines:
+        consumed: list[tuple[int, int]] = []
         for m in _VALUE_SHAPED.finditer(line):
             tok = m.group(0)
             if not _HAS_VALUE_MARK.search(tok):
+                # Not value-shaped after all: leave this span open to the alpha
+                # scan below, or pure-alpha ground-truth labels stop being checked.
                 continue
+            consumed.append(m.span())
             if tok.lower() not in _STOPWORDS:
                 out.add(tok)
         for m in _ALPHA_WORD.finditer(line):
+            if any(start <= m.start() < end for start, end in consumed):
+                continue
             tok = m.group(0)
             if tok.lower() not in _STOPWORDS:
                 out.add(tok)
@@ -60,6 +66,25 @@ def test_token_extractor_catches_short_value_shapes() -> None:
     toks = _tokens_from(["values like 0.33 and 12.5 and 2024 and ID-9 and 45.6%"])
     for expected in ("0.33", "12.5", "2024", "ID-9"):
         assert expected in toks, f"{expected} must be extracted; got {sorted(toks)}"
+
+
+def test_hyphenated_compounds_do_not_spawn_extra_alpha_tokens() -> None:
+    """A hyphenated compound is one token, not three. Independent scans previously
+    re-extracted 'known' and 'insensitive' from 'well-known'/'case-insensitive',
+    inflating the false-positive surface against the ground-truth corpus."""
+    toks = _tokens_from(["Use a well-known convention for case-insensitive matching."])
+    assert "well-known" in toks
+    assert "known" not in toks
+    assert "insensitive" not in toks
+
+
+def test_pure_alpha_tokens_are_still_checked() -> None:
+    """Guards the trap in the suppression fix: _VALUE_SHAPED also matches pure-alpha
+    words, which are discarded by the value-mark filter. If their spans were treated as
+    consumed, a pure-alpha ground-truth label would stop being checked and a real leak
+    would pass. 'Astrocytoma' is exactly that shape."""
+    toks = _tokens_from(["The Astrocytoma label must still be extracted."])
+    assert "Astrocytoma" in toks
 
 
 @pytest.mark.skipif(not DAB.exists(), reason="DataAgentBench checkout not present")
