@@ -22,15 +22,16 @@ _STOPWORDS = frozenset(
     """about above after against already always another answer because before
     between category coded column columns compute computed contains context correct
     count counts derive derived different directly during either emit emitted enough
-    every exactly example except explicit extract extracted field fields first
+    every exactly example except explicit extract extracted field fields first for
     following format formats-group group groups identifier identifiers immediately
-    include included instead itself label labels matching method never number numbers
-    order others output outputs period periods precision present preserve question
-    questions ranking rather report reported requested result results rounded
+    include included instead itself label labels line matching method name never
+    number numbers one order others output outputs period periods precision present
+    preserve question questions ranking rather report reported requested result
+    results rounded
     separator separators should simply single source specific state stated string
     strings structure table tables temp their there these those through together
     toward under unless using value values verbatim where whether which while whole
-    within without name. one.""".split()
+    within without""".split()
 )
 
 
@@ -66,13 +67,30 @@ def _tokens_from(lines: list[str]) -> set[str]:
             tok = m.group(0)
             if not _HAS_VALUE_MARK.search(tok):
                 continue
-            if tok.lower() not in _STOPWORDS:
-                out.add(tok)
+            probe = tok.rstrip(".,;:")  # sentence punctuation is not part of a value
+            if probe.lower() in _STOPWORDS:
+                continue
+            out.add(probe or tok)
         for m in _ALPHA_WORD.finditer(line):
             tok = m.group(0)
-            if tok.lower() not in _STOPWORDS:
-                out.add(tok)
+            probe = tok.rstrip(".,;:")  # sentence punctuation is not part of a value
+            if probe.lower() in _STOPWORDS:
+                continue
+            out.add(probe or tok)
     return out
+
+
+def test_sentence_final_words_are_filtered_by_the_plain_stopword() -> None:
+    """A trailing period must not create a second token that evades the stopword list.
+    Enumerating period-suffixed variants would grow a permanent blind spot in the gate
+    once per pack."""
+    assert _tokens_from(["Report the coded name."]) == set()
+    assert _tokens_from(["Report the coded name"]) == set()
+
+
+def test_stripping_does_not_damage_interior_punctuation() -> None:
+    toks = _tokens_from(["values 0.33 and 12.5 end the line."])
+    assert "0.33" in toks and "12.5" in toks
 
 
 def _tokens() -> set[str]:
