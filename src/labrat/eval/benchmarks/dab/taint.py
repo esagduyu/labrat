@@ -80,11 +80,16 @@ def classify_trial(text: str) -> str:
     return CHEATING if detect_contamination(text) else CLEAN
 
 
-# Needles that are ordinary analyst vocabulary, not evidence of access. An analyst who
-# hand-labels a validation sample legitimately calls it "ground truth". The FILE-shaped
-# forms ("ground_truth", "validate.py") and the accusatory ones ("answer key", "gold
-# answer") are NOT ambiguous and are never downgraded.
-_PROSE_ONLY_NEEDLES = ("ground truth", "ground-truth")
+# Needles that are ordinary prose, not evidence of access. Two ways they occur innocently:
+# an analyst who hand-labels a validation sample calls it "ground truth", and the BENCHMARK
+# DATA ITSELF contains such phrases — a bookreview Teacher's Edition listing reads "chapter
+# and unit tests with answer keys", which an ordinary run_sql pulls into the tool trace and
+# which blocked a whole ablation arm on 2026-07-31.
+#
+# The FILE-shaped forms ("ground_truth", "validate.py") stay unconditional: a filename is
+# never innocent. So do the external-dataset needles — there is no benign reading of pulling
+# labels from an upstream corpus.
+_PROSE_ONLY_NEEDLES = ("ground truth", "ground-truth", "answer key", "gold answer")
 
 
 def _has_unambiguous_needle(text: str) -> bool:

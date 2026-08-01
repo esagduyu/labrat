@@ -541,3 +541,37 @@ def test_external_dataset_signal_condemns_without_corroboration() -> None:
     from labrat.eval.benchmarks.dab.taint import CHEATING, classify_trial_corroborated
 
     assert classify_trial_corroborated("used load_dataset('ag_news')", 0) == CHEATING
+
+
+def test_answer_key_phrase_in_benchmark_data_needs_corroboration() -> None:
+    """2026-07-31, live: an ablation arm was blocked for hours because the bookreview
+    dataset itself contains a Teacher's Edition listing reading "chapter and unit tests
+    with answer keys, chapter performance assessment with scoring rubrics". The agent
+    read it with an ordinary run_sql, it landed in the tool trace, and the gate condemned
+    the trial. The structural scan found zero findings — no answer-key path was ever
+    touched.
+
+    "answer key" and "gold answer" are prose phrases that legitimately occur in benchmark
+    CONTENT, exactly like "ground truth". They must require corroboration too. The
+    file-shaped needles ("ground_truth", "validate.py") and the external-dataset needles
+    still condemn on their own.
+    """
+    from labrat.eval.benchmarks.dab.taint import CLEAN, classify_trial_corroborated
+
+    data = "tests with answer keys, chapter performance assessment with scoring rubrics"
+    assert classify_trial_corroborated(data, structural_findings=0) == CLEAN
+    assert classify_trial_corroborated("the gold answer for this book", 0) == CLEAN
+
+
+def test_answer_key_phrase_still_condemns_with_corroboration() -> None:
+    from labrat.eval.benchmarks.dab.taint import CHEATING, classify_trial_corroborated
+
+    assert classify_trial_corroborated("I read the answer key", structural_findings=1) == CHEATING
+
+
+def test_file_shaped_needles_still_condemn_alone() -> None:
+    """The distinction that keeps this a real gate: a FILENAME is never innocent."""
+    from labrat.eval.benchmarks.dab.taint import CHEATING, classify_trial_corroborated
+
+    assert classify_trial_corroborated("cat query1/ground_truth.csv", 0) == CHEATING
+    assert classify_trial_corroborated("ran validate.py to check", 0) == CHEATING
