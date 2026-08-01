@@ -27,8 +27,7 @@ def answer_shape_lines() -> list[str]:
         "same entity, report the coded form, unless the question explicitly asks for "
         "the name. Give the name alongside it only as secondary context.",
         "When the result is per-group — per category, per type, per code, per period — "
-        "emit EVERY group you computed, not just the leading one. However many groups "
-        "you computed, that many groups appear in your answer.",
+        "emit EVERY eligible group, not just the leading one.",
         "Present items in the order the question asks for. If it asks for a ranking, "
         "emit them in rank order and keep that order in the final answer line.",
     ]
@@ -37,17 +36,21 @@ def answer_shape_lines() -> list[str]:
 def validator_shape_lines() -> list[str]:
     """Pack B — where in the text the answer must sit.
 
-    Scoring reads position, not just content: a correct value placed too far from its
-    label, or too late in the reply, has repeatedly scored zero.
+    Originally three rules. Two were dropped 2026-07-31 after a whole-branch review
+    found they duplicated text the model already receives on the claude-mcp driver:
+    adjacency was already covered by `_dab_lever_lines()` lever 7 in ``suite.py``
+    ("keep the value within a few characters of its label"), and lead-with-the-answer
+    was already covered by ``_build_claude_mcp_prompt``'s own closing line ("Begin
+    your reply with the answer in the first sentence... restate the final answer on
+    the last line"). A pack rule that restates existing prompt text wastes budget and
+    makes its ablation arm uninterpretable, so only the genuinely new rule remains:
+    the full-precision/rounded pairing for a value the agent computed itself, scoped
+    to not overlap lever 9's byte-verbatim rule for values copied from a cell.
     """
     return [
-        "Put each value immediately after the thing it describes, with nothing in "
-        "between — write the label then the number, not the label followed by a phrase "
-        "and then the number.",
-        "State the answer in the very first sentence of your reply, then show your "
-        "work, then restate the answer on the last line. Do not open with methodology.",
-        "For a numeric answer give the full-precision value and a rounded form "
-        "side by side, so either can be read.",
+        "For a numeric answer you computed yourself, give the full-precision value and "
+        "a rounded form side by side, so either can be read. This does not apply to a "
+        "value copied from a cell — reproduce those exactly as stored.",
     ]
 
 
@@ -67,7 +70,8 @@ def analytical_convention_lines() -> list[str]:
         "rate before trusting the result.",
         "When a value you need is embedded in a free-form text field, extract it ONCE "
         "into a temp table using word-boundary matching, then join on that temp table. "
-        "Never join two large tables on a substring test.",
+        "Never join two large tables on a substring test. This is for pulling a known "
+        "value out of prose — it is not a way to decide which rows are eligible.",
         "An identifier may be a composite built from several parts joined by a "
         "separator. Keep the whole composite string as the identifier and reproduce "
         "it in full; do not report only its leading part.",

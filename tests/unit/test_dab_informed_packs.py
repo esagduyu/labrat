@@ -74,24 +74,17 @@ def test_answer_shape_pack_covers_its_three_measured_failures() -> None:
     assert len(answer_shape_lines()) == 3
 
 
-def test_validator_shape_pack_covers_adjacency_head_and_precision() -> None:
-    """Derived from: googlelocal:2 (value must sit immediately after the name),
-    stockindex:1/2 (answer must appear in the head of the output), stockindex:3
-    (proximity), and repeated rounding mismatches."""
+def test_validator_shape_pack_covers_precision_only() -> None:
+    """Pack B was cut from three rules to one on 2026-07-31: adjacency duplicated
+    `_dab_lever_lines()` lever 7 (proximity delivery) and head-placement duplicated
+    `_build_claude_mcp_prompt`'s own closing line, so both were dropped. Only the
+    full-precision/rounded-form rule for self-computed values remains, scoped so it
+    doesn't overlap lever 9's byte-verbatim rule for values copied from a cell."""
     text = " ".join(validator_shape_lines()).lower()
-    assert "immediately" in text  # adjacency
-    assert "first" in text  # head placement
     assert "precision" in text  # full + rounded
-    assert len(validator_shape_lines()) == 3
-
-
-def test_validator_shape_pack_instructs_adjacency_not_mere_co_occurrence() -> None:
-    """Rule 3 targets a proximity failure: a correct value placed too far from its
-    label scores zero. Wording that only implies co-occurrence ("together") satisfies
-    a naive keyword check while losing the instruction, so pin the adjacency phrasing."""
-    text = " ".join(validator_shape_lines()).lower()
-    assert "side by side" in text or "immediately" in text
-    assert "precision" in text
+    assert "side by side" in text
+    assert "computed" in text  # scoped away from copied-cell values (lever 9's territory)
+    assert len(validator_shape_lines()) == 1
 
 
 def test_analytical_conventions_pack_covers_the_four_recurring_choices() -> None:
