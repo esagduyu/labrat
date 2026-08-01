@@ -10,6 +10,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from labrat.eval.benchmarks.dab import provenance as provenance_module
 from labrat.eval.benchmarks.dab.provenance import capture_git_provenance
 
 
@@ -89,3 +92,110 @@ def test_capture_outside_git_repo_reports_unavailable_without_raising(tmp_path: 
 
     assert provenance["git_unavailable"] is True
     assert provenance["git_commit"] is None
+
+
+def test_capture_reports_unavailable_when_status_subcommand_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLANTED (required plant b): rev-parse succeeds but a later git subcommand
+    (status, in this case a plausible 30s-timeout-under-load scenario) fails. The
+    capture must NOT degrade this into "clean tree" (git_dirty=False) — it must
+    report git_unavailable so check_comparability refuses, not silently pass."""
+    repo = _init_repo(tmp_path)
+    real_run_git = provenance_module._run_git
+
+    def _flaky_run_git(args: list[str], cwd: Path) -> str | None:
+        if args[:1] == ["status"]:
+            return None  # simulates a timeout / index lock / OOM on this call only
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(provenance_module, "_run_git", _flaky_run_git)
+
+    provenance = capture_git_provenance(repo_root=repo)
+
+    assert provenance["git_unavailable"] is True
+    assert provenance["git_commit"] is None
+    assert provenance["git_dirty"] is None  # never "False" — that would be a false "clean"
+
+
+def test_capture_reports_unavailable_when_diff_subcommand_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    real_run_git = provenance_module._run_git
+
+    def _flaky_run_git(args: list[str], cwd: Path) -> str | None:
+        if args[:1] == ["diff"]:
+            return None
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(provenance_module, "_run_git", _flaky_run_git)
+
+    provenance = capture_git_provenance(repo_root=repo)
+
+    assert provenance["git_unavailable"] is True
+
+
+def test_capture_default_root_anchors_to_labrat_package_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare capture_git_provenance() call (as scripts/eval_dab.py makes) must
+    never pick up whatever repo the operator's shell happens to be sitting in."""
+    other_repo = _init_repo(tmp_path)
+    other_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=other_repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    monkeypatch.chdir(other_repo)
+
+    provenance = capture_git_provenance()  # no repo_root -- must not resolve to other_repo
+
+    assert provenance["git_unavailable"] is False
+    assert provenance["git_commit"] != other_commit
+
+
+def test_capture_records_both_sides_of_a_dirty_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLANTED (M1): a dirty rename from an affecting path to an inert path
+    (src/x.py -> docs/x.md) must record BOTH paths. Recording only the new path
+    would let a rename launder a source-tree change into an inert-only diff."""
+    repo = _init_repo(tmp_path)
+    real_run_git = provenance_module._run_git
+
+    def _fake_run_git(args: list[str], cwd: Path) -> str | None:
+        if args[:1] == ["status"]:
+            return "R  src/main.py -> docs/main.md\n"
+        if args[:1] == ["diff"]:
+            return ""
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(provenance_module, "_run_git", _fake_run_git)
+
+    provenance = capture_git_provenance(repo_root=repo)
+
+    assert "src/main.py" in provenance["git_diff_files"]
+    assert "docs/main.md" in provenance["git_diff_files"]
+
+
+def test_capture_unquotes_quoted_porcelain_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git quotes porcelain paths containing unusual characters in double quotes.
+    A naive line[3:] leaves the literal quote characters in the recorded path."""
+    repo = _init_repo(tmp_path)
+    real_run_git = provenance_module._run_git
+
+    def _fake_run_git(args: list[str], cwd: Path) -> str | None:
+        if args[:1] == ["status"]:
+            return '?? "src/weird name.py"\n'
+        if args[:1] == ["diff"]:
+            return ""
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(provenance_module, "_run_git", _fake_run_git)
+
+    provenance = capture_git_provenance(repo_root=repo)
+
+    assert "src/weird name.py" in provenance["git_diff_files"]
+    assert not any(f.startswith('"') for f in provenance["git_diff_files"])
