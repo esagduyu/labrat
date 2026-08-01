@@ -126,6 +126,63 @@ def test_config_records_git_provenance_of_the_executing_checkout(tmp_path: Path)
     assert isinstance(provenance["git_dirty"], bool)
 
 
+def test_resume_at_a_drifted_commit_marks_provenance_mixed_and_keeps_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLANTED (required plant d, I2): a shard's own retry loop can span commits
+    across a resume (the runner scripts retry each shard up to 6-8 times with
+    1h sleeps). config.json must not silently attest only the LAST attempt's
+    code -- it must record that the run spans more than one code state, so
+    check_comparability can refuse rather than certifying a commit mixture."""
+    from labrat.eval.benchmarks.dab.provenance import check_comparability
+    from scripts import eval_dab
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "run"
+
+    provenance_calls = iter(
+        [
+            {
+                "git_commit": "a" * 40,
+                "git_branch": "main",
+                "git_dirty": False,
+                "git_diff_files": [],
+                "git_diff_sha256": "0" * 64,
+                "git_unavailable": False,
+            },
+            {
+                "git_commit": "b" * 40,
+                "git_branch": "main",
+                "git_dirty": False,
+                "git_diff_files": [],
+                "git_diff_sha256": "1" * 64,
+                "git_unavailable": False,
+            },
+        ]
+    )
+    monkeypatch.setattr(eval_dab, "capture_git_provenance", lambda *a, **k: next(provenance_calls))
+
+    assert main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    first_cfg = json.loads((output_dir / "config.json").read_text())
+    assert first_cfg["provenance"]["git_commit"] == "a" * 40
+    assert not first_cfg["provenance"].get("provenance_mixed")
+
+    # Resume: the fresh capture now reports a different commit -- code moved
+    # underneath this output dir between the first invocation and this one.
+    assert main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    second_cfg = json.loads((output_dir / "config.json").read_text())
+    assert second_cfg["provenance"]["git_commit"] == "b" * 40
+    assert second_cfg["provenance"]["provenance_mixed"] is True
+    history = second_cfg["provenance"]["provenance_history"]
+    assert history[-1]["git_commit"] == "a" * 40
+
+    result = check_comparability(second_cfg["provenance"], second_cfg["provenance"])
+    assert result.comparable is False
+    assert result.verdict == "provenance_mixed"
+
+
 def test_raw_bash_nonempty_run_is_answer_audited_report_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

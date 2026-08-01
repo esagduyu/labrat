@@ -149,6 +149,53 @@ def _has_semantic_trials(trials_jsonl: Path) -> bool:
     return False
 
 
+def _resume_safe_provenance(
+    existing_cfg: dict[str, Any], fresh_provenance: dict[str, Any]
+) -> dict[str, Any]:
+    """Reconcile a fresh git-provenance capture with what a prior invocation of
+    this same --output-dir recorded.
+
+    A run directory can be resumed hours or days later (the ablation/full-run
+    scripts retry each shard up to 6-8 times with 1h backoff sleeps), and
+    nothing pins HEAD between attempts. Silently overwriting config.json's
+    provenance with only the latest capture would let a run whose trials.jsonl
+    spans two commits attest, falsely, to a single one. If the fresh capture's
+    commit or dirty-diff differs from what was last recorded (or a mix was
+    already flagged on an earlier resume), this returns a record carrying
+    ``provenance_mixed: True`` and a ``provenance_history`` of the prior
+    state(s) -- so check_comparability refuses to certify this run against
+    anything, rather than certifying a commit mixture.
+    """
+    prior = existing_cfg.get("provenance")
+    if not isinstance(prior, dict) or not prior.get("git_commit"):
+        return fresh_provenance
+
+    def _same_code_state(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return a.get("git_commit") == b.get("git_commit") and a.get("git_diff_sha256") == b.get(
+            "git_diff_sha256"
+        )
+
+    already_mixed = bool(prior.get("provenance_mixed"))
+    drifted = not _same_code_state(prior, fresh_provenance)
+    if not already_mixed and not drifted:
+        return fresh_provenance
+
+    history_raw = prior.get("provenance_history")
+    history: list[dict[str, Any]] = list(history_raw) if isinstance(history_raw, list) else []
+    # The prior record's own capture fields (without its history/mixed bookkeeping)
+    # become a history entry, once, if it isn't already the most recent one.
+    prior_entry = {
+        k: v for k, v in prior.items() if k not in ("provenance_mixed", "provenance_history")
+    }
+    if not history or history[-1] != prior_entry:
+        history = [*history, prior_entry]
+
+    merged = dict(fresh_provenance)
+    merged["provenance_mixed"] = True
+    merged["provenance_history"] = history
+    return merged
+
+
 async def _run_interim(
     suite: BenchmarkSuite,
     n_trials: int,
@@ -929,8 +976,10 @@ def main(argv: list[str] | None = None) -> int:
         # comparability check (scripts/check_dab_comparability.py) can decide
         # whether this run and another are safe to compare, without guessing
         # from file timestamps. Recaptured fresh on every invocation (including
-        # resumes) — it describes the code that just executed, not a flag.
-        "provenance": capture_git_provenance(),
+        # resumes); if a resume's fresh capture differs from what was last
+        # recorded, _resume_safe_provenance flags provenance_mixed instead of
+        # silently overwriting it (see its docstring).
+        "provenance": _resume_safe_provenance(existing_cfg, capture_git_provenance()),
     }
     if write_terminal_timeout_config:
         config_payload["terminalize_timeouts"] = effective_terminalize_timeouts
