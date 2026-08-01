@@ -149,6 +149,8 @@ Baseline at `tests/baselines/ade_smoke_baseline.json`. Capture aborts with `Infr
 
 **Long-running `uv run` piped to `tail`/`grep` block-buffers stdout** — output won't appear until the process exits. For live progress, drop the pipe, wrap with `stdbuf -oL`, or run via `run_in_background` and read the output file. (Background watchdog launches need `run_in_background`, not a bare `&` — a bare `&` dies when the tool's shell exits.)
 
+**Monitors over append-only logs must track a high-water mark** (offset/mtime) or they re-emit old failures as new alerts on every poll. And `pgrep -f <script>` self-matches — the watching shell's own command line contains the pattern, so a liveness check written that way can never fire; match the actual PID instead. Prove a monitor can fire before trusting its silence (§Build process rule 4).
+
 **One-off `claude --print` needs `env -u ANTHROPIC_API_KEY -u CLAUDECODE`** — if `ANTHROPIC_API_KEY` is in the shell, the CLI uses it (metered API) instead of Max-plan OAuth, and a credit-less account returns "Credit balance is too low". The `_invoke_agent` / `_run_trial_claude_mcp` paths strip this automatically; interactive spikes need to do it themselves.
 
 **MCP server: use low-level `mcp.server.Server`, not FastMCP** — FastMCP's `@mcp.tool()` decorator infers schemas from function signatures, which doesn't fit a runtime `ToolRegistry` of arbitrary tools. Register via `@server.list_tools()` + `@server.call_tool()` and feed `tool.anthropic_schema()` — see `src/labrat/mcp/server.py`.
@@ -173,6 +175,84 @@ uv run pytest -q       # must pass
 ```
 
 `ruff format` must come before `ruff check` — format violations are check failures too.
+
+## Build process (enforced — derived from the 2026-07-31 and 2026-08-01 post-mortems)
+
+These are not preferences. One build under the full subagent process still produced ~14 fix
+rounds, two invalidated ablation results, and a corrupted baseline cited for days. The
+common mechanism: verification that is **local** (checks the symptom, not the invariant) and
+**credulous** (accepts an assertion, a green check, or an agent's report as proof). Every
+rule below is checkable from artifacts — if you cannot point to the artifact showing a rule
+was followed, it was not followed.
+
+**1. The whole-branch review runs on Fable — and its report must prove it.**
+Per-task reviews run on Sonnet (deliberate — they are transcription checks). The
+whole-branch review is dispatched with `model: "fable"` — never as a `fork` (forks silently
+ignore model overrides) — and the review's report must state, in its first line, the model
+it actually ran on. A report without that line is invalid: re-dispatch, don't act on it.
+This rule lapsed silently once (Opus, 2026-07-31) precisely because nothing surfaced the
+model; the self-report line is the surface.
+
+**2. A brief never contains the deliverable.**
+For content-shaped artifacts — rule text, corpora, regexes, thresholds, prompt lines — the
+brief states the *derivation procedure* and a *failing acceptance test*; the implementer
+derives the content and you check it against the test. A brief that carries the finished
+content ships the orchestrator's errors by construction (a brief-embedded regex's 5-char
+floor blinded the contamination gate to real 4-char GT values). Exact values belong in a
+brief only when they are genuine inputs: a model id, a path, a flag name.
+
+**3. A correction to a set-valued artifact re-verifies the whole set — and shows its work.**
+Fix the invariant, not the instance; then re-check every member and enumerate what was
+re-checked in the commit message or review note. A one-line fix to a rule list, corpus, or
+guard pattern with no re-check enumeration is rejected at review. (5 of 14 fix rounds were
+caused by the previous fix — each locally right, globally incomplete. A later class-level
+audit demanded under this rule found 2 further live fail-open paths beyond the one reported.)
+
+**4. No green without a red — a check is evidence only after you have watched it fail.**
+Applies to every checker: contamination gates, audit gates, smoke asserts, background
+monitors, reviews. Three parts, all required, before the check's pass means anything:
+- **Minimum shape, every population.** Plant a failing case of the *smallest* shape the
+  check claims to catch, in *each* population it claims to cover; watch it caught; remove
+  it. (A 6-char plant blessed a gate with a 5-char floor; a coverage helper iterated the
+  wrong dict and silently exempted an entire pack.)
+- **The plant fails for the reason under test.** A probe the old gate already caught proves
+  nothing about the new gate. A plant that still passes when its fix is reverted is not a
+  plant — revert and confirm.
+- **Empty input fails loud.** A gate given nothing must block (`gate({})` blessed an
+  unaudited submission); a reader given an empty result file must error, never score zero;
+  a monitor must be shown to fire once and its death must be observable — silence is not
+  health (`pgrep -f <script>` matches the watcher's own shell and can never fire).
+  Evidence gates fail closed; only liveness assists (e.g. the agent loop's sufficiency
+  verifier) may fail open. A missing or falsy field is never a reason to *skip* a check.
+
+**5. A run is citable only with recorded provenance and verified integrity.**
+Checks on a run derive from the conclusion the run must license, not from the feature.
+Concretely:
+- Every run records its git commit and dirty-tree state in the run dir (`config.json` —
+  `capture_git_provenance`). A run without them, or launched from a dirty tree, is not
+  citable as a result or baseline.
+- Everything that defines a run — runner scripts included — is committed before launch. An
+  untracked runner is invisible to every diff-reading review by construction
+  (`run_informed_ablation.sh` was `??` and carried the design error as a comment).
+- Two runs are comparable only if their commits match, or the `git diff` between those
+  commits over shared code paths has been read and attached to the comparison. A config
+  diff plus GT-stability is not a comparability check — it certifies flags, not code ("the
+  only variable is the pack" was an assertion; the baseline was 6 days of unconditional
+  prompt changes older, and all four verdicts were unattributable). Use
+  `scripts/check_dab_comparability.py`.
+- Before reading any run's numbers — and always before citing a stored run as a baseline —
+  check per-shard `trials.jsonl` row counts against the expected task count (7 of 12
+  shards of a cited baseline were empty; a silent writer plus a credulous reader scores
+  the survivors as the whole).
+
+**6. Smoke tests are small, fast, and informative — and run at every phase boundary.**
+Before any expensive run, run a targeted subset that exercises *every changed code path*
+end to end on the real runner, not a unit test. A 3-trial shard that touches each new flag
+beats a 60-trial shard that touches one. The test must distinguish infra from semantic
+failure (see `scripts/run_smoke_regression.py`) and must assert on something that would
+change if the code were wrong — a smoke test that passes identically with the feature off
+is not a smoke test. Verify the runner's plumbing too: durable row writes, resume
+resolution, the off-path golden hash.
 
 ## Key conventions
 
