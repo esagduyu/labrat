@@ -149,8 +149,25 @@ def _has_semantic_trials(trials_jsonl: Path) -> bool:
     return False
 
 
+def _trials_jsonl_has_rows(trials_jsonl: Path) -> bool:
+    """Whether a trials.jsonl already has at least one recorded line.
+
+    Used only to detect a LEGACY run directory being resumed for the first
+    time under provenance-aware code (config.json has no "provenance" key at
+    all, yet rows already exist on disk from whatever code produced them).
+    Deliberately not the same as ``_has_semantic_trials``: even an infra-only
+    row was still produced by some commit's code, so it still counts as prior
+    unattributed history for this check's purposes.
+    """
+    if not trials_jsonl.exists():
+        return False
+    return any(line.strip() for line in trials_jsonl.read_text().splitlines())
+
+
 def _resume_safe_provenance(
-    existing_cfg: dict[str, Any], fresh_provenance: dict[str, Any]
+    existing_cfg: dict[str, Any],
+    fresh_provenance: dict[str, Any],
+    trials_jsonl: Path,
 ) -> dict[str, Any]:
     """Reconcile a fresh git-provenance capture with what a prior invocation of
     this same --output-dir recorded.
@@ -159,21 +176,64 @@ def _resume_safe_provenance(
     scripts retry each shard up to 6-8 times with 1h backoff sleeps), and
     nothing pins HEAD between attempts. Silently overwriting config.json's
     provenance with only the latest capture would let a run whose trials.jsonl
-    spans two commits attest, falsely, to a single one. If the fresh capture's
-    commit or dirty-diff differs from what was last recorded (or a mix was
-    already flagged on an earlier resume), this returns a record carrying
-    ``provenance_mixed: True`` and a ``provenance_history`` of the prior
-    state(s) -- so check_comparability refuses to certify this run against
-    anything, rather than certifying a commit mixture.
+    spans two commits attest, falsely, to a single one.
+
+    THE INVARIANT (fix round 2, N1): a prior record's fields being falsy or
+    missing is never, by itself, a reason to skip reconciliation -- the same
+    "empty/falsy read as clean" shape as C1 and the empty-file-list hole. In
+    particular, an ``_unavailable_provenance()`` record (produced by THIS
+    module when a git subcommand fails mid-run) has ``git_commit: None`` and
+    is a completely normal prior value once ``provenance_mixed`` capture
+    exists -- the original fix's ``not prior.get("git_commit")`` early return
+    treated that as "nothing to reconcile" and silently dropped an
+    already-set ``provenance_mixed``/``provenance_history``. There is
+    deliberately no early return based on any field *inside* an existing
+    provenance dict; the only "nothing to reconcile against" case is the
+    ``"provenance" not in existing_cfg`` case below, and even that is only
+    safe when no prior trial rows exist yet.
+
+    Returns a record carrying ``provenance_mixed: True`` and a
+    ``provenance_history`` of the prior state(s) whenever:
+
+    * the prior recorded provenance differs from the fresh capture (by commit
+      or dirty-diff hash) -- note two ``None`` commits (two unavailable
+      captures) are never treated as "the same", since neither carries a
+      verifiable identity;
+    * the prior provenance was already flagged ``provenance_mixed`` -- once
+      set, it can never be cleared by a later resume, healthy or not;
+    * the prior config.json exists (this is a resume, not a fresh dir) but
+      predates the ``"provenance"`` key entirely, AND trials.jsonl already has
+      rows -- a legacy run directory whose existing rows were produced by
+      unrecorded code cannot be certified as attributable to the fresh
+      capture's commit either.
+
+    Otherwise (truly nothing to reconcile: a brand-new --output-dir, or a
+    legacy config with no prior rows yet) returns the fresh capture unchanged.
     """
-    prior = existing_cfg.get("provenance")
-    if not isinstance(prior, dict) or not prior.get("git_commit"):
+    if "provenance" not in existing_cfg:
+        if _trials_jsonl_has_rows(trials_jsonl):
+            merged = dict(fresh_provenance)
+            merged["provenance_mixed"] = True
+            merged["provenance_history"] = []  # legacy rows predate any recorded provenance
+            return merged
         return fresh_provenance
 
+    prior = existing_cfg["provenance"]
+    if not isinstance(prior, dict):
+        # Malformed/hand-edited provenance key: cannot trust anything it might
+        # imply about what code produced the existing rows. Treat conservatively.
+        merged = dict(fresh_provenance)
+        merged["provenance_mixed"] = True
+        merged["provenance_history"] = []
+        return merged
+
     def _same_code_state(a: dict[str, Any], b: dict[str, Any]) -> bool:
-        return a.get("git_commit") == b.get("git_commit") and a.get("git_diff_sha256") == b.get(
-            "git_diff_sha256"
-        )
+        commit_a, commit_b = a.get("git_commit"), b.get("git_commit")
+        if commit_a is None or commit_b is None:
+            # An unavailable capture carries no verifiable identity -- it is
+            # never "the same" as anything, including another unavailable one.
+            return False
+        return commit_a == commit_b and a.get("git_diff_sha256") == b.get("git_diff_sha256")
 
     already_mixed = bool(prior.get("provenance_mixed"))
     drifted = not _same_code_state(prior, fresh_provenance)
@@ -979,7 +1039,9 @@ def main(argv: list[str] | None = None) -> int:
         # resumes); if a resume's fresh capture differs from what was last
         # recorded, _resume_safe_provenance flags provenance_mixed instead of
         # silently overwriting it (see its docstring).
-        "provenance": _resume_safe_provenance(existing_cfg, capture_git_provenance()),
+        "provenance": _resume_safe_provenance(
+            existing_cfg, capture_git_provenance(), output_dir / "trials.jsonl"
+        ),
     }
     if write_terminal_timeout_config:
         config_payload["terminalize_timeouts"] = effective_terminalize_timeouts

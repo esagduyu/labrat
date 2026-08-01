@@ -183,6 +183,115 @@ def test_resume_at_a_drifted_commit_marks_provenance_mixed_and_keeps_history(
     assert result.verdict == "provenance_mixed"
 
 
+def test_resume_chain_through_a_degraded_capture_stays_mixed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLANTED (N1, fix round 2): the C1 fix made an unavailable capture
+    (git_commit=None) a real, producible record -- including as the PRIOR
+    record a later resume reconciles against. Full chain:
+    clean@A -> a resume during a git-subprocess failure (unavailable capture,
+    correctly flagged provenance_mixed) -> a later HEALTHY resume@B. The third
+    invocation's existing_cfg["provenance"] has git_commit=None (from step 2's
+    unavailable capture) -- a naive "prior has no git_commit -> nothing to
+    reconcile" gate would silently return the fresh clean record here, losing
+    provenance_mixed and provenance_history even though the run's rows span
+    three code states. This must not happen: once mixed, always mixed, and a
+    falsy git_commit on the PRIOR record is never a reason to skip the check."""
+    from labrat.eval.benchmarks.dab.provenance import check_comparability
+    from scripts import eval_dab
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "run"
+
+    commit_a = {
+        "git_commit": "a" * 40,
+        "git_branch": "main",
+        "git_dirty": False,
+        "git_diff_files": [],
+        "git_diff_sha256": "0" * 64,
+        "git_unavailable": False,
+    }
+    unavailable = {
+        "git_commit": None,
+        "git_branch": None,
+        "git_dirty": None,
+        "git_diff_files": [],
+        "git_diff_sha256": None,
+        "git_unavailable": True,
+    }
+    commit_b = {
+        "git_commit": "b" * 40,
+        "git_branch": "main",
+        "git_dirty": False,
+        "git_diff_files": [],
+        "git_diff_sha256": "1" * 64,
+        "git_unavailable": False,
+    }
+    calls = iter([commit_a, unavailable, commit_b])
+    monkeypatch.setattr(eval_dab, "capture_git_provenance", lambda *a, **k: next(calls))
+
+    assert (
+        main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    )  # attempt 1: clean @ A
+
+    assert (
+        main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    )  # attempt 2: degraded
+    degraded_cfg = json.loads((output_dir / "config.json").read_text())
+    assert (
+        degraded_cfg["provenance"]["provenance_mixed"] is True
+    )  # sanity: this half already worked
+
+    assert (
+        main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+    )  # attempt 3: healthy @ B
+    final_cfg = json.loads((output_dir / "config.json").read_text())
+
+    assert final_cfg["provenance"]["git_commit"] == "b" * 40
+    assert final_cfg["provenance"]["provenance_mixed"] is True
+    result = check_comparability(final_cfg["provenance"], final_cfg["provenance"])
+    assert result.comparable is False
+    assert result.verdict == "provenance_mixed"
+
+
+def test_legacy_run_dir_with_prior_rows_is_mixed_on_first_provenance_resume(
+    tmp_path: Path,
+) -> None:
+    """PLANTED (N1 audit finding, legacy-dir half): a run dir from before
+    provenance capture existed has a config.json with no "provenance" key at
+    all, but trials.jsonl already has rows produced by that earlier,
+    unrecorded code. The first provenance-aware resume of this directory must
+    not certify it as a clean single-commit run -- those existing rows are not
+    attributable to the fresh capture's commit."""
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "legacy-run"
+    output_dir.mkdir()
+
+    # Legacy config.json: predates the "provenance" key entirely.
+    (output_dir / "config.json").write_text(json.dumps({"n_trials": 3, "task_filter": []}))
+    # Legacy trials.jsonl: a completed row produced by unknown earlier code.
+    legacy_trial = TrialResult(
+        task_id="ds:1",
+        trial_num=0,
+        passed=True,
+        reason=None,
+        latency_seconds=1.0,
+        tool_calls=0,
+        artifact={"type": "text", "payload": "42"},
+    )
+    (output_dir / "trials.jsonl").write_text(legacy_trial.model_dump_json() + "\n")
+
+    assert main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+
+    cfg = json.loads((output_dir / "config.json").read_text())
+    assert cfg["provenance"]["provenance_mixed"] is True
+
+
 def test_raw_bash_nonempty_run_is_answer_audited_report_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
