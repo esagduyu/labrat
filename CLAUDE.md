@@ -174,6 +174,51 @@ uv run pytest -q       # must pass
 
 `ruff format` must come before `ruff check` — format violations are check failures too.
 
+## Build process (enforced — derived from the 2026-07-31 post-mortem)
+
+These are not preferences. They are the four failure modes that produced ~14 fix rounds in
+one build; each rule maps to one of them.
+
+**1. The whole-branch review runs on Fable. Every time, no exceptions.**
+Per-task reviews run on Sonnet (deliberate — they are transcription checks). The final
+whole-branch review is dispatched with `model: "fable"`. Never the session default, never
+Opus, and never the implementer's own model. This gate is the one that catches defects the
+per-task reviews structurally cannot see: a guard that bypasses itself, a rule that
+contradicts a sibling, a fix that broke an invariant three files away. It lapsed silently on
+2026-07-31 (ran on Opus) and that is exactly how it will lapse again — by nobody checking
+the model argument.
+
+**2. A brief never contains the deliverable.**
+For content-shaped artifacts — rule text, corpora, regexes, thresholds, prompt lines — the
+brief states the *derivation procedure* and a *failing acceptance test*. The implementer
+derives the content; you check it against the test. When the brief carries the finished
+content, the implementer transcribes it, the reviewer confirms the transcription, and every
+orchestrator error ships by construction. Exact values still belong in a brief when they are
+genuinely inputs (a model id, a path, a flag name).
+
+**3. Every correction re-derives the full affected set.**
+A one-line fix to a set-valued artifact (rule list, stopword corpus, guard pattern) is a
+smell. Fix the invariant, not the symptom, and re-check every member of the set. Five of
+that session's fix rounds were caused by the previous fix — each locally right and globally
+incomplete.
+
+**4. A guard is an entry gate only after you have proved it can fail.**
+Plant a case the guard must catch, watch it catch it, remove the plant. Use a case of the
+*minimum* shape the guard must handle — a comfortably-sized planted token gave false
+confidence in a gate whose length floor made a real 4-character ground-truth value
+invisible. An unproven guard is worse than no guard: it converts "unchecked" into
+"checked ✓".
+
+**5. Smoke tests are small, fast, and informative — and run at every phase boundary.**
+Before any expensive run (a 270-trial benchmark, an overnight ablation), run a targeted
+subset that exercises *every changed code path* end to end, on the real runner, not a unit
+test. A 3-trial shard that touches each new flag beats a 60-trial shard that touches one.
+The test must be able to distinguish infra failure from semantic failure (see
+`scripts/run_smoke_regression.py`) and must assert on something that would actually change
+if the code were wrong — a smoke test that passes identically with the feature off is not a
+smoke test. Verify the runner's own plumbing too: durable row writes, resume resolution, and
+the off-path golden hash.
+
 ## Key conventions
 
 - Pyright strict applies to all of `src/labrat/` except `dspy_opt/` and `screens/`.
