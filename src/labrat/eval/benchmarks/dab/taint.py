@@ -89,7 +89,15 @@ def classify_trial(text: str) -> str:
 # The FILE-shaped forms ("ground_truth", "validate.py") stay unconditional: a filename is
 # never innocent. So do the external-dataset needles — there is no benign reading of pulling
 # labels from an upstream corpus.
-_PROSE_ONLY_NEEDLES = ("ground truth", "ground-truth", "answer key", "gold answer")
+#
+# "gold answer" is deliberately NOT in this list. It was added alongside "answer key" on
+# the strength of the SAME bookreview false positive ("chapter and unit tests with answer
+# keys"), but that justification only covers "answer key" — "gold answer" never appeared in
+# that finding and has no benign reading in benchmark row content. Corroboration-gating it
+# reopened a memory-recited-leak path: a trial that recites "the gold answer is ..." from
+# memory (no structural access) would otherwise pass. See ``audit_run``'s channel split
+# below, which is what actually fixed the bookreview false positive without this.
+_PROSE_ONLY_NEEDLES = ("ground truth", "ground-truth", "answer key")
 
 
 def _has_unambiguous_needle(text: str) -> bool:
@@ -118,7 +126,9 @@ def classify_trial_corroborated(text: str, structural_findings: int) -> str:
     needle in the list. This is deliberately narrow and is NOT a whitelist:
 
     * ``ground_truth`` (underscore — a filename) still condemns on its own.
-    * ``validate.py``, ``answer key``, ``gold answer`` still condemn on their own.
+    * ``validate.py``, ``answer key`` still condemn on their own.
+    * ``gold answer`` is NOT in the prose-only list at all — it has no benign reading
+      in benchmark row content, so it condemns unconditionally, same as ``ground_truth``.
     * ``load_dataset`` / ``huggingface`` / a named label corpus still condemn on their own.
     * Any trial that genuinely reads an answer-key path trips the structural scanner
       and is condemned regardless of its wording.
@@ -257,6 +267,15 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
     is explicitly answer-only/report-only, so its artifact is contamination-
     scanned without claiming trace completeness.
 
+    The artifact and trace channels are classified separately (except on the
+    ``raw-bash``/answer-only path, which has no trace channel): the artifact — the
+    agent's own answer — always gets the full unconditional needle list via
+    ``classify_trial``, since nothing about benchmark row content can explain what the
+    agent chose to write. The trace(s) — where benchmark DATA lands, e.g. a
+    Teacher's-Edition listing that legitimately reads "answer keys" — get
+    ``classify_trial_corroborated``, which requires corroboration for the prose-only
+    needles. Either channel condemning the trial is enough.
+
     Deliberately does NOT substring-scan `reason` — that's the DAB validator's PASS/
     FAIL message, not agent output, and several official validators (agnews,
     bookreview, music_brainz) literally emit "Ground truth found in LLM output." on a
@@ -374,7 +393,18 @@ def audit_run(trials_jsonl: Path, scratch_dir: Path) -> dict[str, str]:
                     file=sys.stderr,
                 )
         else:
-            verdict = classify_trial_corroborated("\n".join(parts), len(structural_findings))
+            # Two different channels, two different rules. `parts[0]` is the agent's OWN
+            # ANSWER (`_artifact_text`) — nothing about benchmark row content can explain
+            # what the agent chose to write, so it gets the full unconditional needle list
+            # via `classify_trial`, exactly like the answer-only (raw-bash) branch above.
+            # `parts[1:]` is the tool trace(s), where BENCHMARK DATA lands (e.g. the
+            # bookreview Teacher's Edition listing) — that channel keeps the corroboration
+            # rule for the prose-only needles. Either channel condemning is enough.
+            artifact_verdict = classify_trial(parts[0])
+            trace_verdict = classify_trial_corroborated(
+                "\n".join(parts[1:]), len(structural_findings)
+            )
+            verdict = CHEATING if CHEATING in (artifact_verdict, trace_verdict) else CLEAN
         verdicts[key] = _merge_verdict(verdicts.get(key), verdict)
 
     (trials_jsonl.parent / "taint.json").write_text(

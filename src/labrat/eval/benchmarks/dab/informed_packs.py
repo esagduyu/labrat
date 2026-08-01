@@ -107,9 +107,15 @@ def per_dataset_lines(dataset: str) -> list[str]:
 
 
 def all_pack_lines() -> list[str]:
-    """Every line from every pack — the surface the contamination gate scans."""
+    """Every line from every pack — the surface the contamination gate scans.
+
+    Iterates ``_PER_DATASET`` directly (not ``_DATASETS``): ``suite.py`` reads Pack D
+    content via ``per_dataset_lines()``, which resolves against ``_PER_DATASET``. A
+    key present there but absent from ``_DATASETS`` (a typo, a renamed dataset) would
+    otherwise be emitted into the prompt while never being scanned by this gate.
+    """
     lines = answer_shape_lines() + validator_shape_lines() + analytical_convention_lines()
-    for dataset in _DATASETS:
+    for dataset in _PER_DATASET:
         lines += per_dataset_lines(dataset)
     return lines
 

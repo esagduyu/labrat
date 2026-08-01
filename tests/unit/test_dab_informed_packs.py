@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import csv
 import re
 from pathlib import Path
 
 import pytest
 
 from labrat.eval.benchmarks.dab.informed_packs import (
+    _DATASETS,
+    _PER_DATASET,
     all_pack_lines,
     analytical_convention_lines,
     answer_shape_lines,
@@ -135,6 +138,15 @@ def test_per_dataset_pack_states_population_scoping_for_file_questions() -> None
     assert "population" in text or "sampled" in text
 
 
+def test_per_dataset_keys_are_all_real_datasets() -> None:
+    """`all_pack_lines()` (the contamination-gate surface) must scan every entry in
+    `_PER_DATASET`, not merely the names listed in `_DATASETS`. `suite.py` emits Pack D
+    content into the prompt via `per_dataset_lines()`, which resolves directly against
+    `_PER_DATASET` — so a key present there but absent from `_DATASETS` (a typo, a
+    renamed dataset) would reach the prompt while silently bypassing the gate."""
+    assert set(_PER_DATASET) <= set(_DATASETS)
+
+
 def test_no_pack_rule_contains_a_numeral() -> None:
     """A concrete number inside a form-only rule is a content risk the string-matching
     gate cannot judge on principle: a numeral cannot be classified as form vs content by
@@ -249,5 +261,62 @@ def test_no_pack_token_appears_in_ground_truth_or_validators() -> None:
     offenders = sorted(tok for tok in _tokens() if tok.lower() in blob)
     assert not offenders, (
         f"pack tokens found in DAB ground truth / validators: {offenders}. "
+        "Packs must encode form, never content."
+    )
+
+
+# --- exact-cell gate: independent of token length / stopword list -------------------
+#
+# `_tokens_from` above has two blind spots by construction: `_VALUE_SHAPED` discards
+# anything without a digit/separator, `_ALPHA_WORD` requires 5+ letters. A pure-alpha
+# token of 3-4 characters ("IXIC", "Food", "Inc") matches neither and is never checked
+# by the substring-blob gate above, even though each is a literal ground-truth cell:
+#   'IXIC' -> query_stockindex/query3/ground_truth.csv
+#   'Food' -> query_yelp/query7/ground_truth.csv
+#   'Inc'/'Ltd' -> query_stockmarket ground truth
+# This second gate does not depend on token shape or a stopword list at all: it parses
+# every ground_truth.csv cell VERBATIM (via csv.reader, so no separator/quoting
+# guesswork) and fails on an EXACT, case-insensitive match against a 3+ char
+# alphanumeric token in any pack line. Exact-match-against-parsed-cells, not
+# substring-against-a-blob, is what makes this precise enough to need no stopword
+# exemptions: ordinary English words are essentially never themselves a whole GT cell.
+_ALNUM_TOKEN = re.compile(r"[A-Za-z0-9]{3,}")
+
+
+def _ground_truth_cells() -> set[str]:
+    cells: set[str] = set()
+    for path in DAB.glob("query_*/query*/ground_truth.csv"):
+        with path.open(newline="", encoding="utf-8", errors="replace") as fh:
+            for row in csv.reader(fh):
+                for cell in row:
+                    value = cell.strip().lower()
+                    if value:
+                        cells.add(value)
+    return cells
+
+
+@pytest.mark.skipif(not DAB.exists(), reason="DataAgentBench checkout not present")
+def test_no_pack_token_equals_a_ground_truth_cell() -> None:
+    """BLOCKING integrity gate, independent of `_tokens_from`'s length/stopword logic.
+
+    Regression: a pure-alphabetic 3-4 char token ('IXIC', 'Food', 'Inc') is invisible
+    to both `_VALUE_SHAPED` (needs a digit/separator) and `_ALPHA_WORD` (needs 5+
+    letters), so the substring-blob gate above passes vacuously on exactly this shape
+    of leak. This test parses every ground_truth.csv cell with `csv.reader` and fails
+    if any 3+ char alphanumeric pack-line token EXACTLY EQUALS a parsed cell,
+    case-insensitively — a precise check that needs no stopword exemptions.
+    """
+    cells = _ground_truth_cells()
+    assert cells, "expected ground-truth cells to parse"
+
+    offenders: set[str] = set()
+    for line in all_pack_lines():
+        for match in _ALNUM_TOKEN.finditer(line):
+            tok = match.group(0).lower()
+            if tok in cells:
+                offenders.add(tok)
+
+    assert not offenders, (
+        f"pack tokens exactly equal a ground-truth cell value: {sorted(offenders)}. "
         "Packs must encode form, never content."
     )
