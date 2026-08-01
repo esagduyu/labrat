@@ -184,6 +184,7 @@ def test_capture_unquotes_quoted_porcelain_paths(
     """git quotes porcelain paths containing unusual characters in double quotes.
     A naive line[3:] leaves the literal quote characters in the recorded path."""
     repo = _init_repo(tmp_path)
+    (repo / "src" / "weird name.py").write_text("stuff\n")  # must exist: capture reads it
     real_run_git = provenance_module._run_git
 
     def _fake_run_git(args: list[str], cwd: Path) -> str | None:
@@ -199,3 +200,31 @@ def test_capture_unquotes_quoted_porcelain_paths(
 
     assert "src/weird name.py" in provenance["git_diff_files"]
     assert not any(f.startswith('"') for f in provenance["git_diff_files"])
+
+
+def test_capture_reports_unavailable_when_an_untracked_file_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same fail-open shape as C1, found during the N1 audit: git status can
+    report an untracked path that then can't be read (deleted/permissions/race
+    between the status call and the hash step). Silently hashing it as empty
+    content would make two DIFFERENT real files both hash as a clean/matching
+    diff, exactly the "unknown treated as verified" bug this branch exists to
+    close. Must degrade to git_unavailable, not to empty content."""
+    repo = _init_repo(tmp_path)
+    real_run_git = provenance_module._run_git
+
+    def _fake_run_git(args: list[str], cwd: Path) -> str | None:
+        if args[:1] == ["status"]:
+            # Reports a file that does not actually exist on disk.
+            return "?? src/vanished.py\n"
+        if args[:1] == ["diff"]:
+            return ""
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(provenance_module, "_run_git", _fake_run_git)
+
+    provenance = capture_git_provenance(repo_root=repo)
+
+    assert provenance["git_unavailable"] is True
+    assert provenance["git_commit"] is None

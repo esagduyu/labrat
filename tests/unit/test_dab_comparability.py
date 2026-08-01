@@ -78,6 +78,39 @@ def test_empty_dict_provenance_is_treated_as_missing(tmp_path: Path) -> None:
     assert result.verdict == "provenance_missing"
 
 
+def test_empty_string_commit_is_treated_as_missing(tmp_path: Path) -> None:
+    """N1 audit (fix round 2): a falsy-but-not-None git_commit (e.g. an empty
+    string from a hand-built or corrupted record) must be treated the same as
+    missing -- only ``is None`` would let it slip through as a "real" commit
+    identity, the same falsy-field-skips-the-check shape as N1 and C1."""
+    repo = _init_repo(tmp_path)
+    prov_a = capture_git_provenance(repo_root=repo)
+    prov_b = dict(prov_a, git_commit="")
+
+    result = check_comparability(prov_a, prov_b, repo_root=repo)
+
+    assert result.comparable is False
+    assert result.verdict == "provenance_missing"
+
+
+def test_both_sides_empty_string_commit_does_not_certify_comparable(tmp_path: Path) -> None:
+    """The real risk behind the empty-string case: two records that BOTH carry
+    git_commit="" compare equal to each other ("" == ""), and
+    _diff_between_commits' own early-return (commit_a == commit_b -> []) means
+    no commit-diff is even attempted. Combined with matching diff hashes, this
+    reaches "no changed paths" and would certify comparable -- an actual
+    silent-pass fail-open, not just a mislabeled block."""
+    repo = _init_repo(tmp_path)
+    real = capture_git_provenance(repo_root=repo)
+    prov_a = dict(real, git_commit="")
+    prov_b = dict(real, git_commit="")
+
+    result = check_comparability(prov_a, prov_b, repo_root=repo)
+
+    assert result.comparable is False
+    assert result.verdict == "provenance_missing"
+
+
 def test_same_commit_different_dirty_diffs_is_not_comparable(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     prov_a = capture_git_provenance(repo_root=repo)

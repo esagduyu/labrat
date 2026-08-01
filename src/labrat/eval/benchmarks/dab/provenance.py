@@ -196,7 +196,13 @@ def capture_git_provenance(repo_root: Path | None = None) -> ProvenanceDict:
         try:
             content = (root / path).read_bytes()
         except OSError:
-            content = b""
+            # git status reported this path as untracked, but it can no longer
+            # be read (deleted/permissions/a race between the status call and
+            # this read). Treating it as empty content would let two genuinely
+            # different untracked files both hash as a matching/clean diff --
+            # the same "unknown read as verified" shape as C1. Degrade the
+            # whole capture instead of silently smoothing over the gap.
+            return _unavailable_provenance()
         hasher.update(path.encode("utf-8", errors="surrogateescape"))
         hasher.update(hashlib.sha256(content).digest())
 
@@ -264,7 +270,11 @@ def check_comparability(
     """
     missing: list[str] = []
     for prov, label in ((provenance_a, label_a), (provenance_b, label_b)):
-        if not prov or prov.get("git_commit") is None or prov.get("git_unavailable"):
+        # `not prov.get("git_commit")` (falsy), not `is None`: an empty-string
+        # commit is not a real identity either, and two empty strings compare
+        # equal to each other -- letting that reach the commit-equality check
+        # below would certify two "no commit" records as the same commit.
+        if not prov or not prov.get("git_commit") or prov.get("git_unavailable"):
             missing.append(label)
     if missing:
         return ComparabilityResult(
