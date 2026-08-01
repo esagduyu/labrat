@@ -18,10 +18,12 @@
 # run exactly — but flags matching is NOT sufficient: the CODE that ran them can have
 # drifted since the baseline was captured (this is exactly how a prior run of this
 # ablation went wrong — see src/labrat/eval/benchmarks/dab/provenance.py). The
-# comparability guard below
-# certifies that the checkout about to run this ablation is code-comparable to the
-# stored baseline before any arm executes; it aborts loudly if not, and refuses (rather
-# than passing) if the baseline predates provenance capture.
+# comparability guard below certifies that the checkout about to run this ablation is
+# code-comparable to the stored baseline, PER SHARD IT ACTUALLY READS (each dataset's
+# shard dir has its own config.json/provenance, so certifying one shard says nothing
+# about the rest) before any arm executes; it aborts loudly if not, and refuses (rather
+# than passing) if a shard predates provenance capture or has no trial rows to compare
+# against.
 #
 # n=3. Run this from whichever checkout you intend to measure — a frozen worktree is
 # strongly recommended for a run this long (see feedback_branch_isolation): the guard
@@ -31,22 +33,41 @@ set -u
 cd "${DAB_ABLATION_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 SHARDS=runs/informed-ablation
-BASELINE=runs/dab/levers-dilution-2026-07-29-shards/bookreview
+BASELINE_ROOT=runs/dab/levers-dilution-2026-07-29-shards
+
+# Single source of truth for what each arm reads, so the guard loop below (I3) can
+# never drift from the actual target lists — re-deriving the guard's shard set from
+# these arrays instead of a second hand-copied list.
+PARITY=(bookreview crmarenapro yelp)
+ARM_A_TARGETS=(pancancer_atlas patents deps_dev_v1)
+ARM_B_TARGETS=(stockindex googlelocal)
+ARM_C_TARGETS=(patents stockmarket deps_dev_v1)
+ARM_D_TARGETS=(github_repos pancancer_atlas agnews)
+BASELINE_SHARDS=($(printf '%s\n' "${PARITY[@]}" "${ARM_A_TARGETS[@]}" "${ARM_B_TARGETS[@]}" \
+  "${ARM_C_TARGETS[@]}" "${ARM_D_TARGETS[@]}" | sort -u))
 
 # GUARDS — each corresponds to a way this ablation could silently be worthless.
 grep -q "informed_shape" scripts/eval_dab.py || { echo "ABORT: pack flags not wired."; exit 6; }
 grep -q "_append_trial_row" scripts/eval_dab.py || { echo "ABORT: no durable trials.jsonl write."; exit 6; }
 grep -q "__empty_audit__" src/labrat/eval/benchmarks/dab/taint.py || { echo "ABORT: taint gate not fail-closed."; exit 6; }
 grep -q '"--effort", self._agent_reasoning' src/labrat/eval/benchmarks/dab/suite.py || { echo "ABORT: no --effort mapping; would run at medium."; exit 6; }
-# Comparability guard: the whole point of this ablation is "the only variable is the
-# single pack under test" vs. the stored baseline above. Refuses (not passes) if the
-# baseline has no recorded provenance (predates this feature) or if this checkout's
-# code differs from it in a way that could confound every arm.
-uv run python scripts/check_dab_comparability.py "$BASELINE" --live \
-  || { echo "ABORT: current checkout is not certified code-comparable to $BASELINE; see above."; exit 6; }
 uv sync --extra semantic >/dev/null 2>&1 || { echo "uv sync --extra semantic FAILED"; exit 5; }
 
-PARITY=(bookreview crmarenapro yelp)
+# Comparability guard: the whole point of this ablation is "the only variable is the
+# single pack under test" vs. the stored baseline. Every shard the ablation reads gets
+# its own check — certifying only one shard (e.g. bookreview) says nothing about the
+# rest, which is the exact partial-check-presented-as-full-check failure this branch
+# exists to fix. Also refuses on an empty baseline trials.jsonl: an empty shard has
+# no numbers to compare against regardless of what its provenance says.
+for shard in "${BASELINE_SHARDS[@]}"; do
+  shard_dir="$BASELINE_ROOT/$shard"
+  if [ ! -s "$shard_dir/trials.jsonl" ]; then
+    echo "ABORT: baseline shard $shard_dir has an empty (or missing) trials.jsonl; there is nothing to compare this arm's numbers against."
+    exit 6
+  fi
+  uv run python scripts/check_dab_comparability.py "$shard_dir" --live \
+    || { echo "ABORT: current checkout is not certified code-comparable to $shard_dir; see above."; exit 6; }
+done
 
 run_arm () {
   local arm="$1"; local flag="$2"; shift 2
@@ -80,10 +101,10 @@ run_arm () {
 }
 
 # Targets chosen per the design doc: the datasets whose measured failures each pack aims at.
-run_arm A --informed-shape       pancancer_atlas patents deps_dev_v1
-run_arm B --informed-validator   stockindex googlelocal
-run_arm C --informed-conventions patents stockmarket deps_dev_v1
-run_arm D --informed-datasets    github_repos pancancer_atlas agnews
+run_arm A --informed-shape       "${ARM_A_TARGETS[@]}"
+run_arm B --informed-validator   "${ARM_B_TARGETS[@]}"
+run_arm C --informed-conventions "${ARM_C_TARGETS[@]}"
+run_arm D --informed-datasets    "${ARM_D_TARGETS[@]}"
 
 echo "=== ABLATION DONE $(date)"
 for a in A B C D; do
