@@ -28,6 +28,7 @@ from labrat.agent.providers import (
     PROVIDER_NAMES,
     resolve_codex_model_config,
 )
+from labrat.eval.benchmarks.dab.provenance import capture_git_provenance
 from labrat.eval.benchmarks.dab.suite import DabSuite, Driver, is_rate_limit_error
 from labrat.eval.benchmarks.dab.taint import audit_run, gate, task_trial_dir_name
 from labrat.eval.reporting import report_to_markdown
@@ -924,6 +925,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "n_trials": effective_n_trials,
         "task_filter": task_filter,
+        # Records the git state of THIS invocation's checkout so a later
+        # comparability check (scripts/check_dab_comparability.py) can decide
+        # whether this run and another are safe to compare, without guessing
+        # from file timestamps. Recaptured fresh on every invocation (including
+        # resumes) — it describes the code that just executed, not a flag.
+        "provenance": capture_git_provenance(),
     }
     if write_terminal_timeout_config:
         config_payload["terminalize_timeouts"] = effective_terminalize_timeouts

@@ -103,6 +103,29 @@ def test_dab_ablation_flags_keep_backward_compatible_defaults(tmp_path: Path) ->
     assert cfg["agent_ledger"] is True
 
 
+def test_config_records_git_provenance_of_the_executing_checkout(tmp_path: Path) -> None:
+    """config.json must record enough of the executing checkout's git state to
+    decide comparability later — not just flags. See provenance.py."""
+    import subprocess
+
+    from scripts.eval_dab import main
+
+    dab_dir = tmp_path / "empty_dab"
+    dab_dir.mkdir()
+    output_dir = tmp_path / "run"
+
+    assert main(["--dab-dir", str(dab_dir), "--output-dir", str(output_dir)]) == 0
+
+    cfg = json.loads((output_dir / "config.json").read_text())
+    provenance = cfg["provenance"]
+    expected_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert provenance["git_commit"] == expected_commit
+    assert provenance["git_unavailable"] is False
+    assert isinstance(provenance["git_dirty"], bool)
+
+
 def test_raw_bash_nonempty_run_is_answer_audited_report_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
