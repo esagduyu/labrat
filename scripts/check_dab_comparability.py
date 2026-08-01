@@ -10,9 +10,10 @@ arm. This script reads each run's ``provenance`` (see
 
 * identical code state -> exit 0, "comparable"
 * code differs in a way that can affect behaviour -> exit 1, names the paths
-* provenance missing/unavailable on either side -> exit 2, REFUSES to
-  certify (never assumes equality from silence — this is the important case:
-  most runs on disk predate provenance capture and have none)
+* provenance missing/unavailable on either side, OR either side spans more
+  than one code state across a resume ("provenance_mixed") -> exit 2,
+  REFUSES to certify (never assumes equality from silence — this is the
+  important case: most runs on disk predate provenance capture and have none)
 
 Usage:
     uv run python scripts/check_dab_comparability.py RUN_A RUN_B
@@ -106,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if result.verdict == "comparable":
         return _EXIT_COMPARABLE
-    if result.verdict == "provenance_missing":
+    if result.verdict in ("provenance_missing", "provenance_mixed"):
         return _EXIT_PROVENANCE_MISSING
     return _EXIT_CODE_DIFF
 

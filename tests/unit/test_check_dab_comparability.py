@@ -8,6 +8,7 @@ comparable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -15,6 +16,12 @@ from pathlib import Path
 import pytest
 
 from scripts.check_dab_comparability import main
+
+# sha256 of an empty diff -- what capture_git_provenance() records for a clean tree.
+# Tests that compare a hand-built provenance record against a --live capture of a
+# real clean repo must use this, not an arbitrary placeholder, or the hash-mismatch
+# guard (which now refuses on ANY unequal hash, explained or not) rejects them.
+_EMPTY_DIFF_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 def _git(args: list[str], cwd: Path) -> None:
@@ -88,6 +95,30 @@ def test_nonexistent_run_directory_exits_2(tmp_path: Path) -> None:
     assert exit_code == 2
 
 
+def test_provenance_mixed_run_exits_2(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    base_provenance = {
+        "git_commit": commit,
+        "git_dirty": False,
+        "git_diff_files": [],
+        "git_diff_sha256": "e" * 64,
+        "git_unavailable": False,
+    }
+    mixed_provenance = dict(base_provenance, provenance_mixed=True)
+
+    run_a = tmp_path / "run-a"
+    run_b = tmp_path / "run-b"
+    _write_run(run_a, mixed_provenance)
+    _write_run(run_b, base_provenance)
+
+    exit_code = main([str(run_a), str(run_b), "--repo-root", str(repo)])
+
+    assert exit_code == 2
+
+
 def test_source_diff_between_commits_exits_1(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     commit_a = subprocess.run(
@@ -140,7 +171,7 @@ def test_live_flag_compares_against_current_checkout(tmp_path: Path) -> None:
             "git_commit": commit,
             "git_dirty": False,
             "git_diff_files": [],
-            "git_diff_sha256": "e" * 64,
+            "git_diff_sha256": _EMPTY_DIFF_SHA256,
             "git_unavailable": False,
         },
     )
