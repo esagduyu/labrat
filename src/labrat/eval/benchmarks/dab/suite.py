@@ -736,6 +736,7 @@ class DabSuite:
         agent_mcp_ledger: bool = False,
         agent_answer_gate: bool = False,
         agent_mcp_tool_prompt: bool = False,
+        agent_ledger_max_bytes: int | None = None,
         agent_taxonomy: bool = False,
         informed_shape: bool = False,
         informed_validator: bool = False,
@@ -802,6 +803,7 @@ class DabSuite:
         self._agent_mcp_ledger = agent_mcp_ledger
         self._agent_answer_gate = agent_answer_gate
         self._agent_mcp_tool_prompt = agent_mcp_tool_prompt
+        self._agent_ledger_max_bytes = agent_ledger_max_bytes
         self._agent_taxonomy = agent_taxonomy
         # Benchmark-informed prompt packs (Tasks 2-5): each pack is independently
         # toggled, default OFF, so an unflagged run's prompt is byte-identical to
@@ -2032,6 +2034,7 @@ class DabSuite:
                 on_tool_call=_trace,
                 enable_ledger=self._agent_ledger,
                 ledger_dir=scratch_dir,
+                ledger_max_bytes=self._agent_ledger_max_bytes,
             )
             if cartograph_root is not None:
                 (cartograph_root / "_home").mkdir(parents=True, exist_ok=True)

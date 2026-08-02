@@ -562,6 +562,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--agent-ledger-max-bytes",
+        type=int,
+        default=None,
+        help=(
+            "Model-visible byte cap for the IN-PROCESS Context Ledger on the "
+            "labrat-agent driver (default 8000). The claude-mcp server-side ledger got "
+            "raised to 64000 on 2026-07-24 because 8 KB truncates search_reference_docs "
+            "/ describe_table grounding (8-22 KB); that fix never reached this path, "
+            "which is the one the accepted 74.18%% entry runs. For ablation."
+        ),
+    )
+    parser.add_argument(
         "--agent-taxonomy",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -826,6 +838,7 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_mcp_ledger", args.agent_mcp_ledger),
         ("agent_answer_gate", args.agent_answer_gate),
         ("agent_mcp_tool_prompt", args.agent_mcp_tool_prompt),
+        ("agent_ledger_max_bytes", args.agent_ledger_max_bytes),
         ("agent_taxonomy", args.agent_taxonomy),
         ("informed_shape", args.informed_shape),
         ("informed_validator", args.informed_validator),
@@ -1102,6 +1115,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_mcp_ledger=effective_mcp_ledger,
         agent_answer_gate=effective_answer_gate,
         agent_mcp_tool_prompt=effective_mcp_tool_prompt,
+        agent_ledger_max_bytes=args.agent_ledger_max_bytes,
         agent_taxonomy=effective_taxonomy,
         informed_shape=effective_informed_shape,
         informed_validator=effective_informed_validator,
@@ -1172,6 +1186,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_mcp_ledger": effective_mcp_ledger,
         "agent_answer_gate": effective_answer_gate,
         "agent_mcp_tool_prompt": effective_mcp_tool_prompt,
+        "agent_ledger_max_bytes": args.agent_ledger_max_bytes,
         "agent_taxonomy": effective_taxonomy,
         "informed_shape": effective_informed_shape,
         "informed_validator": effective_informed_validator,
