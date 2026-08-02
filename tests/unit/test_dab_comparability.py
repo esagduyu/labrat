@@ -216,6 +216,31 @@ def test_root_level_markdown_outside_src_stays_inert(tmp_path: Path) -> None:
     assert result.comparable is True
 
 
+def test_project_scent_store_markdown_is_not_inert(tmp_path: Path) -> None:
+    """A .md file under labrat_maze/ (the project Scent store) is runtime
+    retrieval content — search_reference_docs serves it to the agent — so a
+    drift there must classify as affecting. Without an explicit prefix rule it
+    falls through to the .md suffix rule and silently certifies as inert."""
+    repo = _init_repo(tmp_path)
+    (repo / "labrat_maze" / "scent").mkdir(parents=True)
+    (repo / "labrat_maze" / "scent" / "main.md").write_text("## Gotchas\n- none\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "add project scent doc"], repo)
+    prov_a = capture_git_provenance(repo_root=repo)
+
+    (repo / "labrat_maze" / "scent" / "main.md").write_text(
+        "## Gotchas\n- join on code, not name\n"
+    )
+    _git(["commit", "-aqm", "edit project scent doc"], repo)
+    prov_b = capture_git_provenance(repo_root=repo)
+
+    result = check_comparability(prov_a, prov_b, repo_root=repo)
+
+    assert result.comparable is False
+    assert result.verdict == "code_diff"
+    assert "labrat_maze/scent/main.md" in result.differing_files
+
+
 def test_hash_mismatch_with_no_explaining_files_refuses(tmp_path: Path) -> None:
     """PLANTED (required plant c, C1 second half): a diff-hash mismatch with an
     empty file-list union (a degraded/failed capture, or a hand-built record)

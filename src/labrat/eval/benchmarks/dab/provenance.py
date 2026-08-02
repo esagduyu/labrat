@@ -58,8 +58,10 @@ _INERT_EXACT: frozenset[str] = frozenset({".gitignore", "LICENSE"})
 
 # Paths under these prefixes are ALWAYS affecting, regardless of extension. This
 # must be checked before the .md suffix rule: src/**.md includes runtime-loaded
-# assets (e.g. agent/prompts/system_base.md), so location has to win over suffix.
-_AFFECTING_PREFIXES: tuple[str, ...] = ("src/", "scripts/")
+# assets (e.g. agent/prompts/system_base.md), and labrat_maze/**.md is the
+# project Scent store — retrieval content served to the agent at runtime — so
+# location has to win over suffix.
+_AFFECTING_PREFIXES: tuple[str, ...] = ("src/", "scripts/", "labrat_maze/")
 
 
 def _classify_path(path: str) -> Literal["inert", "affecting"]:
