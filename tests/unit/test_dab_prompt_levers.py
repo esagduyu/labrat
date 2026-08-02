@@ -39,8 +39,8 @@ def test_top_n_with_ties_lever_present() -> None:
     assert any("truncates ties" in ln for ln in _dab_lever_lines())
 
 
-def test_lever_lines_now_number_seven() -> None:
-    assert len(_dab_lever_lines()) == 7
+def test_lever_lines_now_number_nine() -> None:
+    assert len(_dab_lever_lines()) == 9
 
 
 def test_enumeration_completeness_lever_present() -> None:
@@ -59,6 +59,33 @@ def test_adjacent_token_delivery_lever_present() -> None:
     text = " ".join(_dab_lever_lines())
     assert "directly adjacent as plain tokens" in text
     assert "markdown table" in text
+
+
+def test_free_text_completeness_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "matches spelling, not meaning" in text
+    assert "llm_classify" in text
+
+
+def test_verbatim_value_lever_present() -> None:
+    text = " ".join(_dab_lever_lines())
+    assert "byte-for-byte" in text
+    assert "exact token" in text
+
+
+def test_convention_pin_lever_removed() -> None:
+    """Removed 2026-07-30 after the 162-trial dilution run.
+
+    It never moved its only target (patents:2: 0/5 baseline -> 0/3 with the lever,
+    and 0/3 in the earlier smoke), and both saturated-task regressions were
+    convention-flavoured: github_repos:3 pinned "Shell as PRIMARY language" and
+    answered 0 where passing runs read "Shell in the language mix" (1077), and
+    yelp:1 locked a wrong averaging basis (3.50 vs 3.55). Every measured point of
+    the levers' gain traces to the free-text-completeness and byte-verbatim lines.
+    """
+    text = " ".join(_dab_lever_lines())
+    assert "pin one concrete convention" not in text
+    assert "full set under that fixed convention" not in text
 
 
 def test_lever_lines_are_untuned_no_dataset_names_or_answer_content() -> None:

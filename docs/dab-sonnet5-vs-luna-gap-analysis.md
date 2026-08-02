@@ -385,3 +385,29 @@ Each was a plausible reading of the trace data, and each turned out to be a corr
 That points future effort at the levers, which act on exactly those failure modes, and away from further orchestration work on the claude-mcp path. It also raises the priority of the one untested item in §(g) that is neither orchestration nor prompt: the **8 KB in-process ledger on the labrat-agent path**, which is the only identified defect sitting on the configuration we actually submit.
 
 None of the three arms justifies a merge. `feat/dab-mcp-system-prompt` carries both prompt flags default-OFF and should stay unmerged unless the opening-message variant is wanted purely as driver-parity hygiene, in which case it is free and harmless (parity 9/9, +0.2 h) but must not be described as a scoring improvement.
+
+## (k) Effort curve + lever dilution validation (2026-07-29/30)
+
+Three full arms, n=3 over all 54 tasks, **identical feature set** (10 levers, cartograph, hints, local-embed classify, mcp ledger, catalog fixes) so effort is the only variable. Baseline for the lever question is the completed 7-lever high run (70.31%, n=5).
+
+| arm | trials | micro | **stratified** | median trial |
+|---|---|---|---|---|
+| medium | 162 | 0.7593 | **0.7410** | 54 s |
+| high | 160 | 0.7688 | **0.7435** | 115 s |
+| xhigh | 162 | 0.7716 | **0.7322** | 109 s |
+
+**Effort is exhausted as a lever.** All three tiers land within 1.1pp of each other on the leaderboard metric, and the ordering is medium ≈ high > xhigh. Note xhigh has the *highest* micro rate but the *lowest* stratified score — it does relatively better on task-rich datasets and worse on small ones (stockindex 0.78 vs 1.00 elsewhere), and stratified is the metric the board scores. The earlier "more effort hurt Sonnet" claim (medium 72.90% vs high 70.31%) was confounded by the catalog fixes; with features held constant the tiers are indistinguishable, and none approaches 80%.
+
+**Lever dilution: PASSED.** Against the 7-lever baseline, at constant effort:
+
+| task group | baseline | 10 levers | delta |
+|---|---|---|---|
+| derived-from (5 tasks) | 8/25 = 0.320 | 10/15 = 0.667 | +0.347 |
+| **non-derived (49 tasks)** | 189/243 = 0.778 | 113/145 = 0.779 | **+0.002** (Fisher p = 1.000) |
+| saturated, base-perfect (31 tasks) | 0 failures / 154 | 2 failures / 92 | — |
+
+The gain is confined to the tasks the levers target and the other 49 are flat. On the purest dilution surface we can now **exclude per-trial dilution worse than 6.7%** at 95% confidence, versus ~30% from the earlier 9-trial smoke. This is the opposite of the taxonomy pack's signature.
+
+**But lever 3 (convention-pinning) should be dropped.** It has never moved its only target (`patents:2`: 0/5 → 0/3, and 0/3 in the smoke), and both saturated-task regressions are convention-flavoured: `github_repos:3` pinned "Shell as *primary* language" and answered 0 where passing runs read "Shell in the language mix" (1077); `yelp:1` locked onto a wrong averaging basis (3.50 vs 3.55). A zero result is exactly the sanity signal that should trigger a rethink, and lever 3 instructs the model to hold its convention absent such a signal. Every measured point of gain traces to levers 1 and 2.
+
+**Harness defect found:** `trials.jsonl` is intermittently orphaned — the file at the path is replaced after `_run_interim` opens its append handle, so writes land on an unlinked inode (mtime = shard start, perms 600 instead of 644). `report.md`, `submission.json` and all traces are unaffected because they derive from in-memory results. Incidence varied by arm: dilution lost 10/12 shards, medium 2/12, xhigh 12/12. Results were recovered from the console log via a parser **validated against the shards that wrote correctly** (11/11 tasks matching exactly, including infra exclusion). **This must be fixed before any submission packaging**, and it degrades resume safety in the meantime.

@@ -1344,3 +1344,51 @@ async def test_labrat_agent_writes_opening_prompt_file(
     assert "=== OPENING USER MESSAGE ===" in content
     assert task.prompt in content
     assert "Answer discipline:" in content  # taxonomy lever reflected in disclosure
+
+
+async def test_answer_gate_off_by_default_and_fires_only_on_violations(tmp_path: Path) -> None:
+    """The deterministic answer gate makes ONE presentation-only corrective pass when
+    an answer trips a shape check. Default OFF keeps every prior run byte-identical.
+
+    The corrective call carries no --mcp-config and blocks native tools, so it cannot
+    reach a database or the filesystem — it can only restate what the model already
+    produced. See docs/dab-sonnet5-vs-luna-gap-analysis.md sections (i)/(k).
+    """
+    import subprocess
+
+    _make_real_duckdb_fixture(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append(cmd)
+        # first call answers with a markdown table for a 'top 3' question
+        if len(calls) == 1:
+            body = "| Name | V |\n|---|---|\n| a | 1 |\n| b | 2 |\n| c | 3 |"
+        else:
+            body = "a 1, b 2, c 3"
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=json.dumps({"result": body, "num_turns": 2}).encode(), stderr=b""
+        )
+
+    # OFF: exactly one CLI invocation, no gate
+    suite_off = DabSuite(dab_dir=tmp_path, driver="claude-mcp")
+    task = next(iter(suite_off.tasks()))
+    task = task.model_copy(update={"prompt": "What are the top 3 items?"})
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite_off.run_trial(task, trial_num=0, scratch_dir=tmp_path / "off")
+    assert len(calls) == 1
+    assert not any("--append-system-prompt" in c for c in calls)
+
+    # ON: a second, corrective invocation fires and carries no MCP config
+    calls.clear()
+    suite_on = DabSuite(dab_dir=tmp_path, driver="claude-mcp", agent_answer_gate=True)
+    with (
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", new=fake_run),
+    ):
+        await suite_on.run_trial(task, trial_num=0, scratch_dir=tmp_path / "on")
+    assert len(calls) == 2, "one corrective pass should fire on a table-delivered list"
+    assert "--mcp-config" not in calls[1], "the corrective pass must not reach any database"

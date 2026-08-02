@@ -477,3 +477,67 @@ def test_audit_run_keeps_sanctioned_absolute_attach_clean(tmp_path: Path) -> Non
     verdicts = audit_run(trials_jsonl, scratch_dir)
 
     assert verdicts["yelp:1:0"] == CLEAN
+
+
+# --- Fail-closed gate ---------------------------------------------------------------
+#
+# 2026-07-30: several dilution/effort-curve shards wrote an EMPTY trials.jsonl (the
+# file at the path was replaced after _run_interim opened its append handle, so every
+# row landed on an orphaned inode). audit_run iterates the file's lines, so it produced
+# {} — and gate({}) returned "pass with no offenders". The contamination gate therefore
+# passed VACUOUSLY and submission.json was still written, on a run where zero trials
+# had been audited. Given the 58.0% answer-key retraction, an audit that silently
+# audits nothing is worse than one that errors.
+
+
+def test_gate_fails_closed_on_empty_audit() -> None:
+    from labrat.eval.benchmarks.dab.taint import gate
+
+    ok, offenders = gate({})
+    assert not ok, "an audit covering zero trials must never pass"
+    assert offenders, "the failure must name why it was rejected"
+
+
+def test_gate_still_passes_a_real_clean_audit() -> None:
+    from labrat.eval.benchmarks.dab.taint import CLEAN, gate
+
+    ok, offenders = gate({"d:1:0": CLEAN, "d:1:1": CLEAN})
+    assert ok and not offenders
+
+
+# --- corroboration for vocabulary-only contamination signals ------------------------
+#
+# 2026-07-31: the full Opus run's `agnews` shard was BLOCKED from writing
+# submission.json because two trials used the phrase "ground truth" in its ordinary
+# methodological sense — "hand-labeled 250 randomly drawn articles as ground truth" to
+# measure their own classifier. The structural scan found ZERO findings on both traces,
+# and the only benchmark path touched was the sanctioned dataset the harness itself
+# attaches. No leak occurred; the run still lost the shard's submission artifact and
+# burned hours of retries on a deterministic failure.
+#
+# The substring rule is what makes this gate hard to fool, so it stays — but a
+# vocabulary hit ALONE must not condemn a trial. It must be corroborated by evidence
+# of actual access (an answer-shaped path/file/URL in the trace). Anything sourced
+# from a real path still fails on the substring alone, so this is not a whitelist.
+
+
+def test_vocabulary_only_signal_is_not_enough_to_condemn() -> None:
+    from labrat.eval.benchmarks.dab.taint import classify_trial_corroborated
+
+    text = "I hand-labeled 250 randomly drawn articles as ground truth to score my classifier."
+    assert classify_trial_corroborated(text, structural_findings=0) == "clean"
+
+
+def test_vocabulary_signal_plus_structural_evidence_still_condemns() -> None:
+    from labrat.eval.benchmarks.dab.taint import CHEATING, classify_trial_corroborated
+
+    text = "I read the ground truth file to get the answer."
+    assert classify_trial_corroborated(text, structural_findings=1) == CHEATING
+
+
+def test_external_dataset_signal_condemns_without_corroboration() -> None:
+    """An external-label source (HuggingFace / load_dataset) is a leak on its own —
+    there is no innocent methodological reading of it, unlike 'ground truth'."""
+    from labrat.eval.benchmarks.dab.taint import CHEATING, classify_trial_corroborated
+
+    assert classify_trial_corroborated("used load_dataset('ag_news')", 0) == CHEATING

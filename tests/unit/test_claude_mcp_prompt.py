@@ -30,7 +30,7 @@ def test_prompt_contains_question_and_levers() -> None:
     )
     assert "How many rows?" in p  # the task (description + question) is embedded
     assert "never answer from prior" in p  # a process lever
-    assert "respond with the final answer on the last line" in p
+    assert "restate the final answer on the last line" in p
     assert "search_reference_docs" not in p  # cartographer line absent when off
 
 
@@ -72,3 +72,40 @@ def test_prompt_lists_secondary_duckdb(tmp_path: Path) -> None:
     )
     assert "Secondary databases you can bring in via attach_database" in p
     assert f"secondary / {tmp_path / 'secondary.duckdb'} / duckdb" in p
+
+
+def test_tool_guidance_off_by_default() -> None:
+    p = _build_claude_mcp_prompt(
+        "main", _env(), _task(), include_cartographer_line=False, max_tool_calls=None
+    )
+    for tool in ("profile_dataset", "workflow", "column_stats", "check_sql"):
+        assert tool not in p
+
+
+def test_tool_guidance_names_the_zero_call_tools_and_reconciles_cartographer() -> None:
+    p = _build_claude_mcp_prompt(
+        "main",
+        _env(),
+        _task(),
+        include_cartographer_line=True,
+        max_tool_calls=None,
+        include_tool_guidance=True,
+    )
+    for tool in ("profile_dataset", "workflow", "column_stats", "check_sql"):
+        assert tool in p
+    assert "before profiling" not in p
+    assert p.index("search_reference_docs") < p.index("profile_dataset")
+
+
+def test_prompt_asks_for_the_answer_up_front_as_well_as_last() -> None:
+    """2026-07-31: `stockindex:1` scored 1/5 on the Opus run — all four failures had the
+    CORRECT answer on the last line, but that validator reads only `llm_output[:200]`.
+    Our closing line said "on the last line", so we were instructing the model into the
+    failure. Two of 104 validators read a head window; none is harmed by the answer
+    appearing twice, so satisfy both."""
+    p = _build_claude_mcp_prompt(
+        "main", _env(), _task(), include_cartographer_line=False, max_tool_calls=None
+    )
+    low = p.lower()
+    assert "last line" in low, "keep the existing last-line contract"
+    assert "first sentence" in low or "begin" in low or "lead with" in low

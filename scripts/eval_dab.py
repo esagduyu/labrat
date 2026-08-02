@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -256,6 +257,50 @@ def _resume_safe_provenance(
     return merged
 
 
+def _append_trial_row(trials_jsonl: Path, result: TrialResult) -> None:
+    """Append one trial row, re-resolving the path on every call.
+
+    A single long-lived append handle was observed (2026-07-30) to lose EVERY row
+    on most shards of a 3-arm campaign: the file at the path was replaced mid-run,
+    so writes landed on an orphaned inode and trials.jsonl ended 0 bytes even though
+    each write was explicitly flushed. report.md/submission.json were unaffected
+    (they derive from the in-memory list), which is what made it silent — and the
+    taint audit then passed vacuously on zero rows.
+
+    Re-opening per row re-resolves the path, and fsync makes the row durable before
+    the next trial starts. The cost is one open+fsync per trial against a trial that
+    takes tens of seconds.
+    """
+    with trials_jsonl.open("a", encoding="utf-8") as f:
+        f.write(result.model_dump_json() + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _verify_trials_file(trials_jsonl: Path, recorded: list[TrialResult]) -> bool:
+    """Ensure the on-disk row count covers everything we recorded; self-heal if not.
+
+    Returns True if a repair was performed. Belt-and-braces behind
+    ``_append_trial_row``: if the on-disk file somehow still holds fewer rows than
+    the in-memory list, rewrite it from memory so the run cannot silently ship a
+    truncated trials.jsonl (which would also make the taint audit vacuous).
+    """
+    try:
+        on_disk = sum(1 for line in trials_jsonl.read_text().splitlines() if line.strip())
+    except OSError:
+        on_disk = 0
+    if on_disk >= len(recorded):
+        return False
+    print(
+        f"WARNING: {trials_jsonl} holds {on_disk} rows but {len(recorded)} were recorded "
+        "— rewriting from memory (see _append_trial_row docstring).",
+        file=sys.stderr,
+        flush=True,
+    )
+    trials_jsonl.write_text("".join(r.model_dump_json() + "\n" for r in recorded))
+    return True
+
+
 async def _run_interim(
     suite: BenchmarkSuite,
     n_trials: int,
@@ -297,46 +342,45 @@ async def _run_interim(
         wanted = set(task_filter)
         tasks = [t for t in tasks if t.id in wanted]
 
-    with trials_jsonl.open("a") as f:
-        for task in tasks:
-            for trial_num in range(n_trials):
-                if (task.id, trial_num) in completed:
-                    continue
-                scratch = output_dir / "scratch" / task_trial_dir_name(task.id, trial_num)
-                scratch.mkdir(parents=True, exist_ok=True)
-                result = await suite.run_trial(task, trial_num, scratch)
-                artifact = result.artifact
-                payload = artifact.get("payload", "") if isinstance(artifact, dict) else artifact
-                if result.reason != "infra:rate_limit" and is_rate_limit_error(payload):
-                    result = result.model_copy(
-                        update={"passed": False, "reason": "infra:rate_limit"}
-                    )
-                f.write(result.model_dump_json() + "\n")
-                f.flush()
-                all_trials.append(result)
-                reason = result.reason or ""
-                key = (task.id, trial_num)
-                if key in infra_keys_to_rewrite and not reason.startswith("infra:"):
-                    # This resume rerun of a previously-infra trial produced a real
-                    # semantic result — drop the stale infra row(s) for this key so
-                    # the file keeps exactly one row per (task_id, trial_num). A
-                    # rerun that is STILL infra keeps both rows (append-only audit
-                    # trail intact) — see _compact_stale_infra_rows.
-                    _compact_stale_infra_rows(trials_jsonl, key)
-                    infra_keys_to_rewrite.discard(key)
-                if reason.startswith("infra:"):
-                    status = f"INFRA: {reason[len('infra:') :]}"
-                else:
-                    status = "PASS" if result.passed else "FAIL"
-                print(
-                    f"[{task.id} trial {trial_num}] {status} ({result.latency_seconds:.1f}s)",
-                    flush=True,
-                )
-                if reason == "infra:rate_limit":
-                    # The row is flushed above and remains retryable on resume. Stop
-                    # immediately so a quota outage cannot fill trials.jsonl with
-                    # zero-token attempts for every remaining task.
-                    raise _RateLimitStopError(result)
+    trials_jsonl.touch(exist_ok=True)
+    for task in tasks:
+        for trial_num in range(n_trials):
+            if (task.id, trial_num) in completed:
+                continue
+            scratch = output_dir / "scratch" / task_trial_dir_name(task.id, trial_num)
+            scratch.mkdir(parents=True, exist_ok=True)
+            result = await suite.run_trial(task, trial_num, scratch)
+            artifact = result.artifact
+            payload = artifact.get("payload", "") if isinstance(artifact, dict) else artifact
+            if result.reason != "infra:rate_limit" and is_rate_limit_error(payload):
+                result = result.model_copy(update={"passed": False, "reason": "infra:rate_limit"})
+            _append_trial_row(trials_jsonl, result)
+            all_trials.append(result)
+            reason = result.reason or ""
+            key = (task.id, trial_num)
+            if key in infra_keys_to_rewrite and not reason.startswith("infra:"):
+                # This resume rerun of a previously-infra trial produced a real
+                # semantic result — drop the stale infra row(s) for this key so
+                # the file keeps exactly one row per (task_id, trial_num). A
+                # rerun that is STILL infra keeps both rows (append-only audit
+                # trail intact) — see _compact_stale_infra_rows.
+                _compact_stale_infra_rows(trials_jsonl, key)
+                infra_keys_to_rewrite.discard(key)
+            if reason.startswith("infra:"):
+                status = f"INFRA: {reason[len('infra:') :]}"
+            else:
+                status = "PASS" if result.passed else "FAIL"
+            print(
+                f"[{task.id} trial {trial_num}] {status} ({result.latency_seconds:.1f}s)",
+                flush=True,
+            )
+            if reason == "infra:rate_limit":
+                # The row is flushed above and remains retryable on resume. Stop
+                # immediately so a quota outage cannot fill trials.jsonl with
+                # zero-token attempts for every remaining task.
+                raise _RateLimitStopError(result)
+
+    _verify_trials_file(trials_jsonl, all_trials)
 
     score = suite.aggregate(all_trials)
     return BenchmarkReport(
@@ -489,6 +533,32 @@ def main(argv: list[str] | None = None) -> int:
             "under the trial scratch dir; exposes the get_artifact tool). Distinct "
             "from --agent-ledger, which is the in-process ledger on the labrat-agent "
             "driver only. Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
+        "--agent-answer-gate",
+        action="store_true",
+        default=None,
+        help=(
+            "Deterministic answer-shape gate on the claude-mcp driver: checks the final "
+            "answer for delivery failures we have measured costing otherwise-correct "
+            "trials (requested-count shortfall, list delivered as a markdown table, "
+            "fraction answered as a percentage) and makes ONE presentation-only "
+            "corrective pass. The corrective call carries no MCP config and blocks all "
+            "native tools, so it cannot reach a database. Off by default — for ablation."
+        ),
+    )
+    parser.add_argument(
+        "--agent-mcp-tool-prompt",
+        action="store_true",
+        default=None,
+        help=(
+            "Name the otherwise-unmentioned tools (profile_dataset, workflow, "
+            "column_stats, check_sql) in the claude-mcp OPENING USER MESSAGE, and "
+            "reconcile the Cartographer line's 'before profiling' wording. Measured "
+            "0.0pp on score (p=1.0) but lifts profile_dataset 0.00->0.92 and workflow "
+            "0.00->3.62 calls/trial, so it is carried for tool-exercise and trace value. "
+            "Off by default. claude-mcp only."
         ),
     )
     parser.add_argument(
@@ -716,6 +786,8 @@ def main(argv: list[str] | None = None) -> int:
         ("agent_levers", args.agent_levers),
         ("agent_ledger", args.agent_ledger),
         ("agent_mcp_ledger", args.agent_mcp_ledger),
+        ("agent_answer_gate", args.agent_answer_gate),
+        ("agent_mcp_tool_prompt", args.agent_mcp_tool_prompt),
         ("agent_taxonomy", args.agent_taxonomy),
     ]:
         prior = existing_cfg.get(field)
@@ -755,6 +827,16 @@ def main(argv: list[str] | None = None) -> int:
         args.agent_mcp_ledger
         if args.agent_mcp_ledger is not None
         else existing_cfg.get("agent_mcp_ledger", False)
+    )
+    effective_answer_gate: bool = bool(
+        args.agent_answer_gate
+        if args.agent_answer_gate is not None
+        else existing_cfg.get("agent_answer_gate", False)
+    )
+    effective_mcp_tool_prompt: bool = bool(
+        args.agent_mcp_tool_prompt
+        if args.agent_mcp_tool_prompt is not None
+        else existing_cfg.get("agent_mcp_tool_prompt", False)
     )
     effective_cartograph_semantics: bool = bool(
         args.cartograph_semantics
@@ -956,6 +1038,8 @@ def main(argv: list[str] | None = None) -> int:
         agent_levers=effective_levers,
         agent_ledger=effective_ledger,
         agent_mcp_ledger=effective_mcp_ledger,
+        agent_answer_gate=effective_answer_gate,
+        agent_mcp_tool_prompt=effective_mcp_tool_prompt,
         agent_taxonomy=effective_taxonomy,
         cartograph=effective_cartograph,
         cartograph_semantics=effective_cartograph_semantics,
@@ -1020,6 +1104,8 @@ def main(argv: list[str] | None = None) -> int:
         "agent_levers": effective_levers,
         "agent_ledger": effective_ledger,
         "agent_mcp_ledger": effective_mcp_ledger,
+        "agent_answer_gate": effective_answer_gate,
+        "agent_mcp_tool_prompt": effective_mcp_tool_prompt,
         "agent_taxonomy": effective_taxonomy,
         "trace_attempt_policy": (
             "not-applicable" if effective_driver == "raw-bash" else "reset_on_attempt"
@@ -1088,7 +1174,15 @@ def main(argv: list[str] | None = None) -> int:
     trials_jsonl = output_dir / "trials.jsonl"
     scratch_dir = output_dir / "scratch"
     verdicts = audit_run(trials_jsonl, scratch_dir)
-    ok, offenders = gate(verdicts)
+    if report.trials:
+        # gate() fails closed on an empty verdict set, which is what catches a
+        # trials.jsonl that was written to an orphaned inode: rows exist in memory
+        # but the audit saw none, so nothing was actually screened (2026-07-30).
+        ok, offenders = gate(verdicts)
+    else:
+        # A run that executed no trials (empty dab-dir / fully-filtered invocation)
+        # has nothing to audit and nothing meaningful to submit.
+        ok, offenders = True, []
     if not ok:
         print(
             f"\nTaint audit FAILED: {len(offenders)} trial(s) flagged as "

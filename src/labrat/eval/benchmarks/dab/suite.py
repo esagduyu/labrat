@@ -328,12 +328,49 @@ def _safe_name(name: str) -> str:
     return cleaned or "dataset"
 
 
-def _cartographer_prompt_line() -> str:
+def _cartographer_prompt_line(*, reconcile_with_profiling: bool = False) -> str:
+    """Scent-first grounding line.
+
+    ``reconcile_with_profiling`` exists because the stock wording ends "before
+    profiling or writing SQL", which tells the model NOT to profile — the exact
+    opposite of ``_mcp_tool_guidance_lines``. When both are on they are sequenced
+    rather than left contradicting each other.
+    """
+    if reconcile_with_profiling:
+        return (
+            "A curated reference doc for this database has been pre-generated. Call "
+            "search_reference_docs(question) FIRST for grounding (table grain, verified "
+            "join keys, observed dimension values), then call profile_dataset once for "
+            "the live schema, before writing SQL."
+        )
     return (
         "A curated reference doc for this database has been pre-generated. Call "
         "search_reference_docs(question) FIRST for grounding (table grain, verified join "
         "keys, observed dimension values) before profiling or writing SQL."
     )
+
+
+def _mcp_tool_guidance_lines() -> list[str]:
+    """Imperative naming of tools the claude-mcp opening message otherwise omits.
+
+    Across the 2026-07-24 Sonnet run these were called exactly zero times in 270
+    trials while the labrat-agent path used them heavily. Naming them in the appended
+    system prompt lifted profile_dataset only to 0.29 calls/trial; naming them HERE,
+    in the opening user message, lifted it to 0.92 and workflow to 3.62 — the channel
+    traces show actually steering tool choice. Score effect measured at 0.0pp
+    (19/24 vs 20/24, Fisher p=1.0), so this is carried for the tool-exercise and
+    trace value, not as a scoring lever. See docs/dab-sonnet5-vs-luna-gap-analysis.md
+    sections (f) and (i).
+    """
+    return [
+        "Call profile_dataset once before writing SQL: one call returns every table's "
+        "columns, types, row counts, foreign keys and sample rows, which is cheaper and "
+        "more reliable than rediscovering the schema through repeated queries.",
+        "Track your plan with workflow — mark each step 'doing' when you start it and "
+        "'done' when you finish. It never blocks and keeps your plan visible across turns.",
+        "Use column_stats to check a column's range, nulls and distinct values before you "
+        "filter on it, and check_sql to validate a query before running it.",
+    ]
 
 
 def _dab_lever_lines() -> list[str]:
@@ -344,8 +381,18 @@ def _dab_lever_lines() -> list[str]:
     (force-query), implementation errors (repair via run_sql diagnostics),
     broad-fetch-then-tally (push aggregation into SQL), tie-band truncation
     both ways (top-N under-emission and single-item over-emission), list
-    under-emission on 'each'/ranking questions, and proximity delivery (name
-    and value adjacent, not table-separated).
+    under-emission on 'each'/ranking questions, proximity delivery (name
+    and value adjacent, not table-separated), free-text match/parse
+    completeness (synonym-aware filtering and multi-format value parsing),
+    and byte-verbatim value delivery (no reformatting a stored value).
+
+    NOTE: a convention-pinning lever was removed 2026-07-30. It never moved its
+    only target (patents:2: 0/5 -> 0/3 full run, 0/3 smoke) and both saturated-task
+    regressions in the dilution run were convention-flavoured — github_repos:3
+    pinned "Shell as PRIMARY language" and answered 0 where passing runs read
+    "Shell in the language mix"; yelp:1 locked a wrong averaging basis. A zero
+    result is exactly the sanity signal that should force a rethink, and the lever
+    told the model to hold its convention absent such a signal.
     """
     return [
         "Always derive the answer by querying the database — never answer from prior "
@@ -367,6 +414,18 @@ def _dab_lever_lines() -> list[str]:
         "State each item and its requested value directly adjacent as plain tokens (name "
         "then value), not in a markdown table or separated by other columns — keep the "
         "value within a few characters of its label so it reads unambiguously.",
+        "A keyword or LIKE filter on free text matches spelling, not meaning, and silently "
+        "drops rows that qualify by synonym, word form, or a match stated in another column; "
+        "when such a filter drives the answer and the candidate set is small (roughly a few "
+        "hundred rows or fewer), enumerate and judge the rows (or use llm_classify) rather "
+        "than trusting the pattern — widening how you match (synonyms, word forms, other "
+        "columns), never the question's stated criterion for inclusion. Before comparing or "
+        "extracting values encoded as text (dates, times, ranges), first sample the column to "
+        "learn every format present and handle all of them — a single-format parse silently "
+        "drops the rest.",
+        "Deliver a value exactly as it is stored: copy the cell's characters byte-for-byte "
+        "without reformatting, re-spacing, normalizing separators or dashes, or otherwise "
+        "tidying it. If the answer is a value taken from a cell, echo that cell's exact token.",
     ]
 
 
@@ -446,6 +505,7 @@ def _build_claude_mcp_prompt(
     include_cartographer_line: bool,
     max_tool_calls: int | None,
     include_levers: bool = True,
+    include_tool_guidance: bool = False,
 ) -> str:
     """Build the claude-mcp driver's opening user message.
 
@@ -464,7 +524,11 @@ def _build_claude_mcp_prompt(
         "keys match and won't fan out.",
     ]
     if include_cartographer_line:
-        prompt_lines.insert(1, _cartographer_prompt_line())
+        prompt_lines.insert(
+            1, _cartographer_prompt_line(reconcile_with_profiling=include_tool_guidance)
+        )
+    if include_tool_guidance:
+        prompt_lines.extend(_mcp_tool_guidance_lines())
     if include_levers:
         prompt_lines.extend(_dab_lever_lines())
     if env_spec.attachable:
@@ -492,7 +556,13 @@ def _build_claude_mcp_prompt(
             "Question:",
             task.prompt,
             "",
-            "When confident, respond with the final answer on the last line.",
+            # Answer placement: lead with it AND close with it. Some validators read
+            # only the head of the output (llm_output[:200]); the previous
+            # last-line-only wording cost a task 4/5 on 2026-07-31 where every failing
+            # trial had the CORRECT answer, just past the window. No validator is
+            # harmed by the answer appearing twice.
+            "Begin your reply with the answer in the first sentence, then show your "
+            "work, and restate the final answer on the last line.",
         ]
     )
     # max_tool_calls is advisory under claude-mcp (the CLI has no native cap);
@@ -630,6 +700,8 @@ class DabSuite:
         agent_levers: bool = True,
         agent_ledger: bool = True,
         agent_mcp_ledger: bool = False,
+        agent_answer_gate: bool = False,
+        agent_mcp_tool_prompt: bool = False,
         agent_taxonomy: bool = False,
         cartograph: bool = False,
         cartograph_semantics: bool = False,
@@ -690,6 +762,8 @@ class DabSuite:
         # drivers have no shared runtime, so this needs its own flag. Off by default,
         # mirroring `cartograph`.
         self._agent_mcp_ledger = agent_mcp_ledger
+        self._agent_answer_gate = agent_answer_gate
+        self._agent_mcp_tool_prompt = agent_mcp_tool_prompt
         self._agent_taxonomy = agent_taxonomy
         # Opt-in deterministic cartographer pre-pass: generates per-dataset Scent docs
         # into a per-run temp dir so the agent can consult them via search_reference_docs.
@@ -1560,6 +1634,7 @@ class DabSuite:
             include_cartographer_line=maze_root is not None,
             max_tool_calls=self._agent_max_tool_calls,
             include_levers=self._agent_levers,
+            include_tool_guidance=self._agent_mcp_tool_prompt,
         )
         if extra_instructions:
             prompt = f"{prompt}\n\n{extra_instructions}"
@@ -1663,7 +1738,77 @@ class DabSuite:
 
         # num_turns counts assistant rounds; tool calls = rounds beyond the final answer.
         tool_calls = max(0, num_turns - 1)
+        if self._agent_answer_gate and final_text.strip():
+            final_text = await self._apply_answer_gate(task.prompt, final_text, scratch_dir)
         return DriverOutcome(final_text, tool_calls, latency)
+
+    async def _apply_answer_gate(self, question: str, final_text: str, scratch_dir: Path) -> str:
+        """Run deterministic shape checks; on a violation, make ONE corrective pass.
+
+        The corrective call is presentation-only by construction: it passes no
+        ``--mcp-config`` and blocks every native tool, so it cannot reach a database,
+        the filesystem or the network. It can only restate what the model already
+        produced. That is what makes it safe to run without re-auditing for
+        contamination — there is no new evidence path for an answer to come from.
+
+        Bounded to a single attempt. If the corrective call fails or returns nothing,
+        the original answer stands: a delivery check must never be able to destroy an
+        otherwise-good answer.
+        """
+        import shutil
+        import subprocess
+
+        from labrat.eval.benchmarks.dab.answer_gate import check_answer, format_violations
+
+        violations = check_answer(question=question, answer=final_text)
+        log = scratch_dir / "answer_gate.json"
+        if not violations:
+            log.write_text(json.dumps({"violations": [], "corrected": False}, indent=2))
+            return final_text
+
+        prompt = (
+            f"{question}\n\nYour previous answer:\n{final_text}\n\n{format_violations(violations)}"
+        )
+        cmd = [
+            "claude",
+            "--print",
+            "--model",
+            self._agent_model,
+            "--permission-mode",
+            "bypassPermissions",
+            "--disallowedTools",
+            _BLOCKED_NATIVE_TOOLS,
+            "--output-format",
+            "json",
+            "-p",
+            prompt,
+        ]
+        corrected = ""
+        if shutil.which("claude"):
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("ANTHROPIC_API_KEY", "CLAUDECODE") and not k.startswith("CLAUDE_CODE")
+            }
+            try:
+                proc = await asyncio.to_thread(
+                    subprocess.run, cmd, capture_output=True, timeout=300, env=env
+                )
+                data = json.loads(proc.stdout.decode(errors="replace") or "{}")
+                if isinstance(data, dict) and "result" in data:
+                    corrected = str(data["result"])  # type: ignore[arg-type]
+            except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+                corrected = ""
+        log.write_text(
+            json.dumps(
+                {
+                    "violations": [{"code": v.code, "detail": v.detail} for v in violations],
+                    "corrected": bool(corrected.strip()),
+                },
+                indent=2,
+            )
+        )
+        return corrected if corrected.strip() else final_text
 
     # ── labrat-agent driver (Phase 4 measurement) ────────────────────────────
 
