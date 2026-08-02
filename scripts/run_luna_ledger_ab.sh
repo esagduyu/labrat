@@ -17,10 +17,12 @@
 #   control:   packs ON, ledger budget DEFAULT (8000)
 #   treatment: packs ON, --agent-ledger-max-bytes 64000
 #
-# PRIMARY (mechanism, detectable regardless of score noise): count of tool outputs
-# truncated at the ledger cap in agent_tool_calls.jsonl — treatment must drop to ~0.
-# If treatment still truncates, the flag is not wired end-to-end: ABORT and debug,
-# do not read scores. SECONDARY (score): n=140/arm detects |delta| >= ~0.15 at 80%
+# PRIMARY (mechanism, detectable regardless of score noise): traces record the FULL
+# tool output by design (loop.py: ledger bounds the model-visible string only), so
+# truncation count := ok-calls in agent_tool_calls.jsonl with len(output) > cap.
+# Smoke-verified 2026-08-02 (deps_dev_v1 n=1): control 6 capped calls (top 31 KB),
+# treatment 0 over its 64 KB cap. If treatment shows counts ~= control at cap 64000,
+# the flag is not wired end-to-end: ABORT and debug, do not read scores. SECONDARY (score): n=140/arm detects |delta| >= ~0.15 at 80%
 # power; anything smaller is diagnostic only (per-task flip table).
 # WHAT CHANGES WHAT: truncations ~0 AND score >= control -> adopt flag (mechanism
 # fix, no measured cost); score < control by >= 10pp -> investigate before adopting;
