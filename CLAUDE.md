@@ -254,6 +254,23 @@ change if the code were wrong — a smoke test that passes identically with the 
 is not a smoke test. Verify the runner's plumbing too: durable row writes, resume
 resolution, the off-path golden hash.
 
+**7. An experiment is designed before it is launched — and the design says what would change your mind.**
+The brainstorming skill already covers purpose and success criteria for *features*; this rule
+exists because *measurements* were never treated as things that get designed at all (the
+ablation that judged a whole build was an untracked shell script). Its only non-redundant
+content is quantitative. Before any run costing >1h or >50 trials, write into the runner
+itself: the decision it informs, the smallest effect worth acting on, the n needed to detect
+that effect at 80% power, and the result that would change the decision. **If the required n
+exceeds the budget, the run cannot answer its question — redesign it or don't run it.**
+- **Filter saturated units first.** Units already at 0% or 100% carry no information and
+  consume budget. In the 2026-08-01 ablation, 38 of 51 tasks were saturated and identical
+  across all five conditions: 75% of a ~20h Max-plan spend bought nothing, and the whole
+  result turned on 8 trial-flips across 13 tasks.
+- **Translate the effect into the decision's own units before spending.** That ablation's
+  ceiling was computable in advance: with only 13 movable tasks, even a +0.20/trial effect
+  (3× anything observed) was worth +4.8pp on the leaderboard — short of the target that
+  motivated it. Sixty seconds of arithmetic would have cancelled the run.
+
 ## Key conventions
 
 - Pyright strict applies to all of `src/labrat/` except `dspy_opt/` and `screens/`.
