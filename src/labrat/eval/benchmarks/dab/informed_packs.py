@@ -46,7 +46,9 @@ def answer_shape_lines() -> list[str]:
         "When the requested value is itself a stored structure — a schedule, a list, a "
         "mapping — reproduce the whole structure entry by entry as stored, with every "
         "entry kept, even one that records absence or emptiness. Never shorten it to "
-        "a digest or an abridged span.",
+        "a digest or an abridged span, and carry the whole structure into the final "
+        "answer next to its item — a structure shown only in earlier notes is not "
+        "delivered.",
     ]
 
 
