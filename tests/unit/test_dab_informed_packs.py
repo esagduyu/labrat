@@ -63,15 +63,30 @@ _STOPWORDS = frozenset(
 )
 
 
-def test_answer_shape_pack_covers_its_three_measured_failures() -> None:
+def test_answer_shape_pack_covers_its_four_measured_failures() -> None:
     """Derived from: pancancer_atlas:1 (we emitted names, expected form is codes),
     patents:2 (we emitted one group where the result is per-group), googlelocal:1
-    (ordering). Assertions check the CONCEPT is present, not exact wording."""
+    (ordering), and — v2, from the 2026-08-02 Opus packs-ON run — googlelocal:3
+    (a stored structure delivered as a summary). Assertions check the CONCEPT is
+    present, not exact wording."""
     text = " ".join(answer_shape_lines()).lower()
     assert "code" in text and "name" in text  # identifier form
     assert "every" in text and "group" in text  # enumerate all groups
     assert "order" in text  # ranking order
-    assert len(answer_shape_lines()) == 3
+    assert "structure" in text and "entry" in text  # reproduce stored structures
+    assert len(answer_shape_lines()) == 4
+
+
+def test_answer_shape_never_interposes_between_label_and_value() -> None:
+    """v2 regression guard for the googlelocal:2 collapse (3/5 -> 0/5): the v1
+    identifier rule told the model to give the secondary form 'alongside', which it
+    read as 'Name (code) value' — pushing the value outside a validator's
+    name->score adjacency window. The rule must now explicitly forbid placing
+    anything between a label and its value, agreeing with the generic adjacency
+    lever rather than fighting it."""
+    text = " ".join(answer_shape_lines()).lower()
+    assert "never between a label and its value" in text
+    assert "alongside" not in text  # the v1 wording that caused the interposition
 
 
 def test_validator_shape_pack_covers_precision_only() -> None:

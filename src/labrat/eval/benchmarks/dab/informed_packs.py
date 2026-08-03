@@ -18,18 +18,35 @@ from __future__ import annotations
 def answer_shape_lines() -> list[str]:
     """Pack A — how the answer should be shaped.
 
-    Targets three measured failures: an entity reported by human-readable name where
-    the coded form was expected; a per-group result collapsed to a single winner; and
-    a ranked list emitted out of order.
+    v1 targeted three measured failures: an entity reported by human-readable name
+    where the coded form was expected; a per-group result collapsed to a single
+    winner; and a ranked list emitted out of order.
+
+    v2 (2026-08-03, from the Opus packs-ON run vs the archived packs-OFF control):
+    rule 1's v1 wording ("give the name alongside it") made the model interpose the
+    secondary identifier BETWEEN a label and its value ("Name (code) 5.0"), which
+    pushed the value outside a validator's name->score adjacency window and turned
+    googlelocal:2 from 3/5 to 0/5 — the delivery side-effect is now forbidden
+    explicitly, and the rule defers to the question's requested form instead of
+    defaulting to the code (the default-to-code reading was the v1 shape of the
+    pancancer query2 near-miss an Opus review caught). Rule 4 is new: googlelocal:3
+    fell 3/5 -> 0/5 because a stored weekly schedule was delivered as a summary
+    span; the byte-verbatim lever covers single cells but nothing covered
+    multi-element stored structures.
     """
     return [
         "When a table offers both a coded identifier and a human-readable name for the "
-        "same entity, report the coded form, unless the question explicitly asks for "
-        "the name. Give the name alongside it only as secondary context.",
+        "same entity, work out which form the question asks for and deliver that form "
+        "immediately followed by the value the question asks about. Add the second "
+        "form only after that value — never between a label and its value.",
         "When the result is per-group — per category, per type, per code, per period — "
         "emit EVERY eligible group, not just the leading one.",
         "Present items in the order the question asks for. If it asks for a ranking, "
         "emit them in rank order and keep that order in the final answer line.",
+        "When the requested value is itself a stored structure — a schedule, a list, a "
+        "mapping — reproduce the whole structure entry by entry as stored, with every "
+        "entry kept, even one that records absence or emptiness. Never shorten it to "
+        "a digest or an abridged span.",
     ]
 
 

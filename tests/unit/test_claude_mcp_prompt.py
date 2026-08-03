@@ -101,7 +101,7 @@ def test_informed_packs_are_off_by_default_and_composable() -> None:
     off = _build_claude_mcp_prompt(
         "main", _env(), _task(), include_cartographer_line=False, max_tool_calls=None
     )
-    assert "coded form" not in off
+    assert "coded identifier" not in off
     assert "side by side" not in off
 
     on = _build_claude_mcp_prompt(
@@ -113,7 +113,7 @@ def test_informed_packs_are_off_by_default_and_composable() -> None:
         informed_shape=True,
         informed_validator=True,
     )
-    assert "coded form" in on
+    assert "coded identifier" in on
     assert "side by side" in on
 
 
