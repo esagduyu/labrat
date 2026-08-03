@@ -89,17 +89,20 @@ def test_answer_shape_never_interposes_between_label_and_value() -> None:
     assert "alongside" not in text  # the v1 wording that caused the interposition
 
 
-def test_validator_shape_pack_covers_precision_only() -> None:
-    """Pack B was cut from three rules to one on 2026-07-31: adjacency duplicated
-    `_dab_lever_lines()` lever 7 (proximity delivery) and head-placement duplicated
-    `_build_claude_mcp_prompt`'s own closing line, so both were dropped. Only the
-    full-precision/rounded-form rule for self-computed values remains, scoped so it
-    doesn't overlap lever 9's byte-verbatim rule for values copied from a cell."""
+def test_validator_shape_pack_covers_precision_and_first_mention() -> None:
+    """Pack B was cut from three rules to one on 2026-07-31 (duplicates of lever 7 /
+    the prompt's own closing line). v2.2 adds back a genuinely new placement rule:
+    the googlelocal:3 autopsy showed a grader class that anchors to an item's FIRST
+    mention and reads a bounded window there, so values delivered only at a later
+    restatement can never score. Distinct from lever 7 (token adjacency) and from
+    head-placement (which line answers first) — this is WHICH mention carries the
+    values."""
     text = " ".join(validator_shape_lines()).lower()
     assert "precision" in text  # full + rounded
     assert "side by side" in text
     assert "computed" in text  # scoped away from copied-cell values (lever 9's territory)
-    assert len(validator_shape_lines()) == 1
+    assert "first time" in text and "immediately after" in text  # first-mention delivery
+    assert len(validator_shape_lines()) == 2
 
 
 def test_analytical_conventions_pack_covers_the_four_recurring_choices() -> None:

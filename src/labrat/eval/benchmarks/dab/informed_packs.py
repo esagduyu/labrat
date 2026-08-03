@@ -65,11 +65,22 @@ def validator_shape_lines() -> list[str]:
     makes its ablation arm uninterpretable, so only the genuinely new rule remains:
     the full-precision/rounded pairing for a value the agent computed itself, scoped
     to not overlap lever 9's byte-verbatim rule for values copied from a cell.
+
+    v2.2 (2026-08-03) adds the first-mention rule, derived from the googlelocal:3
+    autopsy: three successive final-answer-focused fixes failed because the grader
+    class at issue anchors to an item's FIRST mention and reads a bounded window
+    there — an item named early in analysis prose without its values can never be
+    repaired by a later restatement. The rule encodes placement form only; the
+    contamination gate checks its tokens like any other line.
     """
     return [
         "For a numeric answer you computed yourself, give the full-precision value and "
         "a rounded form side by side, so either can be read. This does not apply to a "
         "value copied from a cell — reproduce those exactly as stored.",
+        "The first time an answer item's name occurs in your reply, give that item's "
+        "requested values there, immediately after it. Values attached only to a later "
+        "repeat of the name may never be read — so do not write an answer item's name "
+        "in early analysis prose without its values.",
     ]
 
 
