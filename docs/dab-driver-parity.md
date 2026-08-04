@@ -18,6 +18,7 @@ backstop, infra classification, resume) and the same `build_data_tools_registry(
 | 8 | Per-trial wall-clock timeout | subprocess timeout | `asyncio.wait_for` → `infra:timeout` | ✅ closed (P2) |
 | 9 | Answer extraction + scoring | shared `score_with_validator` | same | ✅ parity |
 | 10 | Resume + infra classification | shared | shared | ✅ parity |
+| 11 | Informed packs (`--informed-*` ×4) | opening user message | system prompt | ✅ parity (both builders, verified by prompt-builder assertion 2026-08-02) |
 | 11 | Submission artifacts | config/trials/submission/report + traces | same + traces | ✅ parity |
 | 12 | Variant-Scent diversity (consensus sub-run decorrelation) | `variant_seed=diversity_index or 0` into `_run_cartographer` | same (closed P5) | ✅ parity |
 | 13 | Framing rotation (`_framing_for`) on diversified sub-runs | yes | yes | ✅ parity |

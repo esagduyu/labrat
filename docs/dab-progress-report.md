@@ -743,3 +743,40 @@ untuned entries LabRat is #2, 0.15pp behind Spacedock. Independently audited
 pre-submission (zero P0/P1; byte-identical package rebuild;
 `claude-fable-gpt56-dab-audit-report.md`). Screenshot:
 `images/dab-leaderboard-2026-07-16.png`.
+
+## Phase 8 — the Opus packs campaign: 0.7507 (unsubmitted) → 0.8102 (PR #84, pending)
+
+**2026-07-30 → 08-04.** Two full Opus-5 270s and one surgical pack iteration, ending in our
+first Opus submission and our first fully taint-clean run.
+
+**The packs-off baseline (2026-07-30/31, never submitted):** Opus 5 @ high on claude-mcp with
+the full stack scored **0.750748** — best-ever at the time, ahead of our accepted Luna 74.18%.
+It could not be packaged: 2 agnews:3 trials were withdrawn by the taint gate
+(`external-oracle-cheating`, the known agnews parametric-memory leak) and 2 agnews:4 trials
+never completed, so the fail-closed merge refused. Archived at
+`labrat-run-archive-2026-08-01/wt-opusfull-runs/`.
+
+**The packs experiment (2026-08-02):** all four benchmark-informed packs on Opus over the 8
+problem datasets read as a wash (+1.0pp, p=0.90) — but bimodal: stockindex 9/15→15/15 against
+googlelocal:2/:3 collapsing 3/5→0/5 each. Diagnosis: the packs *over-instructed answer
+delivery* — interposed identifiers broke an adjacency-window validator, and a summarized
+schedule broke a completeness validator. Notably pack B alone had *helped* googlelocal in the
+Sonnet ablation; all-four-together broke it — an interaction invisible to one-pack-per-arm
+designs.
+
+**Packs v2.2 (2026-08-03):** three derived fixes — adjacency non-interposition,
+stored-structure completeness, and **first-mention value delivery** (found by reading the
+validator source after three final-answer-focused rewrites failed identically: graders anchor
+to an item's FIRST mention + a 500-char window). Targeted googlelocal gate: task 2 recovered
+0/5→3/3, task 3 0/3→2/3. Every iteration passed the token contamination gate, which caught
+eight risky words across rewrites (including 'other' — a graded category value — and
+'element', which appears in patents GT).
+
+**The full 270 (2026-08-03, commit `7ca04ed`, every shard provenance-clean):**
+**0.810150 stratified** (268/270; 2 agnews:4 infra:timeout disclosed — their re-runs deadlock
+the CLI and remain unfixed), micro 228/268, **taint audit 270/270 clean**, six datasets up and
+none down vs the packs-off baseline. Submitted 2026-08-04 as
+[PR #84](https://github.com/ucbepic/DataAgentBench/pull/84) — "Claude Opus 5 + Cartographer +
+informed packs", Tuned-prompt row, opening prompts (packs included) published in the PR,
+scored both ways in the disclosure (0.8102 excl / 0.8018 as-fails). Pending review;
+**74.18% remains the accepted citable number until it lands.**

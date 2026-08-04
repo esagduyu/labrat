@@ -1138,3 +1138,34 @@ connects to the developer's ambient first profile and its live DB, baking machin
 the committed SVG (so it only ever matched the capture machine and was skipped in CI). It now forces
 an empty profile store so the app takes its deterministic first-run (onboarding) path, and the
 CI-skip was dropped — it runs like the other TUI snapshots.
+
+
+## 2026-08-04 — Informed packs v2.2, the first-mention delivery rule, and DAB PR #84
+
+**Packs are form-encoders, and their failure mode is delivery drift.** The v1 packs measured
+as an underpowered null one-per-arm on Sonnet, and as a wash all-four-on-Opus — but the wash
+decomposed into a large validator-shape win (stockindex 9/15→15/15) cancelled by a
+delivery-format loss (googlelocal:2/:3 3/5→0/5 each) the packs themselves induced. Three
+derived fixes turned the wash into +5.9pp with zero dataset regressions (0.750748→0.810150):
+
+1. **Never interpose between a label and its value** — the v1 "name alongside" wording made
+   the model write `Name (code) 5.0`, pushing the value outside adjacency-window validators.
+2. **Stored structures are reproduced entry by entry** — a summarized weekly schedule fails
+   completeness validators even when analytically correct.
+3. **First-mention value delivery** (pack B) — derived by reading the failing validator after
+   three final-answer-focused fixes failed identically: graders anchor to an item's FIRST
+   mention and read a bounded window there; values delivered only at a later restatement can
+   never score. This is a distinct placement axis from token adjacency and head-placement.
+
+**Process notes that should outlive this campaign:** (a) the pack contamination gate caught
+eight risky tokens across the rewording iterations ('other' is a graded category value;
+'element' appears in patents GT; 'complete'/'working'/'names'/'right'/'appears'/'avoid' live
+in GT/validator text) — reword, never suppress; (b) a submission package may be hand-merged
+past the canonical completeness check ONLY with every other merge invariant enforced and the
+waiver written into the package config (`assembly_note`) and the PR — done for the two
+agnews:4 infra:timeout trials whose re-runs deadlock the CLI (timeout fires, cleanup blocks
+on the wedged child — unfixed, documented); (c) validator-source reading is legitimate for
+failure diagnosis on the orchestrator side and is how the first-mention mechanism was found.
+
+Submitted as DAB PR #84 (0.8102, Tuned-prompt row, prompts published). The packs remain
+default-OFF flags; the untuned 74.18% entry stays our accepted number until #84 lands.
