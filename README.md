@@ -45,11 +45,9 @@ LabRat is measured on the two most serious public **agentic** data benchmarks �
 
 Natural-language query answering across 12 datasets / 54 queries / 4 database systems (DuckDB, SQLite, PostgreSQL, MongoDB), many requiring cross-database joins. **LabRat holds four rows on the public leaderboard, led by #6 at a stratified Pass@1 of 0.8018** ([PR #84](https://github.com/ucbepic/DataAgentBench/pull/84), Claude Opus 5 + the full grounding stack + four published benchmark-informed rule packs, *Tuned prompt* mark). Among **untuned** entries LabRat is **#2 at 74.2%** ([PR #72](https://github.com/ucbepic/DataAgentBench/pull/72), GPT‑5.6 Luna Max, 0.15pp behind the untuned leader). Our grounding is general-purpose: the same stack, measured per backbone, with the asymmetries published.
 
-![LabRat #5 on the DataAgentBench leaderboard, 74.2%](docs/images/dab-leaderboard-2026-07-16.png)
+![LabRat #6 on the DataAgentBench leaderboard, 0.8018](docs/images/dab-leaderboard-2026-08-06.png)
 
 **Update 2026-08-06 — ACCEPTED at #6, our first Claude Opus 5 entry:** [PR #84](https://github.com/ucbepic/DataAgentBench/pull/84) landed at **0.8018 stratified Pass@1** (board footnote: 2 of 270 trials were infrastructure timeouts counted as non-passes; excluding them gives 0.8102). Opus 5 + the same grounding stack + four benchmark-informed rule packs, contamination-gated and fully published in the PR — hence the *Tuned prompt* mark. First LabRat submission with a fully clean per-trial taint audit (270/270 verdicts), verified from the 268-trace bundle attached in review.
-
-![LabRat #6 on the DataAgentBench leaderboard, 0.8018](docs/images/dab-leaderboard-2026-08-06.png)
 
 | Run | Scope | Score | What it measures |
 |-----|-------|-------|------------------|
