@@ -52,10 +52,11 @@ Natural-language query answering across 12 datasets / 54 queries / 4 database sy
 | Run | Scope | Score | What it measures |
 |-----|-------|-------|------------------|
 | tool-layer | 5 datasets · 17 queries | **48.5% → 54.0%** | raw-Claude floor → *with* LabRat's tool layer (**+5.5pp** measured lift) |
-| Sonnet entry | 12 datasets · 54 queries | **60.9%** | Claude Sonnet 4.6 + Cartographer + levers + hints — still on the board at #13 |
-| **current entry** | 12 datasets · 54 queries | **74.2%** | **GPT‑5.6 (Luna, max reasoning) + Cartographer + levers + hints + the Context Ledger** |
+| Sonnet entry (#18) | 12 datasets · 54 queries | **60.9%** | Claude Sonnet 4.6 + Cartographer + levers + hints |
+| Luna entry (#9) | 12 datasets · 54 queries | **74.2%** | GPT‑5.6 (Luna, max reasoning) + Cartographer + levers + hints + the Context Ledger — **#2 among untuned-prompt entries** |
+| **current best (#6)** | 12 datasets · 54 queries | **0.8018** | **Claude Opus 5 + the full stack + four published benchmark-informed rule packs** (*Tuned prompt* mark) |
 
-**The two entries together are the point: the grounding layer is provider-aware.** The same [Cartographer](#roadmap) pre-pass that lifts Sonnet +8pp *regresses* GPT‑5.x when used alone — but interacts positively inside the full stack (each claim ablated; the per-backbone asymmetries are published, and defaults are conditioned on them). The 74.2% run is **integrity-first**: no shell or filesystem tools in the agent's registry (no path to answer keys by construction), all 270 trials traced (10,591 tool calls) and independently audited, the submission package rebuilds **byte-identically** from its source runs, opening prompts disclosed per query, score-conservative evaluator caps disclosed, and `Hints: Yes` declared. Strongest datasets: **bookreview 100%, stockindex 93%, music_brainz 93%, googlelocal 90%, yelp 89%, crmarenapro 82%**. Full story: **[docs/dab-solultra-ablation.md](docs/dab-solultra-ablation.md)** (the GPT‑5.6 campaign + ablations) and **[docs/dab-progress-report.md](docs/dab-progress-report.md)** (the Sonnet-era history).
+**The entries together are the point: the grounding layer is provider-aware.** The same [Cartographer](#roadmap) pre-pass that lifts Sonnet +8pp *regresses* GPT‑5.x when used alone — but interacts positively inside the full stack (each claim ablated; the per-backbone asymmetries are published, and defaults are conditioned on them). Every submission is **integrity-first**: no shell or filesystem tools in the agent's registry (no path to answer keys by construction), every trial traced and auditable, per-trial contamination verdicts, opening prompts disclosed per query, and `Hints: Yes` declared — the 74.2% Luna package additionally rebuilds **byte-identically** from its source runs (10,591 tool calls independently audited), and the #6 Opus run is the first with a fully clean taint audit across all 270 verdicts. Full story: **[docs/dab-progress-report.md](docs/dab-progress-report.md)** (the whole campaign history, Sonnet → Luna → Opus) and **[docs/dab-solultra-ablation.md](docs/dab-solultra-ablation.md)** (the GPT‑5.6 ablations).
 
 ### ADE-bench — dbt Labs ([repo](https://github.com/dbt-labs/ade-bench))
 
@@ -77,8 +78,8 @@ LabRat is feature-complete for v0 alpha.
 | Layer | Status | Details |
 |---|---|---|
 | 7 warehouse adapters | ✅ | DuckDB, Postgres, Snowflake, BigQuery, Redshift, Trino, MySQL |
-| 4 LLM providers | ✅ | Anthropic API · Claude Code CLI (Mac OAuth, Max plan) · OpenAI-compatible · GPT-5.5 via ChatGPT subscription (Codex Responses API — personal/dev path) |
-| Agent tool loop | ✅ | 20 tools: `profile_dataset` grounding, `link_schema` / `verify_join`, schema exploration, SQL execution, safety gates (mutation + statement-stacking refusal), multi-DB routing, `attach_database` (cross-DB JOINs), `load_file` (CSV/TSV/JSON/Parquet), `load_mongo_collection`, `search_reference_docs` (Scent retrieval), `workflow` (9-step data-analysis SOP), opt-in LLM-as-judge verifier, configurable turn/tool-call caps |
+| 4 LLM providers | ✅ | Anthropic API · Claude Code CLI (Mac OAuth, Max plan) · OpenAI-compatible · GPT‑5.5/5.6 via ChatGPT subscription (Codex Responses API — personal/dev path) |
+| Agent tool loop | ✅ | 22 tools: `profile_dataset` grounding, `link_schema` / `verify_join`, schema exploration, SQL execution, safety gates (mutation + statement-stacking refusal), multi-DB routing, `attach_database` (cross-DB JOINs), `load_file` (CSV/TSV/JSON/Parquet), `load_mongo_collection`, `search_reference_docs` / `search_trails` (Scent + Trail retrieval), `workflow` (9-step data-analysis SOP), per-row `llm_extract`/`llm_classify`, `run_program` pipelines, `dispatch_subagent`, opt-in LLM-as-judge verifier, configurable turn/tool-call caps |
 | MCP server | ✅ | `python -m labrat.mcp.server` mounts the tool registry over MCP stdio — drop into Claude Code, Codex, Cursor, OpenCode, or any MCP host |
 | Query history | ✅ | always-on, PII-redacted JSONL per profile |
 | Personal context engine | ✅ | table relevance scoring (frequency × recency), LLM-generated descriptions |
@@ -90,7 +91,7 @@ LabRat is feature-complete for v0 alpha.
 | 3-pane TUI | ✅ | chat + SQL whiteboard + schema browser |
 | Charts · HTML export · Audit log | ✅ | unicode + image-protocol charts; provenance-rich HTML findings; JSONL event sourcing |
 
-**Test coverage:** 659 tests (LLM-gated tests skipped without `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
+**Test coverage:** 1,849 tests (LLM-gated tests skipped without `ANTHROPIC_API_KEY` / `LABRAT_RUN_LLM_TESTS`).
 
 ## Architecture
 
@@ -135,13 +136,13 @@ LabRat explores your schema, samples data, consults your history and memories, s
 
 **Supported warehouses:** DuckDB, PostgreSQL, Snowflake, BigQuery, Redshift, Trino/Presto, MySQL. New adapters are straightforward via the `Connection` base class — PRs welcome.
 
-**Supported providers:** Anthropic API · Claude Code CLI (Mac OAuth / Max plan) · OpenAI-compatible (Azure, LiteLLM, vLLM, Together, Fireworks, Ollama) · GPT-5.5 via ChatGPT subscription. Configure per profile; default model `claude-sonnet-4-6`.
+**Supported providers:** Anthropic API · Claude Code CLI (Mac OAuth / Max plan) · OpenAI-compatible (Azure, LiteLLM, vLLM, Together, Fireworks, Ollama) · GPT‑5.5/5.6 via ChatGPT subscription. Configure per profile; default model `claude-sonnet-4-6`.
 
 ## Roadmap
 
 v0 alpha is feature-complete. The path forward follows the three pillars.
 
-**What this phase taught us — the lever is grounding, not the model.** A GPT‑5.5 experiment ([write-up](docs/dab-progress-report.md)) found GPT‑5.5 ≈ Sonnet (not a free win) and the opt-in verifier gave **no measured accuracy benefit** on DAB. Meanwhile the failures we root-caused were **ungrounded data handling** (e.g. a query that fails only because a `Date` column is dirty mixed-format text) — fixable for *any* model by a one-line reference-doc note. That, plus Anthropic's [21%→95% result](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude) and Altimate's leaderboard-topping AutoContext, points the roadmap squarely at the knowledge/grounding layer. **The grounding layer is now shipped.** The Cartographer pre-pass (Scent #26a/#26b) and benchmark-safe prompt levers are built and ablated: Cartographer alone **+8pp on Sonnet** (21%→29% on the tuning subset); levers **+8pp marginal** on top; stacked **21%→38%** (+17pp). The mechanism is provider-agnostic and proven — GPT‑5.x consults `search_reference_docs` from the traces — but the effect is provider-dependent: +8pp on Sonnet, regression when used alone on GPT‑5.x yet a positive interaction inside the full stack (ablated both ways). That per-backbone measurement is what carried the current #5 entry: GPT‑5.6 Luna Max + the full grounding stack at 74.2%.
+**What this phase taught us — the lever is grounding, not the model.** A GPT‑5.5 experiment ([write-up](docs/dab-progress-report.md)) found GPT‑5.5 ≈ Sonnet (not a free win) and the opt-in verifier gave **no measured accuracy benefit** on DAB. Meanwhile the failures we root-caused were **ungrounded data handling** (e.g. a query that fails only because a `Date` column is dirty mixed-format text) — fixable for *any* model by a one-line reference-doc note. That, plus Anthropic's [21%→95% result](https://claude.com/blog/how-anthropic-enables-self-service-data-analytics-with-claude) and Altimate's leaderboard-topping AutoContext, points the roadmap squarely at the knowledge/grounding layer. **The grounding layer is now shipped.** The Cartographer pre-pass (Scent #26a/#26b) and benchmark-safe prompt levers are built and ablated: Cartographer alone **+8pp on Sonnet** (21%→29% on the tuning subset); levers **+8pp marginal** on top; stacked **21%→38%** (+17pp). The mechanism is provider-agnostic and proven — GPT‑5.x consults `search_reference_docs` from the traces — but the effect is provider-dependent: +8pp on Sonnet, regression when used alone on GPT‑5.x yet a positive interaction inside the full stack (ablated both ways). That per-backbone measurement is what carried the Luna entry (74.2%, the #2 untuned row) — and, with four benchmark-informed rule packs layered on top of the same stack, the current #6 Opus 5 entry at 0.8018.
 
 **Pillar 1 — find the cheese reliably (within-task reasoning).** Shipped: grounding profiler, schema-linking, mechanically-verified joins, the opt-in verifier, benchmark-safe prompt levers (force-query, SQL self-repair via `error_category`/`hint`, push-aggregation-into-SQL — ablated at **+8pp marginal** on the tuning subset), and a `workflow` tool encoding a 9-step data-analysis SOP.
 
@@ -162,7 +163,7 @@ AGPL-3.0. Use, modify, and redistribute LabRat for any purpose, including commer
 ## Development
 
 ```bash
-uv run pytest                        # full test suite (659 tests)
+uv run pytest                        # full test suite (1,849 tests)
 uv run ruff check . && uv run ruff format --check . && uv run pyright   # lint + types
 
 # Evals (see CLAUDE.md for the full matrix)
