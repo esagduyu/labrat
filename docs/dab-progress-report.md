@@ -780,3 +780,5 @@ none down vs the packs-off baseline. Submitted 2026-08-04 as
 informed packs", Tuned-prompt row, opening prompts (packs included) published in the PR,
 scored both ways in the disclosure (0.8102 excl / 0.8018 as-fails). Pending review;
 **74.18% remains the accepted citable number until it lands.**
+
+**ACCEPTED 2026-08-06 at #6** (upstream commit `80b912bf4`), board Pass@1 **0.8018** with a footnote carrying both treatments ("missing 2 of 270 trials (agnews query 4, infra timeouts), counted as non-passes; excluding them gives 0.8102"). The 268-trace bundle was requested and attached in review (`labrat_opus5_trace_bundle.tar.gz`, sha256 `f6398b90…`). Four LabRat rows now on the board: #6 Opus 0.8018 (tuned) · #9 Luna 0.7418 (#2-untuned) · #18 Sonnet+Cartographer 0.6088 · #23 Sonnet 0.5138. Screenshot: `docs/images/dab-leaderboard-2026-08-06.png`.
